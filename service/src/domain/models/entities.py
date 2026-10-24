@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, Column, Integer, Numeric, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, Column, Index, Integer, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -118,6 +118,9 @@ class FileTaskAttempt(SQLModel, table=True):
 
 class Match(SQLModel, table=True):
     __tablename__ = "matches"
+    __table_args__ = (
+        Index("ix_matches_job_created_id", "job_id", "created_at", "id"),
+    )
 
     id: int | None = Field(
         default=None,
@@ -128,7 +131,7 @@ class Match(SQLModel, table=True):
             nullable=False,
         ),
     )
-    job_id: int = Field(index=True)
+    job_id: int
     file_task_id: int = Field(index=True)
     rule_id: str
     rule_set_id: int

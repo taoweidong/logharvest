@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -9,7 +10,7 @@ from src.domain.rules.models import RuleSetConfig
 class DataSourceCreate(BaseModel):
     name: str = Field(min_length=1)
     root_path: str = Field(min_length=1)
-    read_only: bool = True
+    read_only: Literal[True] = True
     copy_to_local: bool = True
     description: str = ""
 
@@ -40,6 +41,11 @@ class RuleSetRead(BaseModel):
     created_at: datetime
 
 
+class RuleSetDetailRead(RuleSetRead):
+    config: dict[str, Any]
+    created_by: str
+
+
 class JobFileFilter(BaseModel):
     recursive: bool = True
     max_depth: int = Field(default=5, ge=1, le=20)
@@ -66,7 +72,10 @@ class JobRead(BaseModel):
     total_files: int
     total_bytes: int
     cancel_requested: bool
+    created_by: str
     created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
     error: str | None
 
 
@@ -79,6 +88,10 @@ class FileTaskRead(BaseModel):
     size_bytes: int
     status: str
     attempts: int
+    max_attempts: int
+    worker_id: str | None
+    scheduled_at: datetime
+    heartbeat_at: datetime | None
     processed_lines: int
     matched_rows: int
     error: str | None
@@ -88,6 +101,7 @@ class MatchRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     job_id: int
+    file_task_id: int
     rule_id: str
     rule_version: int
     source_path: str
@@ -95,9 +109,11 @@ class MatchRead(BaseModel):
     file_name: str
     line_no: int
     raw_line: str
+    raw_truncated: bool
     fields: dict
     numeric_value: Decimal | None
     severity: str
+    tags: list[str]
     created_at: datetime
 
 

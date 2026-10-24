@@ -14,8 +14,9 @@ def create_data_source(session: Session, payload: DataSourceCreate) -> DataSourc
     return source
 
 
-def list_data_sources(session: Session) -> list[DataSource]:
-    return list(session.exec(select(DataSource).order_by(DataSource.id)).all())
+def list_data_sources(session: Session, limit: int = 50, offset: int = 0) -> list[DataSource]:
+    statement = select(DataSource).order_by(DataSource.id).offset(offset).limit(limit)
+    return list(session.exec(statement).all())
 
 
 def test_data_source_path(source: DataSource) -> dict[str, bool]:

@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from src.domain.archive import ArchiveFormatError
+from src.domain.archive import ArchiveFormatError, ScanLimitError
+from src.domain.archive import reader as reader_module
 from src.domain.archive.reader import discover_archives, iter_archive_lines
 
 
@@ -357,3 +358,59 @@ def test_discover_archives_recursive_skips_fifos(tmp_path) -> None:
     os.mkfifo(root / "pipe.zip")
 
     assert [path.name for path in discover_archives(root)] == ["real.zip"]
+
+
+def test_discover_archives_max_files_raises_early(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "logs"
+    root.mkdir()
+    for index in range(10):
+        (root / f"{index:02d}.zip").write_bytes(b"zip")
+
+    assert len(discover_archives(root, max_files=10)) == 10
+
+    matched: list[str] = []
+    real_matches = reader_module._matches_suffix
+
+    def counting_matches(path: Path, allowed) -> bool:
+        matched.append(path.name)
+        return real_matches(path, allowed)
+
+    monkeypatch.setattr(reader_module, "_matches_suffix", counting_matches)
+
+    with pytest.raises(ScanLimitError) as exc:
+        discover_archives(root, max_files=1)
+    assert exc.value.reason == "max_files"
+    # Stops as soon as the cap is exceeded instead of walking the whole tree.
+    assert matched == ["00.zip", "01.zip"]
+
+
+def test_discover_archives_deadline_raises(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "logs"
+    root.mkdir()
+    (root / "a.zip").write_bytes(b"zip")
+
+    clock = iter([100.0, 100.5, 120.0])
+    monkeypatch.setattr(reader_module.time, "monotonic", lambda: next(clock, 120.0))
+
+    with pytest.raises(ScanLimitError) as exc:
+        discover_archives(root, deadline_seconds=10)
+
+    assert exc.value.reason == "deadline"
+
+
+def test_discover_archives_deadline_not_reached(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "logs"
+    root.mkdir()
+    (root / "a.zip").write_bytes(b"zip")
+
+    monkeypatch.setattr(reader_module.time, "monotonic", lambda: 100.0)
+
+    assert [path.name for path in discover_archives(root, deadline_seconds=10)] == ["a.zip"]
+
+
+def test_discover_archives_rejects_negative_max_files(tmp_path) -> None:
+    root = tmp_path / "logs"
+    root.mkdir()
+
+    with pytest.raises(ValueError, match="max_files"):
+        discover_archives(root, max_files=-1)

@@ -40,7 +40,7 @@ cp ../.env.example .env
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `LOGHARVEST_ENVIRONMENT` | `dev` | 运行环境标识 |
-| `LOGHARVEST_ADMIN_TOKEN` | `dev-admin-token` | 管理员 Bearer token；仅用于本地开发，部署时必须替换 |
+| `LOGHARVEST_ADMIN_TOKEN` | `dev-admin-token` | 管理员 Bearer token；默认值仅允许在 `dev`/`test` 环境使用，其他环境必须显式替换，空值会被拒绝 |
 | `LOGHARVEST_DATABASE_URL` | `sqlite:///./logharvest.db` | 相对路径基于启动目录；M1a 测试使用内存 SQLite |
 | `LOGHARVEST_AUTO_CREATE_TABLES` | `true` | 仅保留开关，尚未接入应用启动（M1b） |
 | `LOGHARVEST_WORKER_VERSION` | `0.1.0` | Worker 版本号；写入任务尝试记录的逻辑尚未接入（M1b） |
@@ -66,38 +66,41 @@ uv run --python 3.12 python -c "from src.infrastructure.database import create_d
 Authorization: Bearer <LOGHARVEST_ADMIN_TOKEN>
 ```
 
-Token 缺失或不匹配返回 `401`，响应体 `{"detail":"invalid admin token"}`。当前只有管理员单一角色，未接入 JWT/RBAC。
+Token 缺失、为空或不匹配返回 `401`，响应带 `WWW-Authenticate: Bearer`，响应体 `{"detail":"invalid admin token"}`。Token 比较使用 `secrets.compare_digest`。`LOGHARVEST_ENVIRONMENT` 不是 `dev`/`test` 时使用默认 `dev-admin-token` 会在启动配置校验阶段报错。当前只有管理员单一角色，未接入 JWT/RBAC。
 
 ## M1a API
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `GET` | `/api/health` | 健康检查，无需认证 |
-| `GET` | `/api/data-sources` | 数据源列表 |
-| `POST` | `/api/data-sources` | 创建数据源；名称重复返回 `409` |
+| `GET` | `/api/data-sources` | 数据源列表，`limit`/`offset` 分页 |
+| `POST` | `/api/data-sources` | 创建数据源；名称重复返回 `409`；`read_only` 只接受 `true` |
 | `POST` | `/api/data-sources/{id}/test` | 检查 `root_path` 的 `exists` / `is_dir` / `readable` |
-| `GET` | `/api/rule-sets` | 规则集列表，按名称、版本排序 |
-| `POST` | `/api/rule-sets` | 创建规则集新版本（同名 `max(version)+1`），不覆盖旧版本 |
+| `GET` | `/api/rule-sets` | 规则集轻量列表（不含 `config`/`created_by`），按名称、版本排序，`limit`/`offset` 分页 |
+| `GET` | `/api/rule-sets/{id}` | 规则集详情，返回完整 `config` 与 `created_by`；不存在返回 `404` |
+| `POST` | `/api/rule-sets` | 创建规则集新版本（同名 `max(version)+1`），不覆盖旧版本；配置校验失败返回 `422` |
 | `GET` | `/api/jobs` | 作业列表，`limit`/`offset` 分页 |
 | `POST` | `/api/jobs` | 创建作业并同步扫描规划；可选 `Idempotency-Key` |
 | `GET` | `/api/jobs/{id}` | 作业详情 |
 | `GET` | `/api/jobs/{id}/files` | 作业的文件任务，`limit`/`offset` 分页 |
 | `POST` | `/api/jobs/{id}/cancel` | 请求取消作业 |
-| `GET` | `/api/matches` | 命中结果，支持 `job_id`、`rule_id`、`file_name`、`cursor`、`limit` |
+| `GET` | `/api/matches` | 命中结果；必须提供 `job_id` 或 `created_from` + `created_to`，支持 `rule_id`、`file_name`、`severity`、`(created_at,id)` 游标与 `limit` |
 | `GET` | `/api/workers` | Worker 列表，`limit`/`offset` 分页（不包含心跳/管理写接口） |
 | `GET` | `/api/system/status` | 文件任务状态计数、最老 pending 等待秒数、在线 Worker 数 |
 
-分页仅适用于 `GET /api/jobs`、`GET /api/jobs/{id}/files` 与 `GET /api/workers`：`limit` 默认 `50`、`offset` 默认 `0`，其中作业与文件任务最大 `limit=500`，Worker 最大 `200`；`limit` 超出上限或 `offset` 为负数返回 `422`。`GET /api/data-sources` 与 `GET /api/rule-sets` 直接返回全量列表，不分页。`GET /api/matches` 只接受 `cursor`、不使用 `offset`：以 `id` 降序，把上一页最后一条的 `id` 作为下一页 `cursor`，`limit` 默认 `50`、最大 `500`。
+所有列表接口都分页：`limit` 默认 `50`、`offset` 默认 `0`；数据源、规则集、作业、文件任务与命中结果的 `limit` 最大 `500`，Worker 最大 `200`；`limit` 超出上限或 `offset` 为负数返回 `422`。`GET /api/matches` 使用 `(created_at, id)` 游标而不是 `offset`：查询参数为 `created_before` + `id_before`（必须成对提供，取上一页最后一条的 `created_at` 与 `id`），按 `created_at DESC, id DESC` 排序，`limit` 默认 `50`、最大 `500`。
+
+规则集创建时会调用运行时编译器与 Worker 输入校验：正则语法、flags（仅 `i`/`m`/`s`）、threshold 命名分组、`file_glob`（gitwildmatch）、`encoding`/`fallback_encoding` 编码名；任一非法返回 `422`，不会写入数据库。
 
 ### 创建作业流程
 
 1. `POST /api/data-sources` 登记 NAS 挂载点 `root_path`（默认 `read_only=true`、`copy_to_local=true`）。
 2. `POST /api/rule-sets` 提交规则配置（关键字/正则、`file_glob`、编码与回退编码），得到 `rule_set_id` 与 `version`；同名再次提交会新增版本。
-3. `POST /api/jobs` 提交 `name`、`data_source_id`、`source_path`、`rule_set_id`，可选 `file_filter`（默认 `recursive=true`、`max_depth=5`、`max_files=20000`；`suffixes` 省略或为 `null` 时使用压缩包默认后缀集合，显式传空数组则匹配不到任何文件），可选请求头 `Idempotency-Key`。
+3. `POST /api/jobs` 提交 `name`、`data_source_id`、`source_path`、`rule_set_id`，可选 `file_filter`（默认 `recursive=true`、`max_depth=5`、`max_files=20000`）。`suffixes` 省略或为 `null` 时使用压缩包默认后缀集合；显式传入时先与压缩包后缀集合求交，只保留 zip/tar/gz/bz2/xz 等可解压格式，交集为空（例如只传 `.log`/`.txt`）返回 `400`，原始文本文件不会进入作业。可选请求头 `Idempotency-Key`。
 4. 服务解析并校验路径：`source_path` 必须位于数据源 `root_path` 之内（路径逃逸 `400`），且必须是已存在目录（`400`）。
-5. 在请求内同步递归扫描该目录，识别 zip、tar 系列、单文件 gz/bz2/xz；跳过符号链接和点目录。`max_depth` 是静默截断：相对深度达到 `max_depth` 的目录不再下探（该层文件仍会纳入），不会报错；`max_files` 在扫描完成后校验，发现数超过上限返回 `400`。`max_depth` 超出 1–20 或 `max_files` 超出 1–20000 属于 schema 校验失败，返回 `422` 且不开始扫描。
+5. 在请求内同步递归扫描该目录，识别 zip、tar 系列、单文件 gz/bz2/xz；跳过符号链接和点目录。`max_depth` 是静默截断：相对深度达到 `max_depth` 的目录不再下探（该层文件仍会纳入），不会报错；扫描在发现第 `max_files + 1` 个压缩文件时立即中止并返回 `400`，不再遍历剩余目录；扫描超过 10 秒返回 `503`。扫描前会结束当前数据库读事务，避免长时间占用连接。`max_depth` 超出 1–20 或 `max_files` 超出 1–20000 属于 schema 校验失败，返回 `422` 且不开始扫描。
 6. 创建一条 `Job`，并为每个压缩文件创建一条 `FileTask`（`pending`，`job_id + source_path` 唯一），累计 `total_files` / `total_bytes`。目录为空或未发现匹配的压缩文件时直接 `succeeded`；发现压缩文件时初始为 `running`。M1a 没有 Worker 领取循环，因此存在 `pending` 文件任务的作业会保持 `running` 直到 M1b。
-7. 相同管理员使用相同 `Idempotency-Key` 再次提交返回已有作业（`200`）；`Idempotency-Key` 为空白字符串返回 `400`。并发插入冲突时会回查并返回已创建作业。
+7. 相同管理员使用相同 `Idempotency-Key` 再次提交返回已有作业（`200`）；键会去除首尾空白后参与比较与入库，空白字符串返回 `400`。相同键但 `name`/`data_source_id`/`source_path`/`rule_set_id`/`file_filter` 归一化后不一致返回 `409`。并发插入冲突时会回查并返回已创建作业。
 8. `POST /api/jobs/{id}/cancel` 将 `pending` 文件任务置为 `cancelled` 并设置 `cancel_requested=true`；若没有 `running` 任务则作业立即 `cancelled`，已处于终态的作业不做变更。
 
 ## 测试
@@ -117,10 +120,10 @@ Token 缺失或不匹配返回 `401`，响应体 `{"detail":"invalid admin token
 
 ### M1a（已交付）
 
-- 管理员 Bearer 认证、Session 依赖与测试夹具；`Job` 增加 `idempotency_key` 及 `(created_by, idempotency_key)` 唯一约束。
-- 数据源创建/列表与路径检测；规则集版本化创建与列表。
-- 作业创建时的 NAS 目录递归扫描、路径逃逸校验、幂等重放、空目录处理、每个压缩文件一条 `file_task`；作业列表/详情/文件任务/取消。
-- 命中结果游标查询、Worker 列表、系统状态汇总。
+- 管理员 Bearer 认证（`secrets.compare_digest`、拒绝空 token、非 dev/test 拒绝默认 token）、Session 依赖与测试夹具；`Job` 增加 `idempotency_key` 及 `(created_by, idempotency_key)` 唯一约束。
+- 数据源创建/列表（分页）与路径检测；规则集版本化创建/列表（分页）、运行时配置校验与完整详情查询。
+- 作业创建时的 NAS 目录递归扫描（`max_files` 提前中止、10 秒 deadline、扫描前释放读事务）、路径逃逸校验、幂等重放/请求体一致性校验、空目录处理、每个压缩文件一条 `file_task`；作业列表/详情/文件任务/取消。
+- 命中结果 `(created_at,id)` 游标查询（强制 `job_id` 或时间范围、支持 severity）、Worker 列表、系统状态汇总。
 - API 层测试全部基于 SQLite，无外部服务依赖。
 
 ### 明确不包含（M1b / M2）

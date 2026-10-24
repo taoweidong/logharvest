@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlmodel import Session, select
 
 from src.domain.models.entities import FileTask, Job, Match, Worker
@@ -35,7 +35,11 @@ def list_matches(
     job_id: int | None = None,
     rule_id: str | None = None,
     file_name: str | None = None,
-    cursor: int | None = None,
+    severity: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    created_before: datetime | None = None,
+    id_before: int | None = None,
     limit: int = 50,
 ) -> list[Match]:
     statement = select(Match)
@@ -45,9 +49,24 @@ def list_matches(
         statement = statement.where(Match.rule_id == rule_id)
     if file_name:
         statement = statement.where(Match.file_name == file_name)
-    if cursor is not None:
-        statement = statement.where(Match.id < cursor)
-    return list(session.exec(statement.order_by(Match.id.desc()).limit(limit)).all())
+    if severity:
+        statement = statement.where(Match.severity == severity)
+    if created_from is not None:
+        statement = statement.where(Match.created_at >= created_from)
+    if created_to is not None:
+        statement = statement.where(Match.created_at <= created_to)
+    if created_before is not None and id_before is not None:
+        statement = statement.where(
+            or_(
+                Match.created_at < created_before,
+                and_(
+                    Match.created_at == created_before,
+                    Match.id < id_before,
+                ),
+            )
+        )
+    statement = statement.order_by(Match.created_at.desc(), Match.id.desc()).limit(limit)
+    return list(session.exec(statement).all())
 
 
 def list_workers(session: Session, limit: int = 50, offset: int = 0) -> list[Worker]:

@@ -1,3 +1,4 @@
+import secrets
 from collections.abc import Iterator
 from typing import Annotated
 
@@ -19,11 +20,18 @@ SessionDep = Annotated[Session, Depends(get_session)]
 def require_admin(
     authorization: str | None = Header(default=None),
 ) -> str:
-    expected = f"Bearer {settings.admin_token}"
-    if authorization != expected:
+    header = authorization or ""
+    token = header[len("Bearer ") :] if header.startswith("Bearer ") else ""
+    expected = settings.admin_token
+    if (
+        not token
+        or not expected
+        or not secrets.compare_digest(token.encode("utf-8"), expected.encode("utf-8"))
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid admin token",
+            headers={"WWW-Authenticate": "Bearer"},
         )
     return "admin"
 

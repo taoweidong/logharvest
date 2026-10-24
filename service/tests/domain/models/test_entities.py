@@ -373,3 +373,10 @@ def test_postgresql_json_columns_use_jsonb_and_sqlite_uses_json() -> None:
     assert "fields JSON NOT NULL" in sqlite_ddl
     assert "tags JSON NOT NULL" in sqlite_ddl
     assert "JSONB" not in sqlite_ddl
+
+
+def test_matches_have_composite_job_created_id_index() -> None:
+    index = next(
+        item for item in Match.__table__.indexes if item.name == "ix_matches_job_created_id"
+    )
+    assert [column.name for column in index.columns] == ["job_id", "created_at", "id"]

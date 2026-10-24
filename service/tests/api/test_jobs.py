@@ -2,6 +2,7 @@ import zipfile
 
 from src.api.v1.schemas import JobCreate
 from src.application.services import jobs as jobs_service
+from src.domain.archive.models import ScanLimitError
 from src.domain.models.entities import FileTask, Job, Worker
 
 
@@ -71,10 +72,16 @@ def test_create_job_creates_file_tasks(client, auth_headers, tmp_path) -> None:
     job = response.json()
     assert job["status"] == "running"
     assert job["total_files"] == 1
+    assert job["created_by"] == "admin"
+    assert job["started_at"] is not None
+    assert job["finished_at"] is None
 
     files = client.get(f"/api/jobs/{job['id']}/files", headers=auth_headers)
     assert files.status_code == 200
     assert files.json()[0]["file_name"] == "a.zip"
+    assert files.json()[0]["max_attempts"] == 5
+    assert files.json()[0]["worker_id"] is None
+    assert files.json()[0]["scheduled_at"] is not None
 
 
 def test_same_idempotency_key_returns_same_job(client, auth_headers, tmp_path) -> None:
@@ -380,7 +387,7 @@ def test_idempotency_integrity_error_returns_existing_job(
     monkeypatch.setattr(jobs_service, "_find_job_by_idempotency_key", find_after_race)
 
     payload = JobCreate(
-        name="loser",
+        name="winner",
         data_source_id=source["id"],
         source_path=str(batch),
         rule_set_id=rules["id"],
@@ -390,3 +397,138 @@ def test_idempotency_integrity_error_returns_existing_job(
     assert created is False
     assert job.id == winner_id
     assert calls == 2
+
+
+def test_idempotent_replay_body_mismatch_returns_409(client, auth_headers, tmp_path) -> None:
+    root, batch = make_nas(tmp_path)
+    source, rules = seed_source_and_rules(client, auth_headers, root)
+    body = {
+        "name": "batch-1",
+        "data_source_id": source["id"],
+        "source_path": str(batch),
+        "rule_set_id": rules["id"],
+        "file_filter": {"recursive": True, "max_depth": 5},
+    }
+    headers = {**auth_headers, "Idempotency-Key": "mismatch-key"}
+    first = client.post("/api/jobs", headers=headers, json=body)
+    assert first.status_code == 201
+
+    renamed = client.post("/api/jobs", headers=headers, json={**body, "name": "other"})
+    assert renamed.status_code == 409
+    assert "different request body" in renamed.json()["detail"]
+
+    refiltered = client.post(
+        "/api/jobs",
+        headers=headers,
+        json={**body, "file_filter": {"recursive": True, "max_depth": 4}},
+    )
+    assert refiltered.status_code == 409
+
+    assert len(client.get("/api/jobs", headers=auth_headers).json()) == 1
+
+
+def test_idempotency_key_is_trimmed(client, auth_headers, tmp_path) -> None:
+    root, batch = make_nas(tmp_path)
+    source, rules = seed_source_and_rules(client, auth_headers, root)
+    body = {
+        "name": "batch-1",
+        "data_source_id": source["id"],
+        "source_path": str(batch),
+        "rule_set_id": rules["id"],
+    }
+
+    first = client.post(
+        "/api/jobs",
+        headers={**auth_headers, "Idempotency-Key": "  trim-key  "},
+        json=body,
+    )
+    assert first.status_code == 201
+
+    second = client.post(
+        "/api/jobs",
+        headers={**auth_headers, "Idempotency-Key": "trim-key"},
+        json=body,
+    )
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+
+
+def test_suffixes_must_overlap_compressed_archives(
+    client, auth_headers, tmp_path
+) -> None:
+    root, batch = make_nas(tmp_path)
+    (batch / "raw.log").write_text("ERROR raw\n", encoding="utf-8")
+    source, rules = seed_source_and_rules(client, auth_headers, root)
+
+    rejected = create_job(
+        client,
+        auth_headers,
+        source,
+        rules,
+        batch,
+        file_filter={"recursive": True, "max_depth": 5, "suffixes": [".log"]},
+    )
+    assert rejected.status_code == 400
+    assert "compressed archive" in rejected.json()["detail"]
+    assert client.get("/api/jobs", headers=auth_headers).json() == []
+
+    accepted = create_job(
+        client,
+        auth_headers,
+        source,
+        rules,
+        batch,
+        file_filter={
+            "recursive": True,
+            "max_depth": 5,
+            "suffixes": [".LOG", ".zip"],
+        },
+    )
+    assert accepted.status_code == 201
+    assert accepted.json()["total_files"] == 1
+
+
+def test_scan_deadline_returns_503(client, auth_headers, tmp_path, monkeypatch) -> None:
+    root, batch = make_nas(tmp_path)
+    source, rules = seed_source_and_rules(client, auth_headers, root)
+
+    def raise_deadline(*args, **kwargs):
+        raise ScanLimitError("archive scan deadline exceeded", reason="deadline")
+
+    monkeypatch.setattr(jobs_service, "discover_archives", raise_deadline)
+
+    response = create_job(client, auth_headers, source, rules, batch)
+    assert response.status_code == 503
+    assert "timed out" in response.json()["detail"]
+    assert client.get("/api/jobs", headers=auth_headers).json() == []
+
+
+def test_job_scan_releases_transaction_and_passes_limits(
+    client, auth_headers, session, tmp_path, monkeypatch
+) -> None:
+    root, batch = make_nas(tmp_path)
+    source, rules = seed_source_and_rules(client, auth_headers, root)
+    payload = JobCreate(
+        name="scan",
+        data_source_id=source["id"],
+        source_path=str(batch),
+        rule_set_id=rules["id"],
+    )
+    seen: dict = {}
+
+    def fake_discover(path, **kwargs):
+        seen["in_transaction"] = session.in_transaction()
+        seen["path"] = path
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(jobs_service, "discover_archives", fake_discover)
+
+    job, created = jobs_service.create_job(session, payload, "admin", " scan-key ")
+
+    assert created is True
+    assert seen["in_transaction"] is False
+    assert seen["max_files"] == 20_000
+    assert seen["deadline_seconds"] == 10.0
+    assert seen["suffixes"] is None
+    assert job.idempotency_key == "scan-key"

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 
 from src.api.dependencies import AdminDep, SessionDep
@@ -14,8 +14,13 @@ router = APIRouter(prefix="/data-sources", tags=["data-sources"])
 
 
 @router.get("", response_model=list[DataSourceRead])
-def get_data_sources(session: SessionDep, _: AdminDep):
-    return list_data_sources(session)
+def get_data_sources(
+    session: SessionDep,
+    _: AdminDep,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    return list_data_sources(session, limit=limit, offset=offset)
 
 
 @router.post("", response_model=DataSourceRead, status_code=201)

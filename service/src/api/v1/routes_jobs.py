@@ -35,7 +35,10 @@ def get_jobs(
         200: {
             "model": JobRead,
             "description": "Existing job replayed for the same Idempotency-Key",
-        }
+        },
+        400: {"description": "Blank Idempotency-Key, invalid path, or unsupported suffixes"},
+        409: {"description": "Idempotency-Key reused with a different request body"},
+        503: {"description": "Source directory scan exceeded the 10 second deadline"},
     },
 )
 def post_job(

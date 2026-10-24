@@ -59,3 +59,33 @@ def test_data_source_requires_admin(client, tmp_path) -> None:
         json={"name": "nas", "root_path": str(tmp_path)},
     )
     assert response.status_code == 401
+
+
+def test_read_only_false_is_rejected(client, auth_headers, tmp_path) -> None:
+    root = tmp_path / "nas"
+    root.mkdir()
+    response = client.post(
+        "/api/data-sources",
+        headers=auth_headers,
+        json={"name": "nas", "root_path": str(root), "read_only": False},
+    )
+    assert response.status_code == 422
+
+
+def test_data_source_list_pagination(client, auth_headers, tmp_path) -> None:
+    root = tmp_path / "nas"
+    root.mkdir()
+    for name in ("alpha", "beta", "gamma"):
+        response = client.post(
+            "/api/data-sources",
+            headers=auth_headers,
+            json={"name": name, "root_path": str(root)},
+        )
+        assert response.status_code == 201
+
+    page = client.get("/api/data-sources?limit=2&offset=1", headers=auth_headers)
+    assert page.status_code == 200
+    assert [item["name"] for item in page.json()] == ["beta", "gamma"]
+
+    assert client.get("/api/data-sources?limit=501", headers=auth_headers).status_code == 422
+    assert client.get("/api/data-sources?offset=-1", headers=auth_headers).status_code == 422

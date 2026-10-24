@@ -5,11 +5,12 @@ import lzma
 import os
 import stat
 import tarfile
+import time
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 
-from src.domain.archive.models import ArchiveFormatError, LineRecord
+from src.domain.archive.models import ArchiveFormatError, LineRecord, ScanLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ ARCHIVE_SUFFIXES = frozenset({".zip"}) | TAR_SUFFIXES | SINGLE_COMPRESSED_SUFFIX
 _SINGLE_OPENERS = {".gz": gzip.open, ".bz2": bz2.open, ".xz": lzma.open}
 
 
-def _normalize_suffixes(suffixes: set[str]) -> set[str]:
+def normalize_suffixes(suffixes: set[str]) -> set[str]:
     normalized: set[str] = set()
     for suffix in suffixes:
         text = suffix.strip().lower()
@@ -51,25 +52,45 @@ def discover_archives(
     recursive: bool = True,
     max_depth: int = 5,
     suffixes: set[str] | None = None,
+    max_files: int | None = None,
+    deadline_seconds: float | None = None,
 ) -> list[Path]:
     root = Path(source_path)
     if not root.is_dir():
         raise NotADirectoryError(str(root))
+    if max_files is not None and max_files < 0:
+        raise ValueError("max_files must be non-negative")
     _ensure_readable_directory(root)
 
-    allowed = ARCHIVE_SUFFIXES if suffixes is None else _normalize_suffixes(suffixes)
+    allowed = ARCHIVE_SUFFIXES if suffixes is None else normalize_suffixes(suffixes)
+    deadline = None if deadline_seconds is None else time.monotonic() + deadline_seconds
     found: list[Path] = []
+
+    def check_deadline() -> None:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise ScanLimitError("archive scan deadline exceeded", reason="deadline")
+
+    def record(path: Path) -> None:
+        check_deadline()
+        found.append(path)
+        if max_files is not None and len(found) > max_files:
+            raise ScanLimitError(
+                f"archive scan exceeded max_files={max_files}",
+                reason="max_files",
+            )
 
     if not recursive:
         for path in sorted(root.iterdir()):
+            check_deadline()
             if path.is_file() and not path.is_symlink() and _matches_suffix(path, allowed):
-                found.append(path)
+                record(path)
         return found
 
     def on_walk_error(error: OSError) -> None:
         logger.warning("cannot read directory %s: %s", error.filename, error)
 
     for current, dirnames, filenames in os.walk(root, followlinks=False, onerror=on_walk_error):
+        check_deadline()
         current_path = Path(current)
         depth = len(current_path.relative_to(root).parts)
         dirnames[:] = sorted(
@@ -83,7 +104,7 @@ def discover_archives(
             path = current_path / name
             if path.is_symlink() or not path.is_file() or not _matches_suffix(path, allowed):
                 continue
-            found.append(path)
+            record(path)
     return found
 
 
