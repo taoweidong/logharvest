@@ -41,9 +41,16 @@ def test_duplicate_data_source_name_returns_conflict(client, auth_headers, tmp_p
 
     duplicate = client.post("/api/data-sources", headers=auth_headers, json=payload)
     assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "data source name already exists"
 
     listed = client.get("/api/data-sources", headers=auth_headers)
     assert [item["name"] for item in listed.json()] == ["nas"]
+
+
+def test_missing_data_source_path_test_returns_404(client, auth_headers) -> None:
+    response = client.post("/api/data-sources/9999/test", headers=auth_headers)
+    assert response.status_code == 404
+    assert response.json()["detail"] == "data source not found"
 
 
 def test_data_source_requires_admin(client, tmp_path) -> None:
