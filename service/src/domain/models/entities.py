@@ -46,6 +46,9 @@ class RuleSet(SQLModel, table=True):
 
 class Job(SQLModel, table=True):
     __tablename__ = "jobs"
+    __table_args__ = (
+        UniqueConstraint("created_by", "idempotency_key", name="uq_jobs_creator_idempotency"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     name: str
@@ -64,6 +67,7 @@ class Job(SQLModel, table=True):
     )
     cancel_requested: bool = False
     created_by: str = ""
+    idempotency_key: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
     finished_at: datetime | None = None

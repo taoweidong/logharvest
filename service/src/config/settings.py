@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     app_name: str = "LogHarvest"
     environment: str = "dev"
+    admin_token: str = "dev-admin-token"
     database_url: str = "sqlite:///./logharvest.db"
     auto_create_tables: bool = True
     worker_poll_seconds: float = 1.0
