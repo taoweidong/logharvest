@@ -44,6 +44,7 @@ class TaskProcessor:
         heartbeat_every_seconds: float = 5.0,
         copy_heartbeat_seconds: float = 5.0,
         clock: Callable[[], float] = monotonic,
+        on_lease_refresh: Callable[[], None] | None = None,
     ) -> None:
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -62,7 +63,20 @@ class TaskProcessor:
         self._heartbeat_every_seconds = heartbeat_every_seconds
         self._copy_heartbeat_seconds = copy_heartbeat_seconds
         self._clock = clock
+        self._on_lease_refresh = on_lease_refresh
         self._member_spec = pathspec.PathSpec.from_lines("gitwildmatch", [rules.config.file_glob])
+
+    def _verify_lease(self, task: ClaimedTask) -> None:
+        """Confirm the lease immediately before any database write.
+
+        The spec uses ``(file_task_id, attempts)`` as a lightweight write fence:
+        a worker whose task was recovered must stop instead of appending rows a
+        retry would not clean up again.
+        """
+        if not self._repo.touch(task.id, task.attempts):
+            raise LeaseLost(f"lease lost for task {task.id}")
+        if self._on_lease_refresh is not None:
+            self._on_lease_refresh()
 
     def process(self, task: ClaimedTask) -> TaskResult:
         processed_lines = 0
@@ -75,6 +89,9 @@ class TaskProcessor:
 
         result: TaskResult
         try:
+            # Fence before the retry cleanup too: deleting another attempt's
+            # rows is a write as well.
+            self._verify_lease(task)
             if task.attempts > 1:
                 self._writer.delete_for_task(task.id)
 
@@ -115,6 +132,7 @@ class TaskProcessor:
                             matched_rows += 1
 
                     if len(buffer) >= self._batch_size:
+                        self._verify_lease(task)
                         self._writer.write_batch(tuple(buffer))
                         buffer.clear()
 
@@ -127,9 +145,12 @@ class TaskProcessor:
                         task.id, task.attempts, processed_lines, matched_rows
                     ):
                         raise LeaseLost(f"lease lost for task {task.id}")
+                    if self._on_lease_refresh is not None:
+                        self._on_lease_refresh()
                     last_heartbeat = now
 
             if buffer:
+                self._verify_lease(task)
                 self._writer.write_batch(tuple(buffer))
             result = TaskResult("succeeded", processed_lines, matched_rows)
         except LeaseLost:
@@ -180,6 +201,5 @@ class TaskProcessor:
             target_file.write(chunk)
             now = self._clock()
             if now - last_touch >= self._copy_heartbeat_seconds:
-                if not self._repo.touch(task.id, task.attempts):
-                    raise LeaseLost(f"lease lost for task {task.id}")
+                self._verify_lease(task)
                 last_touch = now

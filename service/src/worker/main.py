@@ -1,11 +1,12 @@
 import os
+import shutil
 import signal
 import socket
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from threading import Event
-from time import monotonic
+from time import monotonic, time
 
 from src.application.worker.ports import ClaimedTask
 from src.application.worker.processor import LeaseLost, TaskProcessor
@@ -21,6 +22,9 @@ from src.infrastructure.task_queue import PostgresTaskRepository
 # below then reclaims work owned by processes that actually died or wedged.
 DEFAULT_STALE_SECONDS = 120
 DEFAULT_RECOVER_INTERVAL_SECONDS = 300.0
+# Local copies left by a previous run of this worker id are removed at startup
+# once they are older than this, so a killed process cannot fill the temp disk.
+ORPHAN_MAX_AGE_SECONDS = 3600.0
 
 
 def _compile_task_rules(task: ClaimedTask) -> CompiledRuleSet:
@@ -75,6 +79,12 @@ class WorkerRuntime:
                     rules=self._rules_factory(task),
                     work_dir=self._work_dir,
                     batch_size=self._batch_size,
+                    # A task can run for minutes; keep workers.last_heartbeat
+                    # fresh so the management view and the peer dead-worker
+                    # sweep do not see a live process as stalled.
+                    on_lease_refresh=lambda: self._repo.heartbeat_worker(
+                        self._worker_id, "busy", task.id
+                    ),
                 )
             except Exception as exc:  # noqa: BLE001
                 # A broken rule config or work-dir setup must not leave the
@@ -95,6 +105,7 @@ class WorkerRuntime:
 
     def run_forever(self, stop_event: Event | None = None) -> None:
         stop = stop_event or Event()
+        self._cleanup_orphan_work_dirs()
         self._repo.register_worker(self._worker_id, socket.gethostname(), self._worker_version)
         self._recover_stale()
         self._sweep_finished_jobs()
@@ -117,12 +128,21 @@ class WorkerRuntime:
     def _recover_stale(self) -> None:
         """Return tasks abandoned by dead workers before claiming new work.
 
-        ``recover_stale`` is optional so lightweight test doubles remain valid;
-        the PostgreSQL repository always exposes it.
+        These methods are optional so lightweight test doubles remain valid; the
+        PostgreSQL repository always exposes them.
         """
         recover = getattr(self._repo, "recover_stale", None)
-        if callable(recover):
-            recover(self._stale_seconds)
+        demote = getattr(self._repo, "mark_dead_workers", None)
+        if not callable(recover):
+            return
+        recovered = recover(self._stale_seconds)
+        # A worker that died cannot report itself offline.
+        if callable(demote):
+            demote(self._stale_seconds)
+        if recovered:
+            # Recovered tasks can be the last open rows of their jobs; close
+            # those jobs now instead of waiting for the next sweep interval.
+            self._sweep_finished_jobs()
 
     def _finalize_job(self, job_id: int) -> None:
         """Close the job if this was its last open file task."""
@@ -136,13 +156,34 @@ class WorkerRuntime:
         if callable(sweep):
             sweep()
 
+    def _cleanup_orphan_work_dirs(self) -> int:
+        """Delete local copies left behind by an earlier run of this worker id.
+
+        A process killed mid-copy would otherwise keep multi-gigabyte archives
+        on the temp disk until the disk fills up. Only directories older than the
+        orphan limit are touched, and only under this worker's own work dir.
+        """
+        if not self._work_dir.is_dir():
+            return 0
+        cutoff = time() - ORPHAN_MAX_AGE_SECONDS
+        removed = 0
+        for entry in self._work_dir.iterdir():
+            try:
+                stale = entry.is_dir() and entry.stat().st_mtime <= cutoff
+            except OSError:
+                continue
+            if stale:
+                shutil.rmtree(entry, ignore_errors=True)
+                removed += 1
+        return removed
+
 
 def main() -> None:
     worker_id = os.getenv("LOGHARVEST_WORKER_ID") or socket.gethostname()
     base_dir = Path(os.getenv("LOGHARVEST_WORK_DIR", tempfile.gettempdir()))
     work_dir = base_dir / "logharvest" / worker_id
     runtime = WorkerRuntime(
-        repo=PostgresTaskRepository(engine),
+        repo=PostgresTaskRepository(engine, max_concurrent_copies=settings.max_concurrent_copies),
         writer=PostgresMatchWriter(engine),
         worker_id=worker_id,
         worker_version=settings.worker_version,

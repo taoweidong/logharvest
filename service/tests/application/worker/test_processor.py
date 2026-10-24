@@ -373,7 +373,10 @@ def test_copy_refreshes_lease_with_touch(tmp_path: Path) -> None:
     result = processor.process(make_task(tmp_path))
 
     assert result.status == "succeeded"
-    assert repo.touches == [(10, 1)]
+    # The first touch verifies the lease before the retry cleanup write; later
+    # touches cover the copy phase and each batch flush.
+    assert repo.touches[0] == (10, 1)
+    assert len(repo.touches) >= 2
     assert writer.written
 
 
@@ -559,3 +562,44 @@ def test_success_completion_failure_does_not_trigger_failed_completion(tmp_path:
     assert [entry[1] for entry in repo.completed] == ["succeeded"]
     assert len(writer.written) == 2
     assert not (work_dir / "10").exists()
+
+
+def test_write_fence_blocks_late_writes_of_a_reclaimed_task(tmp_path: Path) -> None:
+    """A worker that already lost the lease may not write anything at all.
+
+    Its rows would survive the new attempt's cleanup and show up as duplicates.
+    """
+    repo = FakeRepo()
+    repo.touch_result = False
+    writer = FakeWriter()
+    processor = make_processor(repo, writer, tmp_path / "work")
+
+    with pytest.raises(LeaseLost):
+        processor.process(make_task(tmp_path, attempts=2))
+
+    assert repo.touches == [(10, 2)]
+    assert writer.deleted == []
+    assert writer.written == []
+    assert repo.completed == []
+    assert not (tmp_path / "work" / "10").exists()
+
+
+def test_each_batch_flush_is_preceded_by_a_lease_check(tmp_path: Path) -> None:
+    repo = FakeRepo()
+    writer = FakeWriter()
+    processor = make_processor(
+        repo,
+        writer,
+        tmp_path / "work",
+        batch_size=1,
+        heartbeat_every_lines=10_000,
+        heartbeat_every_seconds=0,
+        copy_heartbeat_seconds=1_000_000,
+    )
+
+    result = processor.process(make_task(tmp_path, members={"app.log": "ERROR a\nERROR b\n"}))
+
+    assert result.status == "succeeded"
+    assert writer.written
+    # One fence before any write, then one per batch flush (batch_size=1).
+    assert len(repo.touches) == len(writer.written) + 1

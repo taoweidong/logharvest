@@ -1,5 +1,7 @@
+import os
 import signal
 import socket
+import time
 import zipfile
 from pathlib import Path
 from threading import Event
@@ -122,7 +124,12 @@ def test_run_once_processes_claimed_task(tmp_path):
 
     assert len(writer.written) == 1
     assert repo.completed == [(1, 1, "succeeded", 1, 1, None)]
-    assert repo.worker_heartbeats == [("busy", 1), ("online", None)]
+    assert repo.worker_heartbeats[0] == ("busy", 1)
+    assert repo.worker_heartbeats[-1] == ("online", None)
+    # A task that runs for minutes must keep refreshing workers.last_heartbeat,
+    # so the peer dead-worker sweep never sees a live process as stalled.
+    assert set(repo.worker_heartbeats[1:-1]) == {("busy", 1)}
+    assert len(repo.worker_heartbeats) > 2
     assert repo.claims == [("w1", "0.1.0")]
     # The completing worker closes the job when it held the last open task.
     assert repo.finalized == [2]
@@ -262,7 +269,12 @@ def test_main_wires_stop_event_and_signals(monkeypatch):
 
     monkeypatch.delenv("LOGHARVEST_WORKER_ID", raising=False)
     monkeypatch.setattr(worker_main, "WorkerRuntime", FakeRuntime)
-    monkeypatch.setattr(worker_main, "PostgresTaskRepository", lambda engine: object())
+
+    def fake_repo(engine, **kwargs):
+        captured["repo_options"] = kwargs
+        return object()
+
+    monkeypatch.setattr(worker_main, "PostgresTaskRepository", fake_repo)
     monkeypatch.setattr(worker_main, "PostgresMatchWriter", lambda engine: object())
     monkeypatch.setattr(worker_main.socket, "gethostname", lambda: "test-host")
     monkeypatch.setattr(
@@ -283,3 +295,39 @@ def test_main_wires_stop_event_and_signals(monkeypatch):
     assert captured["options"]["worker_version"] == worker_main.settings.worker_version
     assert captured["options"]["poll_seconds"] == worker_main.settings.worker_poll_seconds
     assert captured["options"]["batch_size"] == worker_main.settings.matches_batch_size
+    # The declared copy budget reaches the worker registry, so the management
+    # view reports the configured value instead of the schema default.
+    assert captured["repo_options"] == {
+        "max_concurrent_copies": worker_main.settings.max_concurrent_copies
+    }
+
+
+def test_run_forever_clears_orphan_local_copies(tmp_path):
+    """A killed process must not leave multi-gigabyte copies on the temp disk."""
+    work_dir = tmp_path / "work"
+    orphan = work_dir / "11"
+    recent = work_dir / "12"
+    for directory in (orphan, recent):
+        directory.mkdir(parents=True)
+        (directory / "a.zip").write_bytes(b"x")
+    stale = time.time() - (worker_main.ORPHAN_MAX_AGE_SECONDS + 60)
+    os.utime(orphan, (stale, stale))
+
+    stop = Event()
+    repo = FakeRepo([], stop=stop)
+    runtime = make_runtime(repo, FakeWriter(), tmp_path)
+
+    runtime.run_forever(stop)
+
+    assert not orphan.exists()
+    assert recent.exists()
+
+
+def test_run_once_refreshes_worker_heartbeat_while_lease_is_held(tmp_path):
+    repo = FakeRepo([make_task(tmp_path)])
+    runtime = make_runtime(repo, FakeWriter(), tmp_path)
+
+    assert runtime.run_once() is True
+
+    busy = [beat for beat in repo.worker_heartbeats if beat == ("busy", 1)]
+    assert len(busy) > 1

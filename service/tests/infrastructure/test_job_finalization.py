@@ -116,3 +116,30 @@ def test_sweep_closes_jobs_left_by_recovery_or_cancel(engine: Engine) -> None:
     assert _reload(engine, closed).status == "partial"
     assert _reload(engine, open_job).status == "running"
     assert _reload(engine, empty_job).status == "running"
+
+
+def test_cancel_request_closes_a_job_stuck_on_unclaimable_pending_tasks(engine: Engine) -> None:
+    """CLAIM_SQL refuses a cancelled job's pending tasks, so they cannot be "open"."""
+    repo = PostgresTaskRepository(engine)
+    direct = _seed(engine, ["succeeded", "pending"], cancel_requested=True)
+    swept = _seed(engine, ["pending"], cancel_requested=True)
+
+    assert repo.finalize_job(direct) == "cancelled"
+    assert repo.finalize_finished_jobs() == 1
+    assert _reload(engine, swept).status == "cancelled"
+
+
+def test_cancel_request_still_waits_for_running_tasks(engine: Engine) -> None:
+    repo = PostgresTaskRepository(engine)
+    job_id = _seed(engine, ["running", "pending"], cancel_requested=True)
+
+    assert repo.finalize_job(job_id) is None
+    assert repo.finalize_finished_jobs() == 0
+    assert _reload(engine, job_id).status == "running"
+
+
+def test_pending_task_blocks_finalization_when_job_is_not_cancelled(engine: Engine) -> None:
+    job_id = _seed(engine, ["succeeded", "pending"])
+
+    assert PostgresTaskRepository(engine).finalize_job(job_id) is None
+    assert _reload(engine, job_id).status == "running"

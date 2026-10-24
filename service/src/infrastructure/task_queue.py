@@ -1,3 +1,4 @@
+from datetime import timedelta
 from pathlib import Path
 
 from sqlalchemy import text
@@ -72,6 +73,10 @@ WHERE id = :id
 # and leaves finished_at unset. The attempt history row is closed in the same
 # statement; when the task fence does not match, nothing is updated.
 #
+# A failed attempt of a cancelled job is written as ``cancelled`` rather than
+# back to ``pending``: CLAIM_SQL never picks up tasks of a cancelled job again,
+# so requeueing would strand the job in ``running`` forever.
+#
 # The fence is repeated on the UPDATE itself, not just in the ``target`` CTE:
 # a concurrent recovery may change status/attempts between the CTE snapshot
 # and the row update, and READ COMMITTED re-checks the predicate once the row
@@ -79,18 +84,25 @@ WHERE id = :id
 # that another process already recovered.
 COMPLETE_SQL = """
 WITH target AS (
-    SELECT id,
-           attempts,
-           max_attempts,
-           (:status = 'failed' AND attempts < LEAST(max_attempts, :max_attempts))
-               AS will_retry
-    FROM file_tasks
-    WHERE id = :task_id
-      AND attempts = :attempts
-      AND status = 'running'
+    SELECT f.id,
+           f.attempts,
+           f.max_attempts,
+           j.cancel_requested,
+           (:status = 'failed'
+            AND f.attempts < LEAST(f.max_attempts, :max_attempts)
+            AND NOT j.cancel_requested) AS will_retry
+    FROM file_tasks f
+    JOIN jobs j ON j.id = f.job_id
+    WHERE f.id = :task_id
+      AND f.attempts = :attempts
+      AND f.status = 'running'
 ), updated AS (
     UPDATE file_tasks t
-    SET status = CASE WHEN target.will_retry THEN 'pending' ELSE :status END,
+    SET status = CASE
+            WHEN target.will_retry THEN 'pending'
+            WHEN target.cancel_requested AND :status = 'failed' THEN 'cancelled'
+            ELSE :status
+        END,
         scheduled_at = CASE
             WHEN target.will_retry
             THEN now() + make_interval(secs => target.attempts * 5)
@@ -122,12 +134,17 @@ WHERE a.file_task_id = :task_id
 # limit, otherwise fail permanently. Progress history rows still marked
 # running become ``timeout``. Returns the number of recovered tasks.
 #
+# Ownership is cleared and ``finished_at`` is set when the task reaches a
+# terminal state, so the management view does not keep showing a dead worker as
+# the current owner. Tasks of a cancelled job are cancelled rather than
+# requeued, matching CLAIM_SQL and COMPLETE_SQL.
+#
 # ``FOR UPDATE SKIP LOCKED`` makes concurrent recovery sweeps disjoint: a
 # second recovery worker skips rows already locked by the first instead of
 # racing it for the same stale task.
 RECOVER_STALE_SQL = """
 WITH stale AS (
-    SELECT id, attempts, max_attempts
+    SELECT id, job_id, attempts, max_attempts
     FROM file_tasks
     WHERE status = 'running'
       AND (heartbeat_at IS NULL
@@ -136,12 +153,21 @@ WITH stale AS (
 ), updated AS (
     UPDATE file_tasks t
     SET status = CASE
+            WHEN j.cancel_requested THEN 'cancelled'
             WHEN stale.attempts < LEAST(stale.max_attempts, :max_attempts) THEN 'pending'
             ELSE 'failed'
         END,
         scheduled_at = now(),
+        worker_id = NULL,
+        finished_at = CASE
+            WHEN j.cancel_requested
+                 OR stale.attempts >= LEAST(stale.max_attempts, :max_attempts)
+            THEN now()
+            ELSE t.finished_at
+        END,
         error = COALESCE(t.error, 'worker heartbeat timeout')
     FROM stale
+    JOIN jobs j ON j.id = stale.job_id
     WHERE t.id = stale.id
     RETURNING t.id
 ), timed_out AS (
@@ -156,12 +182,13 @@ SELECT count(*) FROM updated
 """
 
 REGISTER_WORKER_SQL = """
-INSERT INTO workers (id, hostname, version, status, started_at, last_heartbeat)
-VALUES (:id, :hostname, :version, 'online', now(), now())
+INSERT INTO workers (id, hostname, version, status, max_concurrent_copies, started_at, last_heartbeat)
+VALUES (:id, :hostname, :version, 'online', :max_concurrent_copies, now(), now())
 ON CONFLICT (id) DO UPDATE
 SET hostname = EXCLUDED.hostname,
     version = EXCLUDED.version,
     status = 'online',
+    max_concurrent_copies = EXCLUDED.max_concurrent_copies,
     last_heartbeat = now()
 """
 
@@ -171,6 +198,17 @@ SET status = :status,
     current_task_id = :task_id,
     last_heartbeat = now()
 WHERE id = :id
+"""
+
+# A process that is SIGKILLed cannot report its own exit, so a peer's sweep
+# demotes workers whose heartbeat lapsed. Portable cutoff (bound parameter) so
+# the statement runs on SQLite in tests.
+MARK_DEAD_WORKERS_SQL = """
+UPDATE workers
+SET status = 'offline',
+    current_task_id = NULL
+WHERE status <> 'offline'
+  AND last_heartbeat < :cutoff
 """
 
 DRAIN_SQL = "SELECT drain_requested FROM workers WHERE id = :id"
@@ -200,18 +238,34 @@ SET status = :status,
     finished_at = :finished_at
 WHERE id = :job_id
   AND status = 'running'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM file_tasks t
+      WHERE t.job_id = jobs.id
+        AND (
+            (jobs.cancel_requested AND t.status = 'running')
+            OR (NOT jobs.cancel_requested AND t.status IN ('pending', 'running'))
+        )
+  )
 """
 
 # Compensation candidates: running jobs whose file tasks are all terminal.
 # Covers work returned to failure by stale recovery, where no completion
-# callback runs.
+# callback runs. A cancelled job treats ``pending`` as unreachable rather than
+# open, matching _derive_job_status and CLAIM_SQL.
 CANDIDATE_JOBS_SQL = """
 SELECT j.id AS job_id
 FROM jobs j
 JOIN file_tasks t ON t.job_id = j.id
 WHERE j.status = 'running'
 GROUP BY j.id
-HAVING SUM(CASE WHEN t.status IN ('pending', 'running') THEN 1 ELSE 0 END) = 0
+HAVING SUM(
+           CASE
+               WHEN j.cancel_requested AND t.status = 'running' THEN 1
+               WHEN NOT j.cancel_requested AND t.status IN ('pending', 'running') THEN 1
+               ELSE 0
+           END
+       ) = 0
 """
 
 OPEN_TASK_STATUSES = ("pending", "running")
@@ -222,17 +276,21 @@ def _derive_job_status(rows) -> str | None:
     """Map a job's file-task status counts onto a terminal job status.
 
     Returns ``None`` while any task is still open, so the caller leaves the job
-    ``running``.
+    ``running``. A cancel request makes ``pending`` tasks unreachable instead of
+    open: ``CLAIM_SQL`` never claims tasks of a cancelled job, so counting them
+    as open would strand the job (and its SSE stream) forever.
     """
     if not rows:
         return None
+    cancel_requested = bool(rows[0]["cancel_requested"])
     counts = {str(row["task_status"]): int(row["task_count"]) for row in rows}
-    if any(counts.get(status, 0) for status in OPEN_TASK_STATUSES):
+    open_statuses = ("running",) if cancel_requested else OPEN_TASK_STATUSES
+    if any(counts.get(status, 0) for status in open_statuses):
         return None
 
     succeeded = counts.get("succeeded", 0)
     failed = sum(counts.get(status, 0) for status in FAILED_TASK_STATUSES)
-    if bool(rows[0]["cancel_requested"]):
+    if cancel_requested:
         return "cancelled"
     if failed and succeeded:
         return "partial"
@@ -252,15 +310,23 @@ class PostgresTaskRepository:
     repository never opens a connection.
     """
 
-    def __init__(self, engine: Engine, max_attempts: int = 5) -> None:
+    def __init__(
+        self, engine: Engine, max_attempts: int = 5, max_concurrent_copies: int = 4
+    ) -> None:
         self._engine = engine
         self._max_attempts = max_attempts
+        self._max_concurrent_copies = max_concurrent_copies
 
     def register_worker(self, worker_id: str, hostname: str, version: str) -> None:
         with self._engine.begin() as conn:
             conn.execute(
                 text(REGISTER_WORKER_SQL),
-                {"id": worker_id, "hostname": hostname, "version": version},
+                {
+                    "id": worker_id,
+                    "hostname": hostname,
+                    "version": version,
+                    "max_concurrent_copies": self._max_concurrent_copies,
+                },
             )
 
     def heartbeat_worker(
@@ -405,3 +471,15 @@ class PostgresTaskRepository:
                 for row in conn.execute(text(CANDIDATE_JOBS_SQL)).mappings().all()
             ]
         return sum(1 for job_id in job_ids if self.finalize_job(job_id) is not None)
+
+    def mark_dead_workers(self, stale_seconds: int = 120) -> int:
+        """Demote workers that stopped heartbeating to ``offline``.
+
+        Returns the number of demoted rows. A live worker refreshes its own
+        heartbeat at least once per loop iteration (and every few seconds while
+        processing), so it does not demote itself.
+        """
+        cutoff = utcnow() - timedelta(seconds=stale_seconds)
+        with self._engine.begin() as conn:
+            result = conn.execute(text(MARK_DEAD_WORKERS_SQL), {"cutoff": cutoff})
+        return int(result.rowcount)
