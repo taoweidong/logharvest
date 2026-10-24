@@ -259,6 +259,82 @@ def test_file_task_same_source_path_under_different_job_is_allowed(engine: Engin
         assert len(session.exec(select(FileTask)).all()) == 2
 
 
+def _seed_job_dependencies(session: Session) -> tuple[int, int]:
+    source = DataSource(name="nas", root_path="/data/logs")
+    rules = RuleSet(name="baseline", version=1)
+    session.add(source)
+    session.add(rules)
+    session.commit()
+    session.refresh(source)
+    session.refresh(rules)
+    assert source.id is not None
+    assert rules.id is not None
+    return source.id, rules.id
+
+
+def _job(
+    name: str,
+    source_id: int,
+    rule_id: int,
+    created_by: str,
+    idempotency_key: str | None,
+) -> Job:
+    return Job(
+        name=name,
+        data_source_id=source_id,
+        source_path="/data/logs",
+        rule_set_id=rule_id,
+        created_by=created_by,
+        idempotency_key=idempotency_key,
+    )
+
+
+def test_job_created_by_and_idempotency_key_are_unique(engine: Engine) -> None:
+    with Session(engine) as session:
+        source_id, rule_id = _seed_job_dependencies(session)
+
+        session.add(_job("batch-1", source_id, rule_id, "admin", "k1"))
+        session.commit()
+
+        session.add(_job("batch-2", source_id, rule_id, "admin", "k1"))
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+        session.rollback()
+        assert len(session.exec(select(Job)).all()) == 1
+
+
+def test_job_same_idempotency_key_under_different_creator_is_allowed(engine: Engine) -> None:
+    with Session(engine) as session:
+        source_id, rule_id = _seed_job_dependencies(session)
+
+        session.add_all(
+            [
+                _job("batch-1", source_id, rule_id, "admin", "k1"),
+                _job("batch-2", source_id, rule_id, "ops", "k1"),
+            ]
+        )
+        session.commit()
+
+        creators = session.exec(select(Job.created_by).order_by(Job.created_by)).all()
+        assert creators == ["admin", "ops"]
+
+
+def test_job_null_idempotency_keys_are_allowed_for_same_creator(engine: Engine) -> None:
+    with Session(engine) as session:
+        source_id, rule_id = _seed_job_dependencies(session)
+
+        session.add_all(
+            [
+                _job("batch-1", source_id, rule_id, "admin", None),
+                _job("batch-2", source_id, rule_id, "admin", None),
+            ]
+        )
+        session.commit()
+
+        assert len(session.exec(select(Job)).all()) == 2
+
+
 def _ddl(table: Table, dialect) -> str:
     return str(CreateTable(table).compile(dialect=dialect))
 

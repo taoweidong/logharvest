@@ -4,9 +4,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, create_engine
 
 from src.api.dependencies import get_session
+from src.config.settings import settings
+from src.infrastructure.database import create_db_and_tables
 from src.main import create_app
 
 
@@ -17,7 +19,7 @@ def engine() -> Iterator[Engine]:
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    SQLModel.metadata.create_all(db)
+    create_db_and_tables(db)
     yield db
     db.dispose()
 
@@ -43,4 +45,4 @@ def client(engine: Engine) -> Iterator[TestClient]:
 
 @pytest.fixture()
 def auth_headers() -> dict[str, str]:
-    return {"Authorization": "Bearer dev-admin-token"}
+    return {"Authorization": f"Bearer {settings.admin_token}"}
