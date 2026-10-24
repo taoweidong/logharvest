@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Node / frontend
+node_modules/
+dist/
+coverage/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Superseded detailed design, kept locally only
+docs/superpowers/specs/archive/
