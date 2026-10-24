@@ -1,5 +1,5 @@
 from decimal import Decimal
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -21,10 +21,10 @@ class RegexMatch(BaseModel):
     type: Literal["regex"] = "regex"
     pattern: str
     flags: str = ""
-    timeout_ms: int = 50
+    timeout_ms: int = Field(default=50, gt=0)
 
 
-MatchSpec = Annotated[Union[KeywordMatch, RegexMatch], Field(discriminator="type")]
+MatchSpec = Annotated[KeywordMatch | RegexMatch, Field(discriminator="type")]
 
 
 class Threshold(BaseModel):
@@ -41,6 +41,15 @@ class Rule(BaseModel):
     threshold: Threshold | None = None
     severity: str = "info"
     tags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_threshold_requires_regex(self) -> "Rule":
+        if self.threshold is not None and isinstance(self.match, KeywordMatch):
+            raise ValueError(
+                "threshold requires a regex match with named groups; "
+                "keyword matches produce no fields"
+            )
+        return self
 
 
 class RuleSetConfig(BaseModel):
