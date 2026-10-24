@@ -17,15 +17,17 @@ from src.worker.main import WorkerRuntime
 
 
 class FakeRepo:
-    def __init__(self, tasks, draining=False, stop=None):
+    def __init__(self, tasks, draining=False, stop=None, recovered_count=0):
         self.tasks = list(tasks)
         self.draining = draining
         self.stop = stop
+        self.recovered_count = recovered_count
         self.claims = []
         self.completed = []
         self.worker_heartbeats = []
         self.registered = []
         self.recovered = []
+        self.demoted = []
         self.finalized = []
         self.swept = 0
 
@@ -57,6 +59,10 @@ class FakeRepo:
 
     def recover_stale(self, stale_seconds=120):
         self.recovered.append(stale_seconds)
+        return self.recovered_count
+
+    def mark_dead_workers(self, stale_seconds=120):
+        self.demoted.append(stale_seconds)
         return 0
 
     def finalize_job(self, job_id):
@@ -218,8 +224,23 @@ def test_run_forever_registers_recovers_and_stops(tmp_path):
 
     assert repo.registered == [("w1", socket.gethostname(), "0.1.0")]
     assert repo.recovered == [120]
+    # A process that was SIGKILLed cannot report its own exit.
+    assert repo.demoted == [120]
     assert repo.swept == 1
     assert repo.worker_heartbeats == [("online", None), ("offline", None)]
+
+
+def test_run_forever_sweeps_jobs_right_after_recovering_tasks(tmp_path):
+    stop = Event()
+    repo = FakeRepo([], stop=stop, recovered_count=2)
+    runtime = make_runtime(repo, FakeWriter(), tmp_path, poll_seconds=0.01)
+
+    runtime.run_forever(stop)
+
+    # Recovered tasks can be the last open rows of their jobs; closing them must
+    # not wait for the next sweep interval.
+    assert repo.recovered == [120]
+    assert repo.swept == 2
 
 
 def test_run_forever_recovers_stale_periodically(tmp_path):

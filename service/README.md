@@ -138,7 +138,7 @@ LOGHARVEST_DATABASE_URL=postgresql://logharvest:logharvest@127.0.0.1:5432/loghar
 
 - 一个 Worker 进程一次只处理一个任务；单机并行通过启动多个进程实现（默认 4、最多 6，内存压力时按 4→3→2 减少进程数）。
 - `LOGHARVEST_MAX_CONCURRENT_COPIES` 目前是运维声明的单机并发预算（会展示在 Worker 记录中），进程内并发池尚未实现。
-- 同一主机启动多个 Worker 进程时，必须为每个进程设置唯一的 `LOGHARVEST_WORKER_ID`；默认取主机名，多进程共用主机名会互相覆盖 `workers` 表中的同一行状态。
+- 同一主机启动多个 Worker 进程时，必须为每个进程设置唯一的 `LOGHARVEST_WORKER_ID`；默认取主机名，多进程共用主机名会互相覆盖 `workers` 表中的同一行状态，并且启动时的本地残留清理可能删掉同 id 对端正在使用的复制目录（该任务会失败重试，NAS 数据不受影响）。
 - NAS 只读：源文件仅以 `rb` 打开，不写入、不移动、不改属性；所有写入只发生在 `LOGHARVEST_WORK_DIR` 下按任务隔离的临时目录，任务结束（含失败）后删除。
 
 ## 作业终态汇总
@@ -172,6 +172,7 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 ## PostgreSQL 依赖与验证边界
 
 - 队列 SQL（`FOR UPDATE SKIP LOCKED`、`make_interval`、`ON CONFLICT`、CTE `UPDATE ... RETURNING`）只能在 PostgreSQL 上执行。当前开发机没有 PostgreSQL 实例，因此队列部分以 SQL 形状断言 + fake 运行时验证，真实 PostgreSQL 环境与 `SKIP LOCKED` 并发行为仍待补验。
+- PostgreSQL 连接会强制 `timezone=UTC`（`connect_args_for`）：时间戳列是 `without time zone`，SQL `now()` 写入的是会话时区的墙上时间，而 Python 侧写入 UTC。若会话不是 UTC，`heartbeat_at`、僵死回收阈值与"静默 Worker 降级"的比较会整体偏移，降级可能永远不触发。
 - 作业终态汇总 SQL 使用可移植写法，已在真实建表的 SQLite 上验证聚合与栅栏语义。
 - 表结构仍由 `create_db_and_tables()` 建立，Alembic 迁移与应用启动建表尚未接入。
 

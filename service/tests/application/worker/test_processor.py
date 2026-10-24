@@ -365,6 +365,9 @@ def test_copy_refreshes_lease_with_touch(tmp_path: Path) -> None:
         repo,
         writer,
         tmp_path / "work",
+        # A batch larger than the archive means the only fences in play are the
+        # pre-write fence, the copy-phase fence and the single tail flush.
+        batch_size=10_000,
         heartbeat_every_lines=10_000,
         copy_heartbeat_seconds=5,
         clock=SteppingClock(step=6),
@@ -373,10 +376,7 @@ def test_copy_refreshes_lease_with_touch(tmp_path: Path) -> None:
     result = processor.process(make_task(tmp_path))
 
     assert result.status == "succeeded"
-    # The first touch verifies the lease before the retry cleanup write; later
-    # touches cover the copy phase and each batch flush.
-    assert repo.touches[0] == (10, 1)
-    assert len(repo.touches) >= 2
+    assert repo.touches == [(10, 1), (10, 1), (10, 1)]
     assert writer.written
 
 

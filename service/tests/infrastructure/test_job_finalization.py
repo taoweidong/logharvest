@@ -1,8 +1,9 @@
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlmodel import Session
 
-from src.domain.models.entities import FileTask, Job
-from src.infrastructure.task_queue import PostgresTaskRepository
+from src.domain.models.entities import FileTask, Job, utcnow
+from src.infrastructure.task_queue import FINISH_JOB_SQL, PostgresTaskRepository
 
 
 def _seed(
@@ -143,3 +144,30 @@ def test_pending_task_blocks_finalization_when_job_is_not_cancelled(engine: Engi
 
     assert PostgresTaskRepository(engine).finalize_job(job_id) is None
     assert _reload(engine, job_id).status == "running"
+
+
+def test_finish_statement_refuses_a_job_with_an_open_task(engine: Engine) -> None:
+    """Pin the NOT EXISTS guard on its own, independent of the Python derivation."""
+    job_id = _seed(engine, ["succeeded", "running"])
+
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(FINISH_JOB_SQL),
+            {"job_id": job_id, "status": "succeeded", "finished_at": utcnow()},
+        )
+
+    assert result.rowcount == 0
+    assert _reload(engine, job_id).status == "running"
+
+
+def test_finish_statement_accepts_a_cancelled_job_with_pending_tasks(engine: Engine) -> None:
+    job_id = _seed(engine, ["succeeded", "pending"], cancel_requested=True)
+
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(FINISH_JOB_SQL),
+            {"job_id": job_id, "status": "cancelled", "finished_at": utcnow()},
+        )
+
+    assert result.rowcount == 1
+    assert _reload(engine, job_id).status == "cancelled"
