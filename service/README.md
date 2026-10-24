@@ -87,7 +87,7 @@ Token 缺失或不匹配返回 `401`，响应体 `{"detail":"invalid admin token
 | `GET` | `/api/workers` | Worker 列表，`limit`/`offset` 分页（不包含心跳/管理写接口） |
 | `GET` | `/api/system/status` | 文件任务状态计数、最老 pending 等待秒数、在线 Worker 数 |
 
-分页仅适用于 `GET /api/jobs`、`GET /api/jobs/{id}/files` 与 `GET /api/workers`：`limit` 默认 `50`、`offset` 默认 `0`，其中作业与文件任务最大 `limit=500`，Worker 最大 `200`；`limit`/`offset` 越界返回 `422`。`GET /api/data-sources` 与 `GET /api/rule-sets` 直接返回全量列表，不分页。`GET /api/matches` 只接受 `cursor`、不使用 `offset`：以 `id` 降序，把上一页最后一条的 `id` 作为下一页 `cursor`，`limit` 默认 `50`、最大 `500`。
+分页仅适用于 `GET /api/jobs`、`GET /api/jobs/{id}/files` 与 `GET /api/workers`：`limit` 默认 `50`、`offset` 默认 `0`，其中作业与文件任务最大 `limit=500`，Worker 最大 `200`；`limit` 超出上限或 `offset` 为负数返回 `422`。`GET /api/data-sources` 与 `GET /api/rule-sets` 直接返回全量列表，不分页。`GET /api/matches` 只接受 `cursor`、不使用 `offset`：以 `id` 降序，把上一页最后一条的 `id` 作为下一页 `cursor`，`limit` 默认 `50`、最大 `500`。
 
 ### 创建作业流程
 
