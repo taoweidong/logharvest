@@ -41,6 +41,7 @@ class WorkerRuntime:
         poll_seconds: float = 1.0,
         stale_seconds: int = DEFAULT_STALE_SECONDS,
         recover_interval_seconds: float = DEFAULT_RECOVER_INTERVAL_SECONDS,
+        batch_size: int = 1000,
     ) -> None:
         self._repo = repo
         self._writer = writer
@@ -51,6 +52,7 @@ class WorkerRuntime:
         self._poll_seconds = poll_seconds
         self._stale_seconds = stale_seconds
         self._recover_interval_seconds = recover_interval_seconds
+        self._batch_size = batch_size
 
     def run_once(self) -> bool:
         """Claim and process at most one task; return whether work was attempted."""
@@ -72,17 +74,21 @@ class WorkerRuntime:
                     writer=self._writer,
                     rules=self._rules_factory(task),
                     work_dir=self._work_dir,
+                    batch_size=self._batch_size,
                 )
             except Exception as exc:  # noqa: BLE001
                 # A broken rule config or work-dir setup must not leave the
                 # claimed task running until stale recovery notices it.
                 self._repo.complete(task.id, task.attempts, "failed", 0, 0, str(exc))
+                self._finalize_job(task.job_id)
             else:
                 try:
                     processor.process(task)
                 except LeaseLost:
                     # Another worker owns (or recovery returned) the task now.
                     pass
+                else:
+                    self._finalize_job(task.job_id)
         finally:
             self._repo.heartbeat_worker(self._worker_id, "online")
         return True
@@ -91,14 +97,17 @@ class WorkerRuntime:
         stop = stop_event or Event()
         self._repo.register_worker(self._worker_id, socket.gethostname(), self._worker_version)
         self._recover_stale()
+        self._sweep_finished_jobs()
         next_recover = monotonic() + self._recover_interval_seconds
         try:
             while not stop.is_set():
                 now = monotonic()
                 if now >= next_recover:
                     # Periodic sweep so abandoned tasks are retried even when no
-                    # worker process restarts.
+                    # worker process restarts, and jobs closed by recovery or
+                    # cancellation are finalized without a completion callback.
                     self._recover_stale()
+                    self._sweep_finished_jobs()
                     next_recover = now + self._recover_interval_seconds
                 if not self.run_once():
                     stop.wait(self._poll_seconds)
@@ -115,6 +124,18 @@ class WorkerRuntime:
         if callable(recover):
             recover(self._stale_seconds)
 
+    def _finalize_job(self, job_id: int) -> None:
+        """Close the job if this was its last open file task."""
+        finalize = getattr(self._repo, "finalize_job", None)
+        if callable(finalize):
+            finalize(job_id)
+
+    def _sweep_finished_jobs(self) -> None:
+        """Compensation for jobs whose last task ended through recovery or cancel."""
+        sweep = getattr(self._repo, "finalize_finished_jobs", None)
+        if callable(sweep):
+            sweep()
+
 
 def main() -> None:
     worker_id = os.getenv("LOGHARVEST_WORKER_ID") or socket.gethostname()
@@ -127,6 +148,7 @@ def main() -> None:
         worker_version=settings.worker_version,
         work_dir=work_dir,
         poll_seconds=settings.worker_poll_seconds,
+        batch_size=settings.matches_batch_size,
     )
 
     stop = Event()

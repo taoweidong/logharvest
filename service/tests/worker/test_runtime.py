@@ -7,7 +7,7 @@ from threading import Event
 import pytest
 
 import src.worker.main as worker_main
-from src.application.worker.ports import ClaimedTask
+from src.application.worker.ports import ClaimedTask, TaskResult
 from src.application.worker.processor import LeaseLost
 from src.domain.rules.evaluator import compile_ruleset
 from src.domain.rules.models import RuleSetConfig
@@ -24,6 +24,8 @@ class FakeRepo:
         self.worker_heartbeats = []
         self.registered = []
         self.recovered = []
+        self.finalized = []
+        self.swept = 0
 
     def is_draining(self, worker_id):
         return self.draining
@@ -53,6 +55,14 @@ class FakeRepo:
 
     def recover_stale(self, stale_seconds=120):
         self.recovered.append(stale_seconds)
+        return 0
+
+    def finalize_job(self, job_id):
+        self.finalized.append(job_id)
+        return "succeeded"
+
+    def finalize_finished_jobs(self):
+        self.swept += 1
         return 0
 
 
@@ -114,6 +124,25 @@ def test_run_once_processes_claimed_task(tmp_path):
     assert repo.completed == [(1, 1, "succeeded", 1, 1, None)]
     assert repo.worker_heartbeats == [("busy", 1), ("online", None)]
     assert repo.claims == [("w1", "0.1.0")]
+    # The completing worker closes the job when it held the last open task.
+    assert repo.finalized == [2]
+
+
+def test_run_once_forwards_configured_batch_size(tmp_path, monkeypatch):
+    captured = {}
+
+    class RecordingProcessor:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def process(self, task):
+            return TaskResult("succeeded", 0, 0)
+
+    monkeypatch.setattr(worker_main, "TaskProcessor", RecordingProcessor)
+    runtime = make_runtime(FakeRepo([make_task(tmp_path)]), FakeWriter(), tmp_path, batch_size=7)
+
+    assert runtime.run_once() is True
+    assert captured["batch_size"] == 7
 
 
 def test_run_once_does_not_claim_while_draining(tmp_path):
@@ -149,6 +178,7 @@ def test_run_once_records_failed_task_when_rules_cannot_compile(tmp_path):
 
     assert repo.completed == [(1, 1, "failed", 0, 0, "invalid rule config")]
     assert repo.worker_heartbeats == [("busy", 1), ("online", None)]
+    assert repo.finalized == [2]
 
 
 def test_run_once_continues_after_lease_is_lost(tmp_path, monkeypatch):
@@ -167,6 +197,9 @@ def test_run_once_continues_after_lease_is_lost(tmp_path, monkeypatch):
 
     assert repo.completed == []
     assert repo.worker_heartbeats == [("busy", 1), ("online", None)]
+    # A worker that lost the lease no longer owns the task, so it must not
+    # decide the job's outcome.
+    assert repo.finalized == []
 
 
 def test_run_forever_registers_recovers_and_stops(tmp_path):
@@ -178,6 +211,7 @@ def test_run_forever_registers_recovers_and_stops(tmp_path):
 
     assert repo.registered == [("w1", socket.gethostname(), "0.1.0")]
     assert repo.recovered == [120]
+    assert repo.swept == 1
     assert repo.worker_heartbeats == [("online", None), ("offline", None)]
 
 
@@ -197,6 +231,7 @@ def test_run_forever_recovers_stale_periodically(tmp_path):
     # One recovery on startup, then another sweep before the first poll because
     # the interval is zero.
     assert repo.recovered == [120, 120]
+    assert repo.swept == 2
 
 
 def test_run_forever_marks_worker_offline_when_loop_raises(tmp_path):
@@ -246,3 +281,5 @@ def test_main_wires_stop_event_and_signals(monkeypatch):
     assert stop.is_set() is True
     assert captured["options"]["worker_id"] == "test-host"
     assert captured["options"]["worker_version"] == worker_main.settings.worker_version
+    assert captured["options"]["poll_seconds"] == worker_main.settings.worker_poll_seconds
+    assert captured["options"]["batch_size"] == worker_main.settings.matches_batch_size

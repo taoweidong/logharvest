@@ -4,11 +4,12 @@ from typing import get_type_hints
 
 import pytest
 from sqlalchemy import delete
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from src.api.dependencies import get_engine, get_session
 from src.api.v1.routes_events import _event_stream, job_events
 from src.domain.models.entities import FileTask, Job
+from src.infrastructure.task_queue import PostgresTaskRepository
 
 
 def seed_job(session, status: str = "running") -> int:
@@ -175,3 +176,35 @@ def test_event_stream_ends_cleanly_when_job_is_deleted(engine, session):
     first = asyncio.run(asyncio.wait_for(run(), timeout=2))
 
     assert parse_events(first)[0]["job_id"] == job_id
+
+
+def test_event_stream_stops_when_the_worker_finalizes_the_job(engine, session):
+    """End-to-end: closing the job is what ends a live progress stream."""
+    job_id = seed_job(session)
+
+    def finish_tasks() -> None:
+        with Session(engine) as worker_session:
+            for task in worker_session.exec(
+                select(FileTask).where(FileTask.job_id == job_id)
+            ).all():
+                task.status = "succeeded"
+                worker_session.add(task)
+            worker_session.commit()
+        assert PostgresTaskRepository(engine).finalize_job(job_id) == "succeeded"
+
+    async def collect() -> list[str]:
+        stream = _event_stream(engine, job_id, 0, poll_seconds=0)
+        try:
+            events = [await anext(stream)]
+            # The last file task lands between two polls.
+            finish_tasks()
+            events.extend([event async for event in stream])
+            return events
+        finally:
+            await stream.aclose()
+
+    events = asyncio.run(asyncio.wait_for(collect(), timeout=2))
+
+    assert len(events) == 2
+    assert parse_events(events[0])[0]["status"] == "running"
+    assert parse_events(events[1])[0]["status"] == "succeeded"

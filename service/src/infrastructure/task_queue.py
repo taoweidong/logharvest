@@ -4,6 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from src.application.worker.ports import ClaimedTask
+from src.domain.models.entities import utcnow
 
 # Atomic claim: lock one eligible row with SKIP LOCKED, then flip it to running
 # in the same transaction. ``attempts`` is incremented here so every attempt
@@ -174,6 +175,75 @@ WHERE id = :id
 
 DRAIN_SQL = "SELECT drain_requested FROM workers WHERE id = :id"
 
+# Job finalization. The design requires a job to end once none of its file
+# tasks is pending/running; these statements stay portable (no PostgreSQL-only
+# syntax) so the aggregation semantics are exercised on SQLite while the queue
+# itself stays PostgreSQL-only.
+#
+# Snapshot only when the job is still ``running``: the row-level fence in
+# FINISH_JOB_SQL then decides the single writer when two workers finish the
+# last tasks at the same time.
+JOB_SNAPSHOT_SQL = """
+SELECT j.cancel_requested AS cancel_requested,
+       t.status AS task_status,
+       count(*) AS task_count
+FROM jobs j
+JOIN file_tasks t ON t.job_id = j.id
+WHERE j.id = :job_id
+  AND j.status = 'running'
+GROUP BY j.cancel_requested, t.status
+"""
+
+FINISH_JOB_SQL = """
+UPDATE jobs
+SET status = :status,
+    finished_at = :finished_at
+WHERE id = :job_id
+  AND status = 'running'
+"""
+
+# Compensation candidates: running jobs whose file tasks are all terminal.
+# Covers work returned to failure by stale recovery, where no completion
+# callback runs.
+CANDIDATE_JOBS_SQL = """
+SELECT j.id AS job_id
+FROM jobs j
+JOIN file_tasks t ON t.job_id = j.id
+WHERE j.status = 'running'
+GROUP BY j.id
+HAVING SUM(CASE WHEN t.status IN ('pending', 'running') THEN 1 ELSE 0 END) = 0
+"""
+
+OPEN_TASK_STATUSES = ("pending", "running")
+FAILED_TASK_STATUSES = ("failed", "partial")
+
+
+def _derive_job_status(rows) -> str | None:
+    """Map a job's file-task status counts onto a terminal job status.
+
+    Returns ``None`` while any task is still open, so the caller leaves the job
+    ``running``.
+    """
+    if not rows:
+        return None
+    counts = {str(row["task_status"]): int(row["task_count"]) for row in rows}
+    if any(counts.get(status, 0) for status in OPEN_TASK_STATUSES):
+        return None
+
+    succeeded = counts.get("succeeded", 0)
+    failed = sum(counts.get(status, 0) for status in FAILED_TASK_STATUSES)
+    if bool(rows[0]["cancel_requested"]):
+        return "cancelled"
+    if failed and succeeded:
+        return "partial"
+    if failed:
+        return "failed"
+    if succeeded:
+        return "succeeded"
+    # Nothing succeeded and nothing failed: the tasks were all cancelled
+    # without the job carrying the cancel flag.
+    return "cancelled"
+
 
 class PostgresTaskRepository:
     """PostgreSQL-backed task queue used by the worker runtime.
@@ -308,3 +378,30 @@ class PostgresTaskRepository:
                 {"seconds": stale_seconds, "max_attempts": self._max_attempts},
             ).scalar_one()
         return int(recovered)
+
+    def finalize_job(self, job_id: int) -> str | None:
+        """Move a running job to its terminal status, if every task is terminal.
+
+        Called after a task completion commits, so the worker that finishes the
+        last file task sees its own row and closes the job. Returns the status
+        written, or ``None`` when the job stayed open or another worker won.
+        """
+        with self._engine.begin() as conn:
+            rows = conn.execute(text(JOB_SNAPSHOT_SQL), {"job_id": job_id}).mappings().all()
+            status = _derive_job_status(rows)
+            if status is None:
+                return None
+            result = conn.execute(
+                text(FINISH_JOB_SQL),
+                {"job_id": job_id, "status": status, "finished_at": utcnow()},
+            )
+        return status if result.rowcount == 1 else None
+
+    def finalize_finished_jobs(self) -> int:
+        """Compensation sweep for jobs whose last task ended outside completion."""
+        with self._engine.connect() as conn:
+            job_ids = [
+                int(row["job_id"])
+                for row in conn.execute(text(CANDIDATE_JOBS_SQL)).mappings().all()
+            ]
+        return sum(1 for job_id in job_ids if self.finalize_job(job_id) is not None)
