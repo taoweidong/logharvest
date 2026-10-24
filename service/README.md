@@ -26,7 +26,7 @@ curl http://127.0.0.1:8000/api/health
 # {"status":"ok","service":"logharvest"}
 ```
 
-依赖锁定：`service/uv.lock` 已提交，`uv sync --python 3.12` 会按锁文件安装可复现的环境。
+依赖锁定：`service/uv.lock` 已提交，`uv sync --python 3.12` 会按锁文件安装可复现的环境。该锁文件使用阿里云 PyPI 镜像（`https://mirrors.aliyun.com/pypi/simple/`）生成；使用默认 PyPI 的贡献者如需切换索引，可重新执行 `uv lock` 并提交更新后的锁文件。
 
 ## 配置
 
@@ -40,12 +40,15 @@ cp ../.env.example .env
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `LOGHARVEST_ENVIRONMENT` | `dev` | 运行环境标识 |
-| `LOGHARVEST_DATABASE_URL` | `sqlite:///./logharvest.db` | M0 本地使用 SQLite；相对路径基于启动目录，在 `service/` 下启动即生成 `service/logharvest.db`（已被 `.gitignore` 忽略） |
-| `LOGHARVEST_AUTO_CREATE_TABLES` | `true` | M0 仅保留该开关，尚未接入应用启动 |
-| `LOGHARVEST_WORKER_VERSION` | `0.1.0` | Worker 版本号，写入任务尝试记录 |
-| `LOGHARVEST_MAX_CONCURRENT_COPIES` | `4` | 单 Worker 本地复制并发上限 |
+| `LOGHARVEST_DATABASE_URL` | `sqlite:///./logharvest.db` | M0 本地使用 SQLite，相对路径基于启动目录；M1 接入 `create_db_and_tables` 后会在当前工作目录生成 `logharvest.db`（已被 `.gitignore` 忽略）；M0 只有模型和模型测试，不自动建库 |
+| `LOGHARVEST_AUTO_CREATE_TABLES` | `true` | M0 仅保留该开关，尚未接入应用启动（M1 接线） |
+| `LOGHARVEST_WORKER_VERSION` | `0.1.0` | Worker 版本号；写入任务尝试记录的执行逻辑尚未接入（M1 接线） |
+| `LOGHARVEST_MAX_CONCURRENT_COPIES` | `4` | 单 Worker 本地复制并发上限；作为并发上限生效的执行逻辑尚未接入（M1 接线） |
+| `LOGHARVEST_WORKER_POLL_SECONDS` | `1.0` | Worker 轮询间隔；尚未被运行时消费（M1 接线） |
+| `LOGHARVEST_MATCHES_BATCH_SIZE` | `1000` | 命中结果批量写入条数；尚未被运行时消费（M1 接线） |
+| `LOGHARVEST_MAX_MATCHES_PER_TASK` | `200_000` | 单任务命中上限；尚未被运行时消费（M1 接线） |
 
-`src/infrastructure/database.py` 提供 `create_db_and_tables()`，但 `src/main.py` 尚未在启动时调用它；建表接线留待 M1。
+`src/infrastructure/database.py` 提供 `create_db_and_tables()`，但当前没有运行时路径导入该模块（仅测试使用），`src/main.py` 也不在启动时建库；建表接线留待 M1。
 
 ## M0 范围
 
