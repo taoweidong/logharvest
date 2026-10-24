@@ -4,7 +4,7 @@
 
 LogHarvest 面向企业 NAS 上的海量压缩日志：按任务目录递归扫描压缩文件，拆分给多个 Worker 并行下载、解压和规则匹配，将命中记录连同压缩包路径、包内路径、文件名、物理行号、原始行和规则版本写入 PostgreSQL。
 
-M0 核心引擎与 M1a 控制面 API 已落地：规则编译/匹配、压缩包发现与流式读取、Worker 处理器、七张核心表模型，以及数据源、规则集版本、作业规划、文件任务、结果与系统状态 REST API；代码位于 [`service/`](service/)，接口、认证与开发说明见 [`service/README.md`](service/README.md)。PostgreSQL 队列、Worker 运行时、SSE、前端与迁移仍待 M1b/M2，仓库同时归档架构设计与技术选型文档。
+M0 核心引擎、M1a 控制面 API 与 M1b Worker/队列已落地：规则编译/匹配、压缩包发现与流式读取、Worker 处理器、七张核心表模型；数据源、规则集版本、作业规划、文件任务、结果与系统状态 REST API；PostgreSQL `SKIP LOCKED` 任务队列、Worker 常驻领取循环（复制/解析期租约续期、僵死回收、重试退避、尝试历史）、作业终态汇总、SSE 进度与 Worker drain/resume 管理。代码位于 [`service/`](service/)，接口、Worker 启动与开发说明见 [`service/README.md`](service/README.md)。前端、Alembic 迁移与真实 PostgreSQL 集成测试环境仍待后续里程碑，仓库同时归档架构设计与技术选型文档。
 
 ## 核心约束
 
@@ -54,7 +54,8 @@ FastAPI Server ──────────────> PostgreSQL
 
 - M0 核心引擎已实现：规则引擎、压缩包发现与流式读取、Worker 处理器、七张核心表 SQLModel 模型。
 - M1a 控制面 API 已实现：管理员 Bearer 认证；数据源创建/列表/路径检测；规则集版本化、配置校验、完整详情与列表分页；作业创建时同步递归扫描 NAS 目录（10 秒扫描上限、文件数超限提前中止）并为每个压缩文件生成 `file_task`（含路径逃逸校验、幂等重放与请求体一致性校验、空目录处理）；作业详情/文件任务/取消；命中结果强制 `job_id` 或时间范围并按 `(created_at,id)` 游标查询；Worker 列表与系统状态。API 测试使用 SQLite，无需 PostgreSQL。接口、认证、作业规划流程与边界见 [service/README.md](service/README.md)。
-- 尚未实现（M1b/M2）：PostgreSQL `file_tasks` + `SKIP LOCKED` 队列适配、Worker 领取循环与运行时、SSE 实时进度、Vue 前端与 Worker 管理页、Alembic 迁移与启动建表接线、Docker/PostgreSQL 部署编排、多行堆栈规则。
-- 本地运行注意：`src/main.py` 启动时不建表，直接启动 `uvicorn` 前需显式建表（M1a 尚无 Alembic）；具体命令与配置见 [service/README.md](service/README.md)。
-- 下一步：M1b 实现 PostgreSQL 队列与 Worker 运行时，并补 SSE 进度与前端骨架。
+- M1b Worker/队列已实现：PostgreSQL `file_tasks` + `FOR UPDATE SKIP LOCKED` 领取、`attempts` 租约栅栏的心跳/复制续租/终态写回、`file_task_attempts` 尝试历史、失败线性退避、`recover_stale` 僵死回收与 Worker 启动/每 300 秒周期补偿、`matches` 批量写入与重试清理；Worker 常驻循环 `python -m src.worker`（drain 检查、不绑定作业、信号优雅退出）；作业终态汇总（`succeeded`/`partial`/`failed`/`cancelled`）由最后完成任务的 Worker 写入并周期兜底；SSE 作业进度 `GET /api/jobs/{id}/events`（终态或作业删除即结束、每轮独立短会话）；Worker 管理接口 `drain`/`resume`/`drain-version`。队列 SQL 为 PostgreSQL 专有，本机无实例，故以 SQL 形状断言与 fake 运行时验证，作业汇总语义在真实建表的 SQLite 上验证。
+- 本地运行注意：`src/main.py` 启动时不建表，直接启动 `uvicorn` 前需显式建表（尚无 Alembic）；Worker 必须指向 PostgreSQL 连接串，具体命令与配置见 [service/README.md](service/README.md)。
+- 尚未实现（后续里程碑）：Vue 前端与 Worker 管理页、Alembic 迁移与启动建表接线、真实 PostgreSQL 集成测试、Docker/PostgreSQL 部署编排、进程内复制并发池与单任务命中上限强制、单文件级 `partial` 成员状态、多行堆栈规则、JWT/RBAC。
+- 下一步：M2 接 Hello-FastApi 前端的任务/规则/Worker 管理界面与 JWT/RBAC，并在具备 PostgreSQL 的机器上补队列与 `SKIP LOCKED` 并发集成验证。
 - 历史详细稿保留在本地 `docs/superpowers/specs/archive/`，未纳入仓库，避免与当前方案混淆。
