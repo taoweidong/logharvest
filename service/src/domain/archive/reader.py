@@ -81,7 +81,7 @@ def discover_archives(
             dirnames[:] = []
         for name in sorted(filenames):
             path = current_path / name
-            if path.is_symlink() or not _matches_suffix(path, allowed):
+            if path.is_symlink() or not path.is_file() or not _matches_suffix(path, allowed):
                 continue
             found.append(path)
     return found

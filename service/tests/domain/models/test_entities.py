@@ -3,7 +3,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import Engine, inspect
+from sqlalchemy import CreateTable, Engine, Table, inspect
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, create_engine, select
 
@@ -256,3 +257,43 @@ def test_file_task_same_source_path_under_different_job_is_allowed(engine: Engin
         session.commit()
 
         assert len(session.exec(select(FileTask)).all()) == 2
+
+
+def _ddl(table: Table, dialect) -> str:
+    return str(CreateTable(table).compile(dialect=dialect))
+
+
+def test_postgresql_byte_and_memory_counters_are_bigint() -> None:
+    pg = postgresql.dialect()
+
+    assert "total_bytes BIGINT NOT NULL" in _ddl(Job.__table__, pg)
+    assert "size_bytes BIGINT NOT NULL" in _ddl(FileTask.__table__, pg)
+
+    worker_ddl = _ddl(Worker.__table__, pg)
+    assert "memory_bytes BIGINT" in worker_ddl
+    assert "temp_disk_free_bytes BIGINT" in worker_ddl
+
+
+def test_postgresql_match_id_is_bigserial_and_sqlite_stays_autoincrement() -> None:
+    assert "id BIGSERIAL NOT NULL" in _ddl(Match.__table__, postgresql.dialect())
+
+    sqlite_ddl = _ddl(Match.__table__, sqlite.dialect())
+    assert "id INTEGER NOT NULL" in sqlite_ddl
+    assert "PRIMARY KEY (id)" in sqlite_ddl
+    assert "BIGSERIAL" not in sqlite_ddl
+
+
+def test_postgresql_json_columns_use_jsonb_and_sqlite_uses_json() -> None:
+    pg = postgresql.dialect()
+
+    assert "config JSONB NOT NULL" in _ddl(RuleSet.__table__, pg)
+    assert "file_filter JSONB NOT NULL" in _ddl(Job.__table__, pg)
+
+    match_ddl = _ddl(Match.__table__, pg)
+    assert "fields JSONB NOT NULL" in match_ddl
+    assert "tags JSONB NOT NULL" in match_ddl
+
+    sqlite_ddl = _ddl(Match.__table__, sqlite.dialect())
+    assert "fields JSON NOT NULL" in sqlite_ddl
+    assert "tags JSON NOT NULL" in sqlite_ddl
+    assert "JSONB" not in sqlite_ddl

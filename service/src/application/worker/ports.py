@@ -14,8 +14,8 @@ class ClaimedTask:
     attempts: int
     rule_set_id: int
     rule_version: int
-    encoding: str = "utf-8"
-    fallback_encoding: str = "gb18030"
+    encoding: str | None = None
+    fallback_encoding: str | None = None
 
 
 @dataclass(frozen=True)

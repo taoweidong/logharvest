@@ -2,12 +2,17 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, Column, Numeric, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, Column, Integer, Numeric, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _json_column() -> Column:
+    return Column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
 
 
 class DataSource(SQLModel, table=True):
@@ -33,7 +38,7 @@ class RuleSet(SQLModel, table=True):
     version: int
     config: dict[str, Any] = Field(
         default_factory=dict,
-        sa_column=Column(JSON, nullable=False),
+        sa_column=_json_column(),
     )
     created_by: str = ""
     created_at: datetime = Field(default_factory=utcnow)
@@ -48,12 +53,15 @@ class Job(SQLModel, table=True):
     source_path: str
     file_filter: dict[str, Any] = Field(
         default_factory=dict,
-        sa_column=Column(JSON, nullable=False),
+        sa_column=_json_column(),
     )
     rule_set_id: int = Field(foreign_key="rule_sets.id")
     status: str = "pending"
     total_files: int = 0
-    total_bytes: int = 0
+    total_bytes: int = Field(
+        default=0,
+        sa_column=Column(BigInteger, nullable=False, default=0),
+    )
     cancel_requested: bool = False
     created_by: str = ""
     created_at: datetime = Field(default_factory=utcnow)
@@ -72,7 +80,9 @@ class FileTask(SQLModel, table=True):
     job_id: int = Field(foreign_key="jobs.id", index=True)
     source_path: str
     file_name: str
-    size_bytes: int
+    size_bytes: int = Field(
+        sa_column=Column(BigInteger, nullable=False),
+    )
     mtime: datetime | None = None
     status: str = "pending"
     attempts: int = 0
@@ -105,7 +115,15 @@ class FileTaskAttempt(SQLModel, table=True):
 class Match(SQLModel, table=True):
     __tablename__ = "matches"
 
-    id: int | None = Field(default=None, primary_key=True)
+    id: int | None = Field(
+        default=None,
+        sa_column=Column(
+            BigInteger().with_variant(Integer, "sqlite"),
+            primary_key=True,
+            autoincrement=True,
+            nullable=False,
+        ),
+    )
     job_id: int = Field(index=True)
     file_task_id: int = Field(index=True)
     rule_id: str
@@ -119,7 +137,7 @@ class Match(SQLModel, table=True):
     raw_truncated: bool = False
     fields: dict[str, Any] = Field(
         default_factory=dict,
-        sa_column=Column(JSON, nullable=False),
+        sa_column=_json_column(),
     )
     numeric_value: Decimal | None = Field(
         default=None,
@@ -128,7 +146,7 @@ class Match(SQLModel, table=True):
     severity: str = "info"
     tags: list[str] = Field(
         default_factory=list,
-        sa_column=Column(JSON, nullable=False),
+        sa_column=_json_column(),
     )
     created_at: datetime = Field(default_factory=utcnow)
 
@@ -144,8 +162,14 @@ class Worker(SQLModel, table=True):
     current_task_id: int | None = None
     max_concurrent_copies: int = 4
     cpu_percent: float | None = None
-    memory_bytes: int | None = None
-    temp_disk_free_bytes: int | None = None
+    memory_bytes: int | None = Field(
+        default=None,
+        sa_column=Column(BigInteger, nullable=True),
+    )
+    temp_disk_free_bytes: int | None = Field(
+        default=None,
+        sa_column=Column(BigInteger, nullable=True),
+    )
     last_heartbeat: datetime = Field(default_factory=utcnow)
     started_at: datetime = Field(default_factory=utcnow)
     last_error: str | None = None

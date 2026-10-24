@@ -330,3 +330,30 @@ def test_unsupported_suffix_raises_value_error(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="unsupported archive type"):
         list(iter_archive_lines(path))
+
+
+def test_discover_archives_recursive_requires_regular_files(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "logs"
+    root.mkdir()
+    (root / "real.zip").write_bytes(b"zip")
+    (root / "pipe.zip").write_bytes(b"zip")
+    real_is_file = Path.is_file
+
+    def fake_is_file(self) -> bool:
+        if self.name == "pipe.zip":
+            return False
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+
+    assert [path.name for path in discover_archives(root)] == ["real.zip"]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are not available on this platform")
+def test_discover_archives_recursive_skips_fifos(tmp_path) -> None:
+    root = tmp_path / "logs"
+    root.mkdir()
+    (root / "real.zip").write_bytes(b"zip")
+    os.mkfifo(root / "pipe.zip")
+
+    assert [path.name for path in discover_archives(root)] == ["real.zip"]

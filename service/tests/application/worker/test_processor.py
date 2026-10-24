@@ -45,27 +45,76 @@ class FakeWriter:
         self.written.extend(matches)
 
 
-def make_task(tmp_path: Path, attempts: int = 1) -> ClaimedTask:
-    archive = tmp_path / "a.zip"
-    with zipfile.ZipFile(archive, "w") as zf:
-        zf.writestr("app.log", "ERROR one\nelapsed=6000ms\n")
-    return ClaimedTask(
-        id=10,
-        job_id=20,
-        source_path=archive,
-        file_name="a.zip",
-        attempts=attempts,
-        rule_set_id=30,
-        rule_version=1,
-    )
+class RetainingWriter(FakeWriter):
+    """Keeps every batch object as passed, instead of copying its records."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.batches: list = []
+
+    def write_batch(self, matches) -> None:
+        self.batches.append(matches)
 
 
-def make_rules():
+class SuccessCompletionFailingRepo(FakeRepo):
+    def complete(
+        self,
+        task_id: int,
+        attempts: int,
+        status: str,
+        processed_lines: int,
+        matched_rows: int,
+        error: str | None = None,
+    ) -> None:
+        self.completed.append((task_id, status, processed_lines, matched_rows, error))
+        if status == "succeeded":
+            raise RuntimeError("completion write failed")
+
+
+def write_zip(path: Path, members: dict[str, str | bytes]) -> Path:
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, content in members.items():
+            zf.writestr(name, content)
+    return path
+
+
+def make_task(
+    tmp_path: Path,
+    attempts: int = 1,
+    members: dict[str, str | bytes] | None = None,
+    **overrides,
+) -> ClaimedTask:
+    if members is None:
+        members = {"app.log": "ERROR one\nelapsed=6000ms\n"}
+    archive = write_zip(tmp_path / "a.zip", members)
+    options = {
+        "id": 10,
+        "job_id": 20,
+        "source_path": archive,
+        "file_name": "a.zip",
+        "attempts": attempts,
+        "rule_set_id": 30,
+        "rule_version": 1,
+    }
+    options.update(overrides)
+    return ClaimedTask(**options)
+
+
+def make_rules(
+    *,
+    file_glob: str = "**/*",
+    encoding: str = "utf-8",
+    fallback_encoding: str = "gb18030",
+    keyword: str = "ERROR",
+):
     return compile_ruleset(
         RuleSetConfig(
             name="t",
+            file_glob=file_glob,
+            encoding=encoding,
+            fallback_encoding=fallback_encoding,
             rules=[
-                Rule(id="error", match=KeywordMatch(any=["ERROR"]), severity="error"),
+                Rule(id="error", match=KeywordMatch(any=[keyword]), severity="error"),
                 Rule(
                     id="slow",
                     match=RegexMatch(pattern=r"elapsed=(?P<elapsed_ms>\d+)ms"),
@@ -77,7 +126,13 @@ def make_rules():
     )
 
 
-def make_processor(repo: FakeRepo, writer: FakeWriter, work_dir: Path, **overrides) -> TaskProcessor:
+def make_processor(
+    repo: FakeRepo,
+    writer: FakeWriter,
+    work_dir: Path,
+    rules=None,
+    **overrides,
+) -> TaskProcessor:
     options = {
         "batch_size": 1,
         "heartbeat_every_lines": 1,
@@ -86,7 +141,7 @@ def make_processor(repo: FakeRepo, writer: FakeWriter, work_dir: Path, **overrid
     return TaskProcessor(
         repo=repo,
         writer=writer,
-        rules=make_rules(),
+        rules=rules or make_rules(),
         work_dir=work_dir,
         **options,
     )
@@ -284,4 +339,118 @@ def test_lease_lost_is_reraised_without_completing(tmp_path: Path) -> None:
         processor.process(make_task(tmp_path))
 
     assert repo.completed == []
+    assert not (work_dir / "10").exists()
+
+
+def test_file_glob_only_evaluates_matching_members(tmp_path: Path) -> None:
+    archive = write_zip(
+        tmp_path / "mixed.zip",
+        {
+            "app.log": "ERROR root\n",
+            "notes.txt": "ERROR notes\n",
+            "nested/deep.log": "ERROR deep\n",
+        },
+    )
+    repo = FakeRepo()
+    writer = FakeWriter()
+    task = ClaimedTask(
+        id=40,
+        job_id=20,
+        source_path=archive,
+        file_name="mixed.zip",
+        attempts=1,
+        rule_set_id=30,
+        rule_version=1,
+    )
+
+    result = make_processor(
+        repo, writer, tmp_path / "work", rules=make_rules(file_glob="**/*.log")
+    ).process(task)
+
+    assert result.status == "succeeded"
+    assert result.processed_lines == 3
+    assert result.matched_rows == 2
+    assert [(m.member_path, m.rule_id) for m in writer.written] == [
+        ("app.log", "error"),
+        ("nested/deep.log", "error"),
+    ]
+    assert repo.completed == [(40, "succeeded", 3, 2, None)]
+
+
+@pytest.mark.parametrize(
+    ("encoding", "fallback_encoding"),
+    [("gb18030", "ascii"), ("utf-8", "gb18030")],
+)
+def test_ruleset_encoding_applies_when_task_has_no_override(
+    tmp_path: Path, encoding: str, fallback_encoding: str
+) -> None:
+    repo = FakeRepo()
+    writer = FakeWriter()
+    task = make_task(
+        tmp_path,
+        members={"app.log": "错误 ERROR\n".encode("gb18030")},
+    )
+    rules = make_rules(
+        encoding=encoding, fallback_encoding=fallback_encoding, keyword="错误"
+    )
+
+    result = make_processor(repo, writer, tmp_path / "work", rules=rules).process(task)
+
+    assert result.status == "succeeded"
+    assert result.matched_rows == 1
+    assert writer.written[0].raw_line == "错误 ERROR"
+
+
+def test_task_encoding_override_wins_over_ruleset(tmp_path: Path) -> None:
+    repo = FakeRepo()
+    writer = FakeWriter()
+    task = make_task(
+        tmp_path,
+        members={"app.log": "错误 ERROR\n".encode("gb18030")},
+        encoding="gb18030",
+        fallback_encoding="ascii",
+    )
+    rules = make_rules(encoding="utf-8", fallback_encoding="ascii", keyword="错误")
+
+    result = make_processor(repo, writer, tmp_path / "work", rules=rules).process(task)
+
+    assert result.status == "succeeded"
+    assert result.matched_rows == 1
+    assert writer.written[0].raw_line == "错误 ERROR"
+
+
+def test_writer_receives_immutable_batch_snapshot(tmp_path: Path) -> None:
+    repo = FakeRepo()
+    writer = RetainingWriter()
+    processor = make_processor(
+        repo,
+        writer,
+        tmp_path / "work",
+        batch_size=1,
+        heartbeat_every_lines=1,
+    )
+
+    result = processor.process(make_task(tmp_path))
+
+    assert result.status == "succeeded"
+    assert result.matched_rows == 2
+    assert len(writer.batches) == 2
+    assert all(isinstance(batch, tuple) for batch in writer.batches)
+    records = [record for batch in writer.batches for record in batch]
+    assert [(record.rule_id, record.line_no) for record in records] == [
+        ("error", 1),
+        ("slow", 2),
+    ]
+
+
+def test_success_completion_failure_does_not_trigger_failed_completion(tmp_path: Path) -> None:
+    repo = SuccessCompletionFailingRepo()
+    writer = FakeWriter()
+    work_dir = tmp_path / "work"
+
+    with pytest.raises(RuntimeError, match="completion write failed"):
+        make_processor(repo, writer, work_dir).process(make_task(tmp_path))
+
+    assert [entry[1] for entry in repo.completed] == ["succeeded"]
+    assert len(writer.written) == 2
     assert not (work_dir / "10").exists()

@@ -54,10 +54,10 @@ cp ../.env.example .env
 
 - 规则编译/匹配：关键字 `any`/`all`、正则命名分组、数值门限、禁用规则、超时恢复。
 - 压缩包发现与流式读取：递归发现、zip、tar.gz、单文件 gz/bz2/xz、原始文本、GBK 回退、超长行截断。
-- Worker 处理器：本地复制、逐行匹配、批量结果缓冲、重试清场、成功/失败终态。
-- 七张核心表的 SQLModel 模型：`data_sources`、`rule_sets`、`jobs`、`file_tasks`、`file_task_attempts`、`matches`、`workers`。
+- Worker 处理器：本地复制、规则集成员 glob 与编码回退解析、逐行匹配、批量结果缓冲、重试清场、成功/失败终态。
+- 七张核心表的 SQLModel 模型：`data_sources`、`rule_sets`、`jobs`、`file_tasks`、`file_task_attempts`、`matches`、`workers`；PostgreSQL 方言下字节/内存计数为 `BIGINT`、`Match.id` 为 `BIGSERIAL`、JSON 列为 `JSONB`。
 - 服务骨架：FastAPI 应用与 `GET /api/health` 健康检查。
-- 测试：`pytest` 共 65 个用例，覆盖上述领域逻辑与模型建表。
+- 测试：`pytest` 覆盖上述领域逻辑、模型建表与 PostgreSQL 方言 DDL 断言。
 
 ## M1 及以后（M0 不包含）
 

@@ -1,6 +1,8 @@
 import shutil
 from pathlib import Path
 
+import pathspec
+
 from src.application.worker.ports import (
     ClaimedTask,
     MatchRecord,
@@ -47,13 +49,19 @@ class TaskProcessor:
         self._work_dir = Path(work_dir)
         self._batch_size = batch_size
         self._heartbeat_every_lines = heartbeat_every_lines
+        self._member_spec = pathspec.PathSpec.from_lines(
+            "gitwildmatch", [rules.config.file_glob]
+        )
 
     def process(self, task: ClaimedTask) -> TaskResult:
         processed_lines = 0
         matched_rows = 0
         buffer: list[MatchRecord] = []
         task_dir = self._work_dir / str(task.id)
+        encoding = task.encoding or self._rules.config.encoding
+        fallback_encoding = task.fallback_encoding or self._rules.config.fallback_encoding
 
+        result: TaskResult
         try:
             if task.attempts > 1:
                 self._writer.delete_for_task(task.id)
@@ -63,10 +71,12 @@ class TaskProcessor:
 
             for line in iter_archive_lines(
                 local_path,
-                encoding=task.encoding,
-                fallback_encoding=task.fallback_encoding,
+                encoding=encoding,
+                fallback_encoding=fallback_encoding,
             ):
                 processed_lines += 1
+                if not self._member_spec.match_file(line.member_path):
+                    continue
                 matches = evaluate_line(self._rules, line.text, line.line_no)
                 if matches:
                     raw_line, raw_truncated = _truncate_raw_line(line.text)
@@ -94,7 +104,7 @@ class TaskProcessor:
                         matched_rows += 1
 
                 if len(buffer) >= self._batch_size:
-                    self._writer.write_batch(buffer)
+                    self._writer.write_batch(tuple(buffer))
                     buffer.clear()
 
                 if processed_lines % self._heartbeat_every_lines == 0 and not self._repo.heartbeat(
@@ -103,13 +113,14 @@ class TaskProcessor:
                     raise LeaseLost(f"lease lost for task {task.id}")
 
             if buffer:
-                self._writer.write_batch(buffer)
-            self._repo.complete(task.id, task.attempts, "succeeded", processed_lines, matched_rows)
-            return TaskResult("succeeded", processed_lines, matched_rows)
+                self._writer.write_batch(tuple(buffer))
+            result = TaskResult("succeeded", processed_lines, matched_rows)
         except LeaseLost:
             raise
         # Boundary of the worker loop: any ordinary failure must be recorded on
-        # the task instead of aborting the process.
+        # the task instead of aborting the process. Successful completion stays
+        # outside this handler so its own failure cannot trigger a failed
+        # completion for a task that already succeeded.
         except Exception as exc:  # noqa: BLE001
             self._repo.complete(
                 task.id,
@@ -120,6 +131,9 @@ class TaskProcessor:
                 str(exc),
             )
             return TaskResult("failed", processed_lines, matched_rows, str(exc))
+        else:
+            self._repo.complete(task.id, task.attempts, "succeeded", processed_lines, matched_rows)
+            return result
         finally:
             shutil.rmtree(task_dir, ignore_errors=True)
 
