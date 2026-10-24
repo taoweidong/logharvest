@@ -1,6 +1,11 @@
 from fastapi import APIRouter
 
+from src.api.v1.routes_data_sources import router as data_sources_router
+from src.api.v1.routes_rule_sets import router as rule_sets_router
+
 api_router = APIRouter()
+api_router.include_router(data_sources_router)
+api_router.include_router(rule_sets_router)
 
 
 @api_router.get("/health")
