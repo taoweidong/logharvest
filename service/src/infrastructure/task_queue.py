@@ -60,6 +60,12 @@ WHERE id = :id
 # attempt below max_attempts returns the task to pending with linear backoff
 # and leaves finished_at unset. The attempt history row is closed in the same
 # statement; when the task fence does not match, nothing is updated.
+#
+# The fence is repeated on the UPDATE itself, not just in the ``target`` CTE:
+# a concurrent recovery may change status/attempts between the CTE snapshot
+# and the row update, and READ COMMITTED re-checks the predicate once the row
+# lock is acquired. This prevents a late completion from overwriting a task
+# that another process already recovered.
 COMPLETE_SQL = """
 WITH target AS (
     SELECT id,
@@ -85,6 +91,8 @@ WITH target AS (
         error = :error
     FROM target
     WHERE t.id = target.id
+      AND t.status = 'running'
+      AND t.attempts = :attempts
     RETURNING t.id
 )
 UPDATE file_task_attempts a
@@ -102,6 +110,10 @@ WHERE a.file_task_id = :task_id
 # Recover tasks whose worker stopped heartbeating. Retry until the configured
 # limit, otherwise fail permanently. Progress history rows still marked
 # running become ``timeout``. Returns the number of recovered tasks.
+#
+# ``FOR UPDATE SKIP LOCKED`` makes concurrent recovery sweeps disjoint: a
+# second recovery worker skips rows already locked by the first instead of
+# racing it for the same stale task.
 RECOVER_STALE_SQL = """
 WITH stale AS (
     SELECT id, attempts, max_attempts
@@ -109,6 +121,7 @@ WITH stale AS (
     WHERE status = 'running'
       AND (heartbeat_at IS NULL
            OR heartbeat_at < now() - make_interval(secs => :seconds))
+    FOR UPDATE SKIP LOCKED
 ), updated AS (
     UPDATE file_tasks t
     SET status = CASE

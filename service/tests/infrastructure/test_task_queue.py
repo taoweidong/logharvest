@@ -81,6 +81,19 @@ def test_heartbeat_sql_is_fenced_by_lease() -> None:
     assert "STATUS = 'RUNNING'" in normalized
 
 
+def test_complete_sql_repeats_the_lease_fence_on_update() -> None:
+    normalized = _normalized(COMPLETE_SQL)
+    assert (
+        "WHERE T.ID = TARGET.ID AND T.STATUS = 'RUNNING' AND T.ATTEMPTS = :ATTEMPTS" in normalized
+    )
+
+
+def test_recover_stale_sql_locks_rows_with_skip_locked() -> None:
+    normalized = _normalized(RECOVER_STALE_SQL)
+    assert "FOR UPDATE" in normalized
+    assert "SKIP LOCKED" in normalized
+
+
 def test_recover_stale_sql_marks_running_attempts_timeout() -> None:
     normalized = _normalized(RECOVER_STALE_SQL)
     assert "HEARTBEAT_AT" in normalized
