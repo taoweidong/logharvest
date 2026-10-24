@@ -49,7 +49,14 @@ cp ../.env.example .env
 | `LOGHARVEST_MATCHES_BATCH_SIZE` | `1000` | 命中结果批量写入条数；尚未被运行时消费（M1b） |
 | `LOGHARVEST_MAX_MATCHES_PER_TASK` | `200_000` | 单任务命中上限；尚未被运行时消费（M1b） |
 
-`src/infrastructure/database.py` 提供 `create_db_and_tables()`，M1a 由测试夹具调用建表，`src/main.py` 启动时仍不建库。因此直接启动 `uvicorn` 后访问依赖数据表的接口会失败；本地联调需先显式建表，启动建表与 Alembic 迁移留待 M1b。
+`src/infrastructure/database.py` 提供 `create_db_and_tables()`；API 测试夹具会自动建表，但 `src/main.py` 启动时仍不建库。直接启动 `uvicorn` 前需在 `service/` 下显式建表：
+
+```bash
+cd service
+uv run --python 3.12 python -c "from src.infrastructure.database import create_db_and_tables; create_db_and_tables()"
+```
+
+该命令按 `LOGHARVEST_DATABASE_URL` 建表（默认在启动目录生成 `logharvest.db`）。M1a 尚无 Alembic 迁移，启动建表与迁移留待 M1b。
 
 ## 认证
 
@@ -80,22 +87,22 @@ Token 缺失或不匹配返回 `401`，响应体 `{"detail":"invalid admin token
 | `GET` | `/api/workers` | Worker 列表，`limit`/`offset` 分页（不包含心跳/管理写接口） |
 | `GET` | `/api/system/status` | 文件任务状态计数、最老 pending 等待秒数、在线 Worker 数 |
 
-列表接口默认 `limit=50`、最大 `500`（`/api/workers` 最大 `200`），均支持 `offset`。`/api/matches` 使用 `id` 游标降序：把上一页最后一条的 `id` 作为下一页 `cursor`。
+分页仅适用于 `GET /api/jobs`、`GET /api/jobs/{id}/files` 与 `GET /api/workers`：`limit` 默认 `50`、`offset` 默认 `0`，其中作业与文件任务最大 `limit=500`，Worker 最大 `200`；`limit`/`offset` 越界返回 `422`。`GET /api/data-sources` 与 `GET /api/rule-sets` 直接返回全量列表，不分页。`GET /api/matches` 只接受 `cursor`、不使用 `offset`：以 `id` 降序，把上一页最后一条的 `id` 作为下一页 `cursor`，`limit` 默认 `50`、最大 `500`。
 
 ### 创建作业流程
 
 1. `POST /api/data-sources` 登记 NAS 挂载点 `root_path`（默认 `read_only=true`、`copy_to_local=true`）。
 2. `POST /api/rule-sets` 提交规则配置（关键字/正则、`file_glob`、编码与回退编码），得到 `rule_set_id` 与 `version`；同名再次提交会新增版本。
-3. `POST /api/jobs` 提交 `name`、`data_source_id`、`source_path`、`rule_set_id`，可选 `file_filter`（默认 `recursive=true`、`max_depth=5`、`max_files=20000`，`suffixes` 为空时使用压缩包默认后缀集合），可选请求头 `Idempotency-Key`。
+3. `POST /api/jobs` 提交 `name`、`data_source_id`、`source_path`、`rule_set_id`，可选 `file_filter`（默认 `recursive=true`、`max_depth=5`、`max_files=20000`；`suffixes` 省略或为 `null` 时使用压缩包默认后缀集合，显式传空数组则匹配不到任何文件），可选请求头 `Idempotency-Key`。
 4. 服务解析并校验路径：`source_path` 必须位于数据源 `root_path` 之内（路径逃逸 `400`），且必须是已存在目录（`400`）。
-5. 在请求内同步递归扫描该目录，识别 zip、tar 系列、单文件 gz/bz2/xz；跳过符号链接和点目录，深度与文件数受 `file_filter` 限制，超限返回 `400`。
-6. 创建一条 `Job`，并为每个压缩文件创建一条 `FileTask`（`pending`，`job_id + source_path` 唯一），累计 `total_files` / `total_bytes`。空目录直接 `succeeded`；非空目录初始为 `running`。M1a 没有 Worker 领取循环，因此非空作业会保持 `running` 直到 M1b。
+5. 在请求内同步递归扫描该目录，识别 zip、tar 系列、单文件 gz/bz2/xz；跳过符号链接和点目录。`max_depth` 是静默截断：相对深度达到 `max_depth` 的目录不再下探（该层文件仍会纳入），不会报错；`max_files` 在扫描完成后校验，发现数超过上限返回 `400`。`max_depth` 超出 1–20 或 `max_files` 超出 1–20000 属于 schema 校验失败，返回 `422` 且不开始扫描。
+6. 创建一条 `Job`，并为每个压缩文件创建一条 `FileTask`（`pending`，`job_id + source_path` 唯一），累计 `total_files` / `total_bytes`。目录为空或未发现匹配的压缩文件时直接 `succeeded`；发现压缩文件时初始为 `running`。M1a 没有 Worker 领取循环，因此存在 `pending` 文件任务的作业会保持 `running` 直到 M1b。
 7. 相同管理员使用相同 `Idempotency-Key` 再次提交返回已有作业（`200`）；`Idempotency-Key` 为空白字符串返回 `400`。并发插入冲突时会回查并返回已创建作业。
 8. `POST /api/jobs/{id}/cancel` 将 `pending` 文件任务置为 `cancelled` 并设置 `cancel_requested=true`；若没有 `running` 任务则作业立即 `cancelled`，已处于终态的作业不做变更。
 
 ## 测试
 
-- 全部测试使用内存 SQLite（`StaticPool`）与 FastAPI `dependency_overrides`，不需要 PostgreSQL；每个用例通过 `create_db_and_tables()` 建表。
+- API 测试（`tests/api/`、`tests/test_health.py`）使用内存 SQLite（`StaticPool`）与 FastAPI `dependency_overrides`，不需要 PostgreSQL；每个 API 用例通过 `create_db_and_tables()` 建表。`tests/domain/` 与 `tests/application/` 为领域/应用单元测试，不经过 API 与依赖覆盖（模型测试自行使用内存 SQLite 验证建表）。
 - `tests/api/` 覆盖认证、数据源、规则集、作业规划/幂等/路径校验/取消、结果查询、Worker 与系统状态；`tests/domain/` 与 `tests/application/` 覆盖 M0 引擎。
 - 作业唯一约束、幂等并发回退等并发语义仅在 SQLite 上验证，PostgreSQL 行为留待 M1b 验证。
 
