@@ -22,15 +22,43 @@ from src.domain.rules.models import (
 class FakeRepo:
     def __init__(self) -> None:
         self.heartbeats: list[tuple[int, int]] = []
+        self.touches: list[tuple[int, int]] = []
         self.completed: list[tuple[int, str, int, int, str | None]] = []
         self.heartbeat_result = True
+        self.touch_result = True
 
-    def heartbeat(self, task_id: int, attempts: int, processed_lines: int, matched_rows: int) -> bool:
+    def touch(self, task_id: int, attempts: int) -> bool:
+        self.touches.append((task_id, attempts))
+        return self.touch_result
+
+    def heartbeat(
+        self, task_id: int, attempts: int, processed_lines: int, matched_rows: int
+    ) -> bool:
         self.heartbeats.append((processed_lines, matched_rows))
         return self.heartbeat_result
 
-    def complete(self, task_id: int, attempts: int, status: str, processed_lines: int, matched_rows: int, error: str | None = None) -> None:
+    def complete(
+        self,
+        task_id: int,
+        attempts: int,
+        status: str,
+        processed_lines: int,
+        matched_rows: int,
+        error: str | None = None,
+    ) -> None:
         self.completed.append((task_id, status, processed_lines, matched_rows, error))
+
+
+class SteppingClock:
+    """Monotonic replacement that advances on every call."""
+
+    def __init__(self, step: float) -> None:
+        self.step = step
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        self.value += self.step
+        return self.value
 
 
 class FakeWriter:
@@ -188,7 +216,9 @@ def test_processor_reads_archive_and_writes_matches(tmp_path: Path) -> None:
 def test_retry_deletes_old_matches(tmp_path: Path) -> None:
     repo = FakeRepo()
     writer = FakeWriter()
-    processor = TaskProcessor(repo=repo, writer=writer, rules=make_rules(), work_dir=tmp_path / "work")
+    processor = TaskProcessor(
+        repo=repo, writer=writer, rules=make_rules(), work_dir=tmp_path / "work"
+    )
     processor.process(make_task(tmp_path, attempts=2))
     assert writer.deleted == [10]
 
@@ -314,10 +344,10 @@ def test_incomplete_copy_fails_task_before_processing(tmp_path: Path, monkeypatc
     writer = FakeWriter()
     work_dir = tmp_path / "work"
 
-    def short_copy(source, destination, length=0):
-        destination.write(source.read(4))
+    def short_copy(self, source_file, target_file, task):
+        target_file.write(source_file.read(4))
 
-    monkeypatch.setattr(processor_module.shutil, "copyfileobj", short_copy)
+    monkeypatch.setattr(TaskProcessor, "_copy_chunks", short_copy)
 
     result = make_processor(repo, writer, work_dir).process(make_task(tmp_path))
 
@@ -326,6 +356,62 @@ def test_incomplete_copy_fails_task_before_processing(tmp_path: Path, monkeypatc
     assert repo.completed[0][1] == "failed"
     assert writer.written == []
     assert not (work_dir / "10").exists()
+
+
+def test_copy_refreshes_lease_with_touch(tmp_path: Path) -> None:
+    repo = FakeRepo()
+    writer = FakeWriter()
+    processor = make_processor(
+        repo,
+        writer,
+        tmp_path / "work",
+        heartbeat_every_lines=10_000,
+        copy_heartbeat_seconds=5,
+        clock=SteppingClock(step=6),
+    )
+
+    result = processor.process(make_task(tmp_path))
+
+    assert result.status == "succeeded"
+    assert repo.touches == [(10, 1)]
+    assert writer.written
+
+
+def test_copy_stops_when_touch_reports_lost_lease(tmp_path: Path) -> None:
+    repo = FakeRepo()
+    repo.touch_result = False
+    work_dir = tmp_path / "work"
+    processor = make_processor(
+        repo,
+        FakeWriter(),
+        work_dir,
+        copy_heartbeat_seconds=5,
+        clock=SteppingClock(step=6),
+    )
+
+    with pytest.raises(LeaseLost):
+        processor.process(make_task(tmp_path))
+
+    assert repo.completed == []
+    assert not (work_dir / "10").exists()
+
+
+def test_line_processing_heartbeats_on_time_even_without_line_threshold(tmp_path: Path) -> None:
+    repo = FakeRepo()
+    processor = make_processor(
+        repo,
+        FakeWriter(),
+        tmp_path / "work",
+        heartbeat_every_lines=10_000,
+        heartbeat_every_seconds=5,
+        clock=SteppingClock(step=3),
+    )
+
+    result = processor.process(make_task(tmp_path))
+
+    assert result.status == "succeeded"
+    # Two lines advance the clock past the 5s window once, after line one.
+    assert repo.heartbeats == [(1, 1)]
 
 
 def test_lease_lost_is_reraised_without_completing(tmp_path: Path) -> None:
@@ -390,9 +476,7 @@ def test_ruleset_encoding_applies_when_task_has_no_override(
         tmp_path,
         members={"app.log": "错误 ERROR\n".encode("gb18030")},
     )
-    rules = make_rules(
-        encoding=encoding, fallback_encoding=fallback_encoding, keyword="错误"
-    )
+    rules = make_rules(encoding=encoding, fallback_encoding=fallback_encoding, keyword="错误")
 
     result = make_processor(repo, writer, tmp_path / "work", rules=rules).process(task)
 

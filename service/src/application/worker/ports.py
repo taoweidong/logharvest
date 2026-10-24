@@ -47,6 +47,8 @@ class TaskResult:
 
 
 class TaskRepository(Protocol):
+    def touch(self, task_id: int, attempts: int) -> bool: ...
+
     def heartbeat(
         self, task_id: int, attempts: int, processed_lines: int, matched_rows: int
     ) -> bool: ...

@@ -56,6 +56,16 @@ WHERE id = :id
   AND status = 'running'
 """
 
+# Heartbeat-only variant used while the source archive is copied and no new
+# processed-line counters exist yet. Same lease fence as HEARTBEAT_SQL.
+TOUCH_SQL = """
+UPDATE file_tasks
+SET heartbeat_at = now()
+WHERE id = :id
+  AND attempts = :attempts
+  AND status = 'running'
+"""
+
 # Completion is fenced by attempts and running status as well. A failed
 # attempt below max_attempts returns the task to pending with linear backoff
 # and leaves finished_at unset. The attempt history row is closed in the same
@@ -252,6 +262,19 @@ class PostgresTaskRepository:
                     "processed_lines": processed_lines,
                     "matched_rows": matched_rows,
                 },
+            )
+            return result.rowcount == 1
+
+    def touch(self, task_id: int, attempts: int) -> bool:
+        """Refresh ``heartbeat_at`` without touching progress counters.
+
+        Returns ``False`` when the lease is gone (recovered, re-claimed, or
+        completed elsewhere), letting the caller stop work immediately.
+        """
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                text(TOUCH_SQL),
+                {"id": task_id, "attempts": attempts},
             )
             return result.rowcount == 1
 

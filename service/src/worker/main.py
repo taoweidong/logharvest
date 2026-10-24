@@ -5,6 +5,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from threading import Event
+from time import monotonic
 
 from src.application.worker.ports import ClaimedTask
 from src.application.worker.processor import LeaseLost, TaskProcessor
@@ -15,7 +16,11 @@ from src.infrastructure.database import engine
 from src.infrastructure.match_writer import PostgresMatchWriter
 from src.infrastructure.task_queue import PostgresTaskRepository
 
+# Copying refreshes the lease at least every processor copy-heartbeat interval
+# (5s by default), so a live worker is never 120s stale. The periodic sweep
+# below then reclaims work owned by processes that actually died or wedged.
 DEFAULT_STALE_SECONDS = 120
+DEFAULT_RECOVER_INTERVAL_SECONDS = 300.0
 
 
 def _compile_task_rules(task: ClaimedTask) -> CompiledRuleSet:
@@ -35,6 +40,7 @@ class WorkerRuntime:
         rules_factory: Callable[[ClaimedTask], CompiledRuleSet] = _compile_task_rules,
         poll_seconds: float = 1.0,
         stale_seconds: int = DEFAULT_STALE_SECONDS,
+        recover_interval_seconds: float = DEFAULT_RECOVER_INTERVAL_SECONDS,
     ) -> None:
         self._repo = repo
         self._writer = writer
@@ -44,6 +50,7 @@ class WorkerRuntime:
         self._rules_factory = rules_factory
         self._poll_seconds = poll_seconds
         self._stale_seconds = stale_seconds
+        self._recover_interval_seconds = recover_interval_seconds
 
     def run_once(self) -> bool:
         """Claim and process at most one task; return whether work was attempted."""
@@ -84,8 +91,15 @@ class WorkerRuntime:
         stop = stop_event or Event()
         self._repo.register_worker(self._worker_id, socket.gethostname(), self._worker_version)
         self._recover_stale()
+        next_recover = monotonic() + self._recover_interval_seconds
         try:
             while not stop.is_set():
+                now = monotonic()
+                if now >= next_recover:
+                    # Periodic sweep so abandoned tasks are retried even when no
+                    # worker process restarts.
+                    self._recover_stale()
+                    next_recover = now + self._recover_interval_seconds
                 if not self.run_once():
                     stop.wait(self._poll_seconds)
         finally:

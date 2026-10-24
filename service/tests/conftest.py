@@ -6,7 +6,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, create_engine
 
-from src.api.dependencies import get_session
+from src.api.dependencies import get_engine, get_session
 from src.config.settings import settings
 from src.infrastructure.database import create_db_and_tables
 from src.main import create_app
@@ -39,6 +39,7 @@ def client(engine: Engine) -> Iterator[TestClient]:
             yield db_session
 
     app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_engine] = lambda: engine
     with TestClient(app) as test_client:
         yield test_client
 

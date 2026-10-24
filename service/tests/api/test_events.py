@@ -1,17 +1,23 @@
 import asyncio
 import json
 
-from src.api.v1.routes_events import _event_stream
+import pytest
+from fastapi.dependencies.utils import get_dependant
+from sqlalchemy import delete
+from sqlmodel import Session
+
+from src.api.dependencies import get_engine, get_session
+from src.api.v1.routes_events import _event_stream, job_events
 from src.domain.models.entities import FileTask, Job
 
 
-def seed_job(session) -> int:
+def seed_job(session, status: str = "running") -> int:
     job = Job(
         name="j",
         data_source_id=1,
         source_path="/nas",
         rule_set_id=1,
-        status="running",
+        status=status,
     )
     session.add(job)
     session.commit()
@@ -49,6 +55,12 @@ def parse_events(body: str) -> list[dict]:
     ]
 
 
+def _dependency_calls(dependant):
+    for dependency in dependant.dependencies:
+        yield dependency.call
+        yield from _dependency_calls(dependency)
+
+
 def test_job_events_sse_returns_snapshot(client, auth_headers, session):
     job_id = seed_job(session)
 
@@ -68,6 +80,15 @@ def test_job_events_sse_returns_snapshot(client, auth_headers, session):
             "matched_rows": 2,
         }
     ]
+
+
+def test_job_events_route_does_not_inject_request_session():
+    dependant = get_dependant(path="/api/jobs/{job_id}/events", call=job_events)
+
+    calls = set(_dependency_calls(dependant))
+
+    assert get_session not in calls
+    assert get_engine in calls
 
 
 def test_job_events_returns_404_before_streaming_for_unknown_job(client, auth_headers):
@@ -110,4 +131,41 @@ def test_event_stream_zero_max_events_is_unbounded(engine, session):
 
     assert first.startswith("event: progress\ndata: ")
     assert second.startswith("event: progress\ndata: ")
+    assert parse_events(first)[0]["job_id"] == job_id
+
+
+def test_event_stream_stops_after_terminal_snapshot(engine, session):
+    job_id = seed_job(session, status="succeeded")
+
+    async def collect() -> list[str]:
+        stream = _event_stream(engine, job_id, 0, poll_seconds=0)
+        return [event async for event in stream]
+
+    events = asyncio.run(asyncio.wait_for(collect(), timeout=2))
+
+    assert len(events) == 1
+    payload = parse_events(events[0])[0]
+    assert payload["job_id"] == job_id
+    assert payload["status"] == "succeeded"
+
+
+def test_event_stream_ends_cleanly_when_job_is_deleted(engine, session):
+    job_id = seed_job(session)
+
+    async def run() -> str:
+        stream = _event_stream(engine, job_id, 0, poll_seconds=0)
+        try:
+            first = await anext(stream)
+            with Session(engine) as cleanup:
+                cleanup.execute(delete(FileTask).where(FileTask.job_id == job_id))
+                cleanup.execute(delete(Job).where(Job.id == job_id))
+                cleanup.commit()
+            with pytest.raises(StopAsyncIteration):
+                await anext(stream)
+            return first
+        finally:
+            await stream.aclose()
+
+    first = asyncio.run(asyncio.wait_for(run(), timeout=2))
+
     assert parse_events(first)[0]["job_id"] == job_id

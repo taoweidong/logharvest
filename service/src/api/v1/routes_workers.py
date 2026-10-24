@@ -18,10 +18,17 @@ def _get_worker(session: Session, worker_id: str) -> Worker:
 def drain_worker(worker_id: str, session: SessionDep, _: AdminDep):
     worker = _get_worker(session, worker_id)
     worker.drain_requested = True
-    worker.status = "draining"
+    # An offline worker must stay offline so the management view keeps showing
+    # reality; the drain flag still applies when it comes back.
+    if worker.status != "offline":
+        worker.status = "draining"
     session.add(worker)
     session.commit()
-    return {"id": worker.id, "drain_requested": worker.drain_requested}
+    return {
+        "id": worker.id,
+        "drain_requested": worker.drain_requested,
+        "status": worker.status,
+    }
 
 
 @router.post("/{worker_id}/resume")
@@ -33,7 +40,11 @@ def resume_worker(worker_id: str, session: SessionDep, _: AdminDep):
     worker.status = "online"
     session.add(worker)
     session.commit()
-    return {"id": worker.id, "drain_requested": worker.drain_requested}
+    return {
+        "id": worker.id,
+        "drain_requested": worker.drain_requested,
+        "status": worker.status,
+    }
 
 
 @router.post("/drain-version")
@@ -42,7 +53,16 @@ def drain_version(
     _: AdminDep,
     version: str = Query(min_length=1),
 ):
-    workers = list(session.exec(select(Worker).where(Worker.version == version)).all())
+    # Offline workers are not running, so flipping them to ``draining`` would
+    # misreport their state. They are skipped; live matching workers are drained.
+    workers = list(
+        session.exec(
+            select(Worker).where(
+                Worker.version == version,
+                Worker.status != "offline",
+            )
+        ).all()
+    )
     for worker in workers:
         worker.drain_requested = True
         worker.status = "draining"

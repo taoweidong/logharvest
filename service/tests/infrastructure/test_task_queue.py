@@ -10,6 +10,7 @@ from src.infrastructure.task_queue import (
     COMPLETE_SQL,
     HEARTBEAT_SQL,
     RECOVER_STALE_SQL,
+    TOUCH_SQL,
     PostgresTaskRepository,
 )
 
@@ -79,6 +80,14 @@ def test_heartbeat_sql_is_fenced_by_lease() -> None:
     normalized = _normalized(HEARTBEAT_SQL)
     assert "ATTEMPTS = :ATTEMPTS" in normalized
     assert "STATUS = 'RUNNING'" in normalized
+
+
+def test_touch_sql_refreshes_heartbeat_and_is_fenced() -> None:
+    normalized = _normalized(TOUCH_SQL)
+    assert "SET HEARTBEAT_AT = NOW()" in normalized
+    assert "ATTEMPTS = :ATTEMPTS" in normalized
+    assert "STATUS = 'RUNNING'" in normalized
+    assert "PROCESSED_LINES" not in normalized
 
 
 def test_complete_sql_repeats_the_lease_fence_on_update() -> None:

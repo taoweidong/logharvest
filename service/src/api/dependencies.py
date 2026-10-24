@@ -3,6 +3,7 @@ from collections.abc import Iterator
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
+from sqlalchemy.engine import Engine
 from sqlmodel import Session
 
 from src.config.settings import settings
@@ -15,6 +16,19 @@ def get_session() -> Iterator[Session]:
 
 
 SessionDep = Annotated[Session, Depends(get_session)]
+
+
+def get_engine() -> Engine:
+    """Return the shared engine without checking out a connection.
+
+    Streaming endpoints depend on this instead of ``SessionDep``: they open and
+    close a short-lived session per poll instead of pinning a request-scoped
+    connection for the whole stream.
+    """
+    return engine
+
+
+EngineDep = Annotated[Engine, Depends(get_engine)]
 
 
 def require_admin(

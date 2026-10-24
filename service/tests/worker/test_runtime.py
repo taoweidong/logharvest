@@ -1,3 +1,4 @@
+import signal
 import socket
 import zipfile
 from pathlib import Path
@@ -37,6 +38,9 @@ class FakeRepo:
 
     def heartbeat_worker(self, worker_id, status, current_task_id=None):
         self.worker_heartbeats.append((status, current_task_id))
+
+    def touch(self, task_id, attempts):
+        return True
 
     def heartbeat(self, *args, **kwargs):
         return True
@@ -177,6 +181,24 @@ def test_run_forever_registers_recovers_and_stops(tmp_path):
     assert repo.worker_heartbeats == [("online", None), ("offline", None)]
 
 
+def test_run_forever_recovers_stale_periodically(tmp_path):
+    stop = Event()
+    repo = FakeRepo([], stop=stop)
+    runtime = make_runtime(
+        repo,
+        FakeWriter(),
+        tmp_path,
+        poll_seconds=0.01,
+        recover_interval_seconds=0,
+    )
+
+    runtime.run_forever(stop)
+
+    # One recovery on startup, then another sweep before the first poll because
+    # the interval is zero.
+    assert repo.recovered == [120, 120]
+
+
 def test_run_forever_marks_worker_offline_when_loop_raises(tmp_path):
     repo = FakeRepo([])
     runtime = make_runtime(repo, FakeWriter(), tmp_path)
@@ -190,3 +212,37 @@ def test_run_forever_marks_worker_offline_when_loop_raises(tmp_path):
         runtime.run_forever(Event())
 
     assert repo.worker_heartbeats[-1] == ("offline", None)
+
+
+def test_main_wires_stop_event_and_signals(monkeypatch):
+    captured = {}
+    handlers = []
+
+    class FakeRuntime:
+        def __init__(self, **kwargs):
+            captured["options"] = kwargs
+
+        def run_forever(self, stop):
+            captured["stop"] = stop
+
+    monkeypatch.delenv("LOGHARVEST_WORKER_ID", raising=False)
+    monkeypatch.setattr(worker_main, "WorkerRuntime", FakeRuntime)
+    monkeypatch.setattr(worker_main, "PostgresTaskRepository", lambda engine: object())
+    monkeypatch.setattr(worker_main, "PostgresMatchWriter", lambda engine: object())
+    monkeypatch.setattr(worker_main.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(
+        worker_main.signal,
+        "signal",
+        lambda signum, handler: handlers.append((signum, handler)),
+    )
+
+    worker_main.main()
+
+    assert [signum for signum, _ in handlers] == [signal.SIGTERM, signal.SIGINT]
+    stop = captured["stop"]
+    assert isinstance(stop, Event)
+    assert stop.is_set() is False
+    handlers[0][1](signal.SIGTERM, None)
+    assert stop.is_set() is True
+    assert captured["options"]["worker_id"] == "test-host"
+    assert captured["options"]["worker_version"] == worker_main.settings.worker_version
