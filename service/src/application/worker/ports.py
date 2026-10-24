@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol
@@ -16,6 +16,7 @@ class ClaimedTask:
     rule_version: int
     encoding: str | None = None
     fallback_encoding: str | None = None
+    rule_config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
