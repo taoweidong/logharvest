@@ -4,7 +4,7 @@
 
 LogHarvest 面向企业 NAS 上的海量压缩日志：按任务目录递归扫描压缩文件，拆分给多个 Worker 并行下载、解压和规则匹配，将命中记录连同压缩包路径、包内路径、文件名、物理行号、原始行和规则版本写入 PostgreSQL。
 
-当前处于**设计阶段**，仓库先归档架构设计与技术选型文档。
+M0 核心引擎已落地：规则编译/匹配、压缩包发现与流式读取、Worker 处理器、七张核心表模型，代码位于 [`service/`](service/)，开发说明见 [`service/README.md`](service/README.md)。完整平台仍处于**设计阶段**，仓库同时归档架构设计与技术选型文档。
 
 ## 核心约束
 
@@ -52,6 +52,7 @@ FastAPI Server ──────────────> PostgreSQL
 
 ## 仓库状态
 
-- 当前只有设计文档，不包含实现代码。
+- M0 核心引擎已实现：规则引擎、压缩包发现与流式读取、Worker 处理器、七张核心表 SQLModel 模型；开发命令、配置与 M0/M1 边界见 [service/README.md](service/README.md)。
+- 尚未实现：PostgreSQL 队列适配（`SKIP LOCKED`）、任务/规则 API、前端、Worker 管理页、Alembic 迁移、Docker/PostgreSQL 运行时；均为 M1 范围。
+- 下一步：按 M1 计划实现任务 API、PostgreSQL 队列与前端骨架。
 - 历史详细稿保留在本地 `docs/superpowers/specs/archive/`，未纳入仓库，避免与当前方案混淆。
-- 下一步：按 M0/M1 拆分实施任务清单。
