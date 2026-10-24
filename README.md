@@ -4,7 +4,7 @@
 
 LogHarvest 面向企业 NAS 上的海量压缩日志：按任务目录递归扫描压缩文件，拆分给多个 Worker 并行下载、解压和规则匹配，将命中记录连同压缩包路径、包内路径、文件名、物理行号、原始行和规则版本写入 PostgreSQL。
 
-M0 核心引擎已落地：规则编译/匹配、压缩包发现与流式读取、Worker 处理器、七张核心表模型，代码位于 [`service/`](service/)，开发说明见 [`service/README.md`](service/README.md)。完整平台仍处于**设计阶段**，仓库同时归档架构设计与技术选型文档。
+M0 核心引擎与 M1a 控制面 API 已落地：规则编译/匹配、压缩包发现与流式读取、Worker 处理器、七张核心表模型，以及数据源、规则集版本、作业规划、文件任务、结果与系统状态 REST API；代码位于 [`service/`](service/)，接口、认证与开发说明见 [`service/README.md`](service/README.md)。PostgreSQL 队列、Worker 运行时、SSE、前端与迁移仍待 M1b/M2，仓库同时归档架构设计与技术选型文档。
 
 ## 核心约束
 
@@ -52,7 +52,8 @@ FastAPI Server ──────────────> PostgreSQL
 
 ## 仓库状态
 
-- M0 核心引擎已实现：规则引擎、压缩包发现与流式读取、Worker 处理器、七张核心表 SQLModel 模型；开发命令、配置与 M0/M1 边界见 [service/README.md](service/README.md)。
-- 尚未实现：PostgreSQL 队列适配（`SKIP LOCKED`）、任务/规则 API、前端、Worker 管理页、Alembic 迁移、Docker/PostgreSQL 运行时；均为 M1 范围。
-- 下一步：按 M1 计划实现任务 API、PostgreSQL 队列与前端骨架。
+- M0 核心引擎已实现：规则引擎、压缩包发现与流式读取、Worker 处理器、七张核心表 SQLModel 模型。
+- M1a 控制面 API 已实现：管理员 Bearer 认证；数据源创建/列表/路径检测；规则集版本化；作业创建时同步递归扫描 NAS 目录并为每个压缩文件生成 `file_task`（含路径逃逸校验、幂等重放、空目录处理）；作业详情/文件任务/取消；命中结果游标查询；Worker 列表与系统状态。API 测试使用 SQLite，无需 PostgreSQL。接口、认证、作业规划流程与边界见 [service/README.md](service/README.md)。
+- 尚未实现（M1b/M2）：PostgreSQL `file_tasks` + `SKIP LOCKED` 队列适配、Worker 领取循环与运行时、SSE 实时进度、Vue 前端与 Worker 管理页、Alembic 迁移与启动建表接线、Docker/PostgreSQL 部署编排、多行堆栈规则。
+- 下一步：M1b 实现 PostgreSQL 队列与 Worker 运行时，并补 SSE 进度与前端骨架。
 - 历史详细稿保留在本地 `docs/superpowers/specs/archive/`，未纳入仓库，避免与当前方案混淆。
