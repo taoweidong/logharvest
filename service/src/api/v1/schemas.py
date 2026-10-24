@@ -44,7 +44,7 @@ class JobFileFilter(BaseModel):
     recursive: bool = True
     max_depth: int = Field(default=5, ge=1, le=20)
     suffixes: set[str] | None = None
-    max_files: int = Field(default=20_000, ge=1)
+    max_files: int = Field(default=20_000, ge=1, le=20_000)
 
 
 class JobCreate(BaseModel):

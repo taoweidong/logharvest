@@ -27,7 +27,17 @@ def get_jobs(
     return list_jobs(session, limit=limit, offset=offset)
 
 
-@router.post("", response_model=JobRead, status_code=201)
+@router.post(
+    "",
+    response_model=JobRead,
+    status_code=201,
+    responses={
+        200: {
+            "model": JobRead,
+            "description": "Existing job replayed for the same Idempotency-Key",
+        }
+    },
+)
 def post_job(
     payload: JobCreate,
     response: Response,

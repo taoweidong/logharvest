@@ -36,6 +36,8 @@ def create_job(
     created_by: str,
     idempotency_key: str | None,
 ) -> tuple[Job, bool]:
+    if idempotency_key is not None and not idempotency_key.strip():
+        raise HTTPException(status_code=400, detail="Idempotency-Key must not be blank")
     if idempotency_key:
         existing = _find_job_by_idempotency_key(session, created_by, idempotency_key)
         if existing is not None:

@@ -1,6 +1,8 @@
 import zipfile
 
-from src.domain.models.entities import FileTask, Worker
+from src.api.v1.schemas import JobCreate
+from src.application.services import jobs as jobs_service
+from src.domain.models.entities import FileTask, Job, Worker
 
 
 def make_nas(tmp_path):
@@ -269,3 +271,122 @@ def test_workers_and_system_status(client, auth_headers, session, tmp_path) -> N
     workers = client.get("/api/workers", headers=auth_headers)
     assert workers.status_code == 200
     assert {item["id"] for item in workers.json()} == {"w-online", "w-busy", "w-offline"}
+    assert {"id", "status", "last_heartbeat"} <= set(workers.json()[0])
+
+    page = client.get("/api/workers?limit=1&offset=1", headers=auth_headers)
+    assert page.status_code == 200
+    assert [item["id"] for item in page.json()] == ["w-offline"]
+
+    too_large = client.get("/api/workers?limit=201", headers=auth_headers)
+    assert too_large.status_code == 422
+
+
+def test_file_filter_max_files_cap(client, auth_headers, tmp_path) -> None:
+    root, batch = make_nas(tmp_path)
+    add_zip(batch, "b.zip")
+    source, rules = seed_source_and_rules(client, auth_headers, root)
+
+    over_limit = create_job(
+        client,
+        auth_headers,
+        source,
+        rules,
+        batch,
+        file_filter={"recursive": True, "max_depth": 5, "max_files": 1},
+    )
+    assert over_limit.status_code == 400
+    assert "too many files" in over_limit.json()["detail"]
+    assert client.get("/api/jobs", headers=auth_headers).json() == []
+
+    above_schema_cap = create_job(
+        client,
+        auth_headers,
+        source,
+        rules,
+        batch,
+        file_filter={"recursive": True, "max_depth": 5, "max_files": 20_001},
+    )
+    assert above_schema_cap.status_code == 422
+
+
+def test_cancel_terminal_job_is_noop(client, auth_headers, tmp_path) -> None:
+    root, _batch = make_nas(tmp_path)
+    empty = root / "empty"
+    empty.mkdir()
+    source, rules = seed_source_and_rules(client, auth_headers, root)
+    job = create_job(client, auth_headers, source, rules, empty).json()
+    assert job["status"] == "succeeded"
+
+    response = client.post(f"/api/jobs/{job['id']}/cancel", headers=auth_headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == job["id"]
+    assert body["status"] == "succeeded"
+    assert body["cancel_requested"] is False
+
+
+def test_blank_idempotency_key_is_rejected(client, auth_headers, tmp_path) -> None:
+    root, batch = make_nas(tmp_path)
+    source, rules = seed_source_and_rules(client, auth_headers, root)
+    body = {
+        "name": "batch-1",
+        "data_source_id": source["id"],
+        "source_path": str(batch),
+        "rule_set_id": rules["id"],
+    }
+
+    for key in ("", "   "):
+        response = client.post(
+            "/api/jobs",
+            headers={**auth_headers, "Idempotency-Key": key},
+            json=body,
+        )
+        assert response.status_code == 400
+        assert "Idempotency-Key" in response.json()["detail"]
+
+    assert client.get("/api/jobs", headers=auth_headers).json() == []
+
+
+def test_idempotency_integrity_error_returns_existing_job(
+    client, auth_headers, session, tmp_path, monkeypatch
+) -> None:
+    root, batch = make_nas(tmp_path)
+    source, rules = seed_source_and_rules(client, auth_headers, root)
+
+    winner = Job(
+        name="winner",
+        data_source_id=source["id"],
+        source_path=str(batch),
+        rule_set_id=rules["id"],
+        status="succeeded",
+        created_by="admin",
+        idempotency_key="race-key",
+    )
+    session.add(winner)
+    session.commit()
+    session.refresh(winner)
+    winner_id = winner.id
+
+    original_find = jobs_service._find_job_by_idempotency_key
+    calls = 0
+
+    def find_after_race(session_, created_by, key):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return None
+        return original_find(session_, created_by, key)
+
+    monkeypatch.setattr(jobs_service, "_find_job_by_idempotency_key", find_after_race)
+
+    payload = JobCreate(
+        name="loser",
+        data_source_id=source["id"],
+        source_path=str(batch),
+        rule_set_id=rules["id"],
+    )
+    job, created = jobs_service.create_job(session, payload, "admin", "race-key")
+
+    assert created is False
+    assert job.id == winner_id
+    assert calls == 2

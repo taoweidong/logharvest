@@ -50,8 +50,9 @@ def list_matches(
     return list(session.exec(statement.order_by(Match.id.desc()).limit(limit)).all())
 
 
-def list_workers(session: Session) -> list[Worker]:
-    return list(session.exec(select(Worker).order_by(Worker.id)).all())
+def list_workers(session: Session, limit: int = 50, offset: int = 0) -> list[Worker]:
+    statement = select(Worker).order_by(Worker.id).offset(offset).limit(limit)
+    return list(session.exec(statement).all())
 
 
 def system_status(session: Session) -> dict[str, Any]:
