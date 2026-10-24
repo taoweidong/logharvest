@@ -1,8 +1,8 @@
 import asyncio
 import json
+from typing import get_type_hints
 
 import pytest
-from fastapi.dependencies.utils import get_dependant
 from sqlalchemy import delete
 from sqlmodel import Session
 
@@ -55,10 +55,18 @@ def parse_events(body: str) -> list[dict]:
     ]
 
 
-def _dependency_calls(dependant):
-    for dependency in dependant.dependencies:
-        yield dependency.call
-        yield from _dependency_calls(dependency)
+def _dependency_calls(endpoint) -> set:
+    """Dependency callables declared on the endpoint signature.
+
+    Uses only public typing/FastAPI surface, so it survives a FastAPI upgrade.
+    """
+    calls = set()
+    for hint in get_type_hints(endpoint, include_extras=True).values():
+        for metadata in getattr(hint, "__metadata__", ()):
+            dependency = getattr(metadata, "dependency", None)
+            if callable(dependency):
+                calls.add(dependency)
+    return calls
 
 
 def test_job_events_sse_returns_snapshot(client, auth_headers, session):
@@ -83,9 +91,7 @@ def test_job_events_sse_returns_snapshot(client, auth_headers, session):
 
 
 def test_job_events_route_does_not_inject_request_session():
-    dependant = get_dependant(path="/api/jobs/{job_id}/events", call=job_events)
-
-    calls = set(_dependency_calls(dependant))
+    calls = _dependency_calls(job_events)
 
     assert get_session not in calls
     assert get_engine in calls

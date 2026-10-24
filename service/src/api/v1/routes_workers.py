@@ -53,19 +53,16 @@ def drain_version(
     _: AdminDep,
     version: str = Query(min_length=1),
 ):
-    # Offline workers are not running, so flipping them to ``draining`` would
-    # misreport their state. They are skipped; live matching workers are drained.
-    workers = list(
-        session.exec(
-            select(Worker).where(
-                Worker.version == version,
-                Worker.status != "offline",
-            )
-        ).all()
-    )
+    # A rolling upgrade must also take effect after a restart, so offline
+    # workers get the flag too; only live rows are reported as draining,
+    # because flipping offline rows to ``draining`` would misreport reality.
+    workers = list(session.exec(select(Worker).where(Worker.version == version)).all())
+    drained = 0
     for worker in workers:
         worker.drain_requested = True
-        worker.status = "draining"
+        if worker.status != "offline":
+            worker.status = "draining"
+            drained += 1
         session.add(worker)
     session.commit()
-    return {"drained": len(workers)}
+    return {"drained": drained, "flagged": len(workers) - drained}

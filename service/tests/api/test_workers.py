@@ -62,7 +62,7 @@ def test_drain_offline_worker_keeps_offline_status(client, auth_headers, session
     assert worker.drain_requested is True
 
 
-def test_drain_version_skips_offline_workers_and_persists_flags(client, auth_headers, session):
+def test_drain_version_flags_offline_workers(client, auth_headers, session):
     session.add_all(
         [
             Worker(id="live", hostname="h1", version="0.1.0", status="online"),
@@ -76,7 +76,7 @@ def test_drain_version_skips_offline_workers_and_persists_flags(client, auth_hea
     response = client.post("/api/workers/drain-version?version=0.1.0", headers=auth_headers)
 
     assert response.status_code == 200
-    assert response.json() == {"drained": 2}
+    assert response.json() == {"drained": 2, "flagged": 1}
     session.expire_all()
     live = session.get(Worker, "live")
     busy = session.get(Worker, "busy")
@@ -84,7 +84,9 @@ def test_drain_version_skips_offline_workers_and_persists_flags(client, auth_hea
     newer = session.get(Worker, "newer")
     assert live is not None and live.drain_requested is True and live.status == "draining"
     assert busy is not None and busy.drain_requested is True and busy.status == "draining"
-    assert dead is not None and dead.drain_requested is False and dead.status == "offline"
+    # Offline workers keep their honest status but remember the drain request,
+    # so the upgrade takes effect when they come back.
+    assert dead is not None and dead.drain_requested is True and dead.status == "offline"
     assert newer is not None and newer.drain_requested is False and newer.status == "online"
 
 
@@ -100,7 +102,10 @@ def test_drain_version_without_matches_reports_zero(client, auth_headers, sessio
     response = client.post("/api/workers/drain-version?version=9.9.9", headers=auth_headers)
 
     assert response.status_code == 200
-    assert response.json() == {"drained": 0}
+    assert response.json() == {"drained": 0, "flagged": 0}
+    session.expire_all()
+    worker = session.get(Worker, "w1")
+    assert worker is not None and worker.drain_requested is False
 
 
 def test_worker_management_requires_admin(client):

@@ -396,22 +396,43 @@ def test_copy_stops_when_touch_reports_lost_lease(tmp_path: Path) -> None:
     assert not (work_dir / "10").exists()
 
 
-def test_line_processing_heartbeats_on_time_even_without_line_threshold(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("file_glob", "expected_heartbeats"),
+    [
+        # Every member is evaluated, so both lines contribute matches.
+        ("**/*", [(1, 1), (2, 2)]),
+        # The first line belongs to a glob-rejected member: the lease must still
+        # be refreshed, otherwise a archive of only rejected members runs dry.
+        ("**/*.log", [(1, 0), (2, 1)]),
+    ],
+)
+def test_line_processing_heartbeats_on_time_even_without_line_threshold(
+    tmp_path: Path,
+    file_glob: str,
+    expected_heartbeats: list[tuple[int, int]],
+) -> None:
     repo = FakeRepo()
     processor = make_processor(
         repo,
         FakeWriter(),
         tmp_path / "work",
+        rules=make_rules(file_glob=file_glob),
         heartbeat_every_lines=10_000,
         heartbeat_every_seconds=5,
-        clock=SteppingClock(step=3),
+        clock=SteppingClock(step=6),
     )
 
-    result = processor.process(make_task(tmp_path))
+    result = processor.process(
+        make_task(
+            tmp_path,
+            members={"notes.txt": "ERROR one\n", "app.log": "ERROR two\n"},
+        )
+    )
 
     assert result.status == "succeeded"
-    # Two lines advance the clock past the 5s window once, after line one.
-    assert repo.heartbeats == [(1, 1)]
+    assert result.processed_lines == 2
+    # Each 6s clock step passes the 5s window, so a heartbeat follows every line.
+    assert repo.heartbeats == expected_heartbeats
 
 
 def test_lease_lost_is_reraised_without_completing(tmp_path: Path) -> None:
