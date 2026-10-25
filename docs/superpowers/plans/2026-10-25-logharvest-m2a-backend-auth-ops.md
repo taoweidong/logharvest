@@ -914,7 +914,7 @@ git commit -m "feat: 接入 JWT 登录与管理员种子，替换静态管理员
 - Consumes: `SQLModel.metadata`（Task 1 后含 10 张表）、`settings.database_url`
 - Produces: `run_migrations(database_url: str) -> None`、`BUSINESS_TABLES: tuple[str, ...]`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `service/tests/infrastructure/test_migrations.py`:
 
@@ -963,7 +963,7 @@ def test_migrations_match_model_metadata(tmp_path) -> None:
 Run: `cd service && uv run --python 3.12 pytest tests/infrastructure/test_migrations.py -v`
 Expected: FAIL，`ModuleNotFoundError: ... migrations`
 
-- [ ] **Step 2: Alembic 脚手架**
+- [x] **Step 2: Alembic 脚手架**
 
 Create `service/alembic.ini`:
 
@@ -1086,7 +1086,7 @@ def downgrade() -> None:
     ${downgrades if downgrades else "pass"}
 ```
 
-- [ ] **Step 3: baseline 与 auth 迁移**
+- [x] **Step 3: baseline 与 auth 迁移**
 
 Create `service/alembic/versions/0001_baseline.py`:
 
@@ -1196,7 +1196,7 @@ def downgrade() -> None:
     op.drop_table("users")
 ```
 
-- [ ] **Step 4: 迁移运行器与启动接线**
+- [x] **Step 4: 迁移运行器与启动接线**
 
 Create `service/src/infrastructure/migrations.py`:
 
@@ -1271,7 +1271,7 @@ Expected: 2 passed
 Run: `cd service && uv run --python 3.12 pytest -q`
 Expected: 全量绿
 
-- [ ] **Step 5: 真实 CLI 走一遍**
+- [x] **Step 5: 真实 CLI 走一遍**
 
 ```bash
 cd service && LOGHARVEST_DATABASE_URL="sqlite:///./migrate-check.db" uv run --python 3.12 alembic upgrade head
@@ -1279,7 +1279,7 @@ cd service && LOGHARVEST_DATABASE_URL="sqlite:///./migrate-check.db" uv run --py
 ```
 Expected: 无异常；`current` 输出 `0002 (head)`。然后删除临时库：`rm -f service/migrate-check.db`（该文件是本任务自建的临时产物）。
 
-- [ ] **Step 6: Lint 与提交**
+- [x] **Step 6: Lint 与提交**
 
 ```bash
 cd service && uv run --python 3.12 ruff check src tests && uv run --python 3.12 ruff format src tests
