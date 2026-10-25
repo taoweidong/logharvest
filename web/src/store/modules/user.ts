@@ -15,7 +15,7 @@ import {
 } from "@/api/user";
 import type { Envelope, LoginData, RefreshData } from "@/api/types";
 import { useMultiTagsStoreHook } from "./multiTags";
-import { type DataInfo, setToken, removeToken, userKey } from "@/utils/auth";
+import { type DataInfo, getToken, setToken, removeToken, userKey } from "@/utils/auth";
 
 /**
  * 业务/认证接口的错误都可能是 `{"detail": "..."}`（FastAPI），
@@ -90,9 +90,14 @@ export const useUserStore = defineStore("pure-user", {
           });
       });
     },
-    /** 前端登出（清理本地 token 与标签页；后端的 /logout 只用于审计，失败不影响登出） */
+    /** 前端登出（清理本地 token 与标签页；后端的 /logout 只用于审计，失败不影响登出）
+     *
+     * 返回 Promise：401 拦截器要等它落地才能复位 isLoggingOut，否则 /logout 自身
+     * 返回的 401 会再次触发登出，形成无限 POST 与重复提示。
+     */
     logOut() {
-      logoutApi().catch(() => undefined);
+      // 没有 token 时不再打这个电话：后端会回 401，纯浪费一次往返。
+      const notify = getToken() ? logoutApi().catch(() => undefined) : Promise.resolve();
       this.username = "";
       this.roles = [];
       this.permissions = [];
@@ -100,6 +105,7 @@ export const useUserStore = defineStore("pure-user", {
       useMultiTagsStoreHook().handleTags("equal", [...routerArrays]);
       resetRouter();
       router.push("/login");
+      return notify;
     },
     /** 刷新`token` */
     async handRefreshToken(data: { refreshToken: string }) {

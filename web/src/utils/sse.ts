@@ -44,14 +44,17 @@ export function parseSseChunk(buffer: string): {
  * 订阅某个作业的进度流。
  *
  * - `signal` 中止时 `fetch`/`reader.read()` 会抛出 `AbortError`，调用方在 `onBeforeUnmount` 里 abort
- * - 后端在作业进入终态后发送最后一个快照并结束流，此时 `done` 为真、函数正常返回
+ * - 后端在作业进入终态后发送最后一个快照并结束流，此时返回最后一个事件
+ * - **返回 `undefined` 表示流在没有观察到终态快照时就结束了**（作业被删除、
+ *   代理切断、连接被中途关闭）。调用方必须把它当成"需要回退轮询"，
+ *   不能当成"作业已完成"。
  * - 非 2xx（如 401/404）抛错，由调用方提示并回退到轮询
  */
 export async function streamJobProgress(
   jobId: number,
   onEvent: (event: ProgressEvent) => void,
   signal: AbortSignal
-): Promise<void> {
+): Promise<ProgressEvent | undefined> {
   const token = getToken();
   const response = await fetch(`/api/jobs/${jobId}/events`, {
     headers: {
@@ -66,12 +69,31 @@ export async function streamJobProgress(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let last: ProgressEvent | undefined;
+  const emit = (events: ProgressEvent[]) => {
+    events.forEach(event => {
+      last = event;
+      onEvent(event);
+    });
+  };
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const parsed = parseSseChunk(buffer);
     buffer = parsed.rest;
-    parsed.events.forEach(onEvent);
+    emit(parsed.events);
   }
+  // 收尾：flush 可能剩下的半个多字节字符，并尝试解析最后一帧
+  // （服务端在终止前发的帧可能没有以空行结尾，不补这一步就会整帧丢弃）。
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    try {
+      emit(parseSseChunk(`${buffer}\n\n`).events);
+    } catch {
+      // 尾部残留不是完整 JSON（代理截断、心跳注释行等）：宁可少一帧，
+      // 也不能让一次正常关流变成异常路径，把用户引到"实时中断"的假提示上。
+    }
+  }
+  return last;
 }

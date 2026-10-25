@@ -117,10 +117,9 @@ export type SystemStatus = {
 };
 
 /**
- * `GET /api/system/overview`。
- * 契约来源：后端 M2a Task 5 并行轨道新增的概览接口（作业状态分布、文件任务状态分布、
- * 24 小时命中数、Worker 在线数与版本分布、最老 pending 等待秒数）。
- * 本工作树的 `service/` 还没有该端点，字段按约定先行对接，**合流后需复核**。
+ * `GET /api/system/overview`（后端 M2a Task 5 新增）：作业状态分布、文件任务状态分布、
+ * 24 小时命中数、Worker 在线数与版本分布、最老 pending 等待秒数。
+ * 字段已在合流后的后端实测一致（`service/src/api/v1/schemas.py` 的 SystemOverviewRead）。
  */
 export type Overview = {
   jobs: Partial<Record<JobStatus, number>>;
@@ -131,9 +130,9 @@ export type Overview = {
 };
 
 /**
- * `POST /api/system/maintenance`（同样由 M2a Task 5 补充，**合流后需复核**）：
- * `recovered` 回收的悬挂文件任务数、`workers_demoted` 降级为离线的 Worker 数、
- * `jobs_finalized` 被收尾的作业数。
+ * `POST /api/system/maintenance`：`recovered` 回收的悬挂文件任务数、
+ * `workers_demoted` 降级为离线的 Worker 数、`jobs_finalized` 被收尾的作业数。
+ * 后端在队列不是 PostgreSQL 时返回 503（回收语句是 PostgreSQL 专有语法）。
  */
 export type MaintenanceResult = {
   recovered: number;

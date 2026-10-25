@@ -14,6 +14,7 @@ import type {
 
 /** 列表分页参数：后端只认 `limit`/`offset`，且响应是裸数组（没有 total） */
 export type ListParams = { limit?: number; offset?: number };
+export type FileTaskListParams = ListParams & { status?: string };
 
 /**
  * 取 FastAPI 的错误文案。
@@ -47,10 +48,10 @@ export const getJob = (id: number) => http.request<Job>("get", `/jobs/${id}`);
 
 /**
  * 作业的文件任务列表。
- * 注意：后端该接口只有 `limit`/`offset`，**没有 status 过滤参数**，
- * 状态筛选只能在当前页数据里做（已在界面上标注这个边界）。
+ * `status` 由后端过滤（枚举校验，非法值返回 422）；仍只有 `limit`/`offset`，
+ * 没有总数，所以界面是窗口式翻页。
  */
-export const listJobFiles = (id: number, params: ListParams = {}) =>
+export const listJobFiles = (id: number, params: FileTaskListParams = {}) =>
   http.request<FileTask[]>("get", `/jobs/${id}/files`, { params });
 
 /** 请求取消作业：返回取消后的作业（终态作业不会被改写） */
@@ -95,16 +96,16 @@ export const systemStatus = () =>
  * 概览看板数据源。
  * 契约：`GET /api/system/overview` → `{jobs, file_tasks, matches_24h,
  * workers:{online, by_version}, oldest_pending_seconds}`。
- * 该端点由后端 M2a Task 5 并行轨道补充，本工作树的 `service/` 还没有它，
- * 前端按约定先行对接（**合流后需复核**）；不可用时界面退回 `systemStatus()`。
+ * 已在合流后的后端上实测通过；若请求失败界面退回 `systemStatus()`。
  */
 export const overview = () =>
   http.request<Overview>("get", "/system/overview");
 
 /**
  * 手动触发一次维护（回收悬挂任务、降级失联 Worker、收尾停滞作业）。
- * 契约：`POST /api/system/maintenance` → `{recovered, workers_demoted, jobs_finalized}`；
- * 同样来自 M2a Task 5，**合流后需复核**。
+ * 契约：`POST /api/system/maintenance` → `{recovered, workers_demoted, jobs_finalized}`。
+ * 回收语句是 PostgreSQL 专有语法，所以后端在 SQLite 等非 PostgreSQL 连接上返回
+ * **503** 并说明实际方言；界面直接把 `detail` 显示出来，不当作前端错误。
  */
 export const runMaintenance = () =>
   http.request<MaintenanceResult>("post", "/system/maintenance");

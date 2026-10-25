@@ -117,8 +117,7 @@ const degradedDescription = computed(
   () =>
     `GET /api/system/overview 请求失败（${loadError.value}）。` +
     "“作业状态分布 / 24 小时命中数 / Worker 版本分布”依赖概览接口，" +
-    "本次只显示后端已有 /api/system/status 能提供的字段。" +
-    "该端点由后端 M2a 轨道补充，合流后需复核。"
+    "本次只显示后端已有 /api/system/status 能提供的字段。"
 );
 
 async function load() {

@@ -151,16 +151,20 @@ class PureHttp {
         // 处理401未授权：token失效时强制登出并跳转登录页
         const status = error.response?.status;
         if (status === 401) {
-          // 登录和刷新token请求白名单，避免登出流程自身触发401处理
-          const whiteList = ["/refresh-token", "/login"];
+          // 登录、刷新与登出请求列入白名单：/logout 在无 token 时同样返回 401，
+          // 不放进来就会"401 → 登出 → /logout → 401"无限循环。
+          const whiteList = ["/refresh-token", "/login", "/logout"];
           const url = error.config?.url || "";
           if (!whiteList.some(w => url.endsWith(w)) && !PureHttp.isLoggingOut) {
             PureHttp.isLoggingOut = true;
             message(transformI18n($t("login.pureLoginExpired")), {
               type: "warning"
             });
-            useUserStoreHook().logOut();
-            PureHttp.isLoggingOut = false;
+            // logOut 内部的 /logout 是异步的；同步复位会让它随后返回的 401 再次进入
+            // 这段逻辑，形成重复提示与无限 POST。等它落地后再复位。
+            Promise.resolve(useUserStoreHook().logOut()).finally(() => {
+              PureHttp.isLoggingOut = false;
+            });
           }
         } else if (!$error.isCancelRequest) {
           /*

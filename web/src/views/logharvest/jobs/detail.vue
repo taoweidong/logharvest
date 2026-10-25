@@ -58,11 +58,11 @@ const percent = computed(() => {
   return Math.min(100, Math.round((doneCount.value / total) * 100));
 });
 
-const filteredFiles = computed(() =>
-  statusFilter.value
-    ? files.value.filter(item => item.status === statusFilter.value)
-    : files.value
-);
+/** 状态筛选已下推给后端：切换时回到第一页重新拉取。 */
+function onStatusFilterChange() {
+  page.offset = 0;
+  loadFiles();
+}
 
 const hasNext = computed(() => files.value.length === page.limit);
 
@@ -92,9 +92,12 @@ async function loadJob() {
 
 async function loadFiles() {
   try {
+    // 状态筛选下推给后端（?status=），不再只在当前页里过滤，
+    // 否则第 2 页之后的匹配行永远看不到。
     files.value = await listJobFiles(jobId, {
       limit: page.limit,
-      offset: page.offset
+      offset: page.offset,
+      ...(statusFilter.value ? { status: statusFilter.value } : {})
     });
   } catch (error) {
     files.value = [];
@@ -138,7 +141,7 @@ async function startStream() {
   controller = new AbortController();
   streaming.value = true;
   try {
-    await streamJobProgress(
+    const last = await streamJobProgress(
       jobId,
       event => {
         progress.value = event;
@@ -150,10 +153,20 @@ async function startStream() {
       },
       controller.signal
     );
-    // 流正常结束（作业已终态或已被删除），后端发完最后一个快照就关流
+    // 流结束但收尾路径没跑（例如作业被删除、代理中途切断）：
+    // 只有看到终态快照才算"作业已完成"，否则必须继续跟进，
+    // 不然界面会停在最后一次非终态快照上假装还在进行中却再也不刷新。
     if (streaming.value) {
+      const endedTerminal =
+        last !== undefined && TERMINAL_JOB_STATUSES.includes(last.status);
       await refreshJobAndFiles();
       stopAll();
+      if (!endedTerminal) {
+        message("实时进度连接已结束，但作业尚未进入终态，已改为每 5 秒轮询", {
+          type: "warning"
+        });
+        startPolling();
+      }
     }
   } catch (error) {
     // onBeforeUnmount / 终态收尾都会 abort，这是正常路径
@@ -316,6 +329,7 @@ onBeforeUnmount(stopAll);
             clearable
             placeholder="状态筛选"
             class="w-36"
+            @change="onStatusFilterChange"
           >
             <el-option
               v-for="item in JOB_STATUS_OPTIONS"
@@ -330,7 +344,7 @@ onBeforeUnmount(stopAll);
             :size="size"
             row-key="id"
             adaptive
-            :data="filteredFiles"
+            :data="files"
             :columns="columns"
           >
             <template #status="{ row }">
