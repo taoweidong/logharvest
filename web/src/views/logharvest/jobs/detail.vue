@@ -6,20 +6,30 @@ import { PureTableBar } from "@/components/RePureTableBar";
 import { message } from "@/utils/message";
 import {
   apiErrorDetail,
+  apiErrorStatus,
   cancelJob,
   getJob,
   listJobFiles,
+  listTaskAttempts,
   retryFailedFiles
 } from "@/api/logharvest";
 import {
   JOB_STATUS_OPTIONS,
   TERMINAL_JOB_STATUSES,
   type FileTask,
+  type FileTaskAttempt,
   type Job,
   type ProgressEvent
 } from "@/api/logharvestTypes";
 import { streamJobProgress } from "@/utils/sse";
-import { formatGB, formatDateTime, statusTagType } from "../format";
+import {
+  UNKNOWN_TEXT,
+  countOrUnknown,
+  formatDateTime,
+  formatGB,
+  statusTagType,
+  textOrUnknown
+} from "../format";
 
 defineOptions({ name: "JobDetail" });
 
@@ -73,18 +83,162 @@ const failedCount = computed(
     files.value.filter(item => item.status === "failed").length
 );
 
+/**
+ * `@pureadmin/table` 3.3.0 只按列定义里的 `slot` 字段取内容插槽（源码
+ * `dist/index.es.js`：`const {slot: s, prop: E} = n; ... s ? t[s]?.() : void 0`），
+ * **没有 `slot` 时不会回退到与 `prop` 同名的插槽**——插槽模板会被整体忽略，单元格退回成
+ * 裸的 `row[prop]` 文本。这里必须逐列写 `slot`，否则「历史」按钮根本不会出现在表格里。
+ */
 const columns: TableColumnList = [
   { label: "ID", prop: "id", width: 90 },
   { label: "文件", prop: "file_name", minWidth: 220, showOverflowTooltip: true },
-  { label: "状态", prop: "status", width: 110 },
-  { label: "大小", prop: "size_bytes", width: 120 },
-  { label: "尝试", prop: "attempts", width: 90 },
-  { label: "Worker", prop: "worker_id", width: 160, showOverflowTooltip: true },
+  { label: "状态", prop: "status", slot: "status", width: 110 },
+  { label: "大小", prop: "size_bytes", slot: "size_bytes", width: 120 },
+  { label: "尝试", prop: "attempts", slot: "attempts", width: 90 },
+  { label: "历史", prop: "history", slot: "history", width: 90 },
+  {
+    label: "Worker",
+    prop: "worker_id",
+    slot: "worker_id",
+    width: 160,
+    showOverflowTooltip: true
+  },
   { label: "已处理行", prop: "processed_lines", width: 120 },
   { label: "命中行", prop: "matched_rows", width: 110 },
-  { label: "心跳", prop: "heartbeat_at", width: 180 },
-  { label: "错误", prop: "error", minWidth: 180, showOverflowTooltip: true }
+  {
+    label: "心跳",
+    prop: "heartbeat_at",
+    slot: "heartbeat_at",
+    width: 180
+  },
+  {
+    label: "错误",
+    prop: "error",
+    slot: "error",
+    minWidth: 180,
+    showOverflowTooltip: true
+  }
 ];
+
+/**
+ * 尝试历史抽屉的状态。
+ *
+ * `error` 与 `rows` 是两种必须分开的状态：
+ * - `rows = []` 且 `loaded = true` 且 `error = ""` → 后端给了 `200 []`，即「该任务一次都没跑过」
+ * - `error` 非空 → 请求失败（含 404：后端还没有该端点，或任务不属于该作业），
+ *   此时**不显示空态**，否则「加载失败」会被读成「没有重试过」
+ */
+const attempts = reactive({
+  visible: false,
+  loading: false,
+  loaded: false,
+  error: "",
+  taskId: null as number | null,
+  fileName: "",
+  rows: [] as FileTaskAttempt[],
+  /** 递增的请求号：快速切换任务时丢弃过期响应，避免把上一个任务的历史画到当前任务上 */
+  requestId: 0
+});
+
+const attemptColumns: TableColumnList = [
+  { label: "次序", prop: "attempt_no", slot: "attempt_no", width: 70 },
+  {
+    label: "Worker",
+    prop: "worker_id",
+    slot: "worker_id",
+    minWidth: 150,
+    showOverflowTooltip: true
+  },
+  {
+    label: "版本",
+    prop: "worker_version",
+    slot: "worker_version",
+    width: 110,
+    showOverflowTooltip: true
+  },
+  { label: "状态", prop: "status", slot: "status", width: 100 },
+  { label: "开始时间", prop: "started_at", slot: "started_at", width: 170 },
+  { label: "结束时间", prop: "finished_at", slot: "finished_at", width: 170 },
+  {
+    label: "已处理行",
+    prop: "processed_lines",
+    slot: "processed_lines",
+    width: 110
+  },
+  { label: "命中行", prop: "matched_rows", slot: "matched_rows", width: 100 },
+  {
+    label: "错误",
+    prop: "error",
+    slot: "error",
+    minWidth: 220,
+    showOverflowTooltip: true
+  }
+];
+
+function attemptErrorText(error: unknown): string {
+  const status = apiErrorStatus(error);
+  const detail = apiErrorDetail(error, "请求失败");
+  if (status === undefined) {
+    return `请求没有收到响应（网络中断、后端未启动或超时）。${detail}`;
+  }
+  if (status === 404) {
+    return `HTTP 404：${detail}。两种可能——后端还没有该端点（尝试历史接口由 M2c Task 3 提供），或文件任务 #${attempts.taskId} 不属于作业 #${jobId}。`;
+  }
+  return `HTTP ${status}：${detail}`;
+}
+
+async function loadAttempts() {
+  const taskId = attempts.taskId;
+  if (taskId === null) return;
+  const request = ++attempts.requestId;
+  attempts.loading = true;
+  attempts.error = "";
+  try {
+    const rows = await listTaskAttempts(jobId, taskId);
+    if (request !== attempts.requestId) return;
+    if (!Array.isArray(rows)) {
+      // 契约是裸数组；形状不对就如实报错，绝不退化成「该任务没有尝试记录」
+      attempts.rows = [];
+      attempts.loaded = false;
+      attempts.error = `接口返回的不是数组（实际类型 ${typeof rows}）：后端未按 list[FileTaskAttemptRead] 契约实现。`;
+      message(attempts.error, { type: "error" });
+      return;
+    }
+    attempts.rows = rows;
+    attempts.loaded = true;
+  } catch (error) {
+    if (request !== attempts.requestId) return;
+    // 失败：清空数据但保留 error，让界面走「错误」分支而不是「暂无记录」分支
+    attempts.rows = [];
+    attempts.loaded = false;
+    attempts.error = attemptErrorText(error);
+    message(attempts.error, { type: "error" });
+  } finally {
+    if (request === attempts.requestId) attempts.loading = false;
+  }
+}
+
+/** 打开抽屉：记下 job/task，切换任务时历史重新拉取 */
+function openAttempts(row: FileTask) {
+  attempts.visible = true;
+  attempts.taskId = row.id;
+  attempts.fileName = row.file_name;
+  attempts.rows = [];
+  attempts.error = "";
+  attempts.loaded = false;
+  void loadAttempts();
+}
+
+function closeAttempts() {
+  attempts.visible = false;
+  // 让仍在飞行中的响应作废（抽屉已关，不该再改状态或弹提示）
+  attempts.requestId += 1;
+}
+
+/** 一次尝试的历史状态：`timeout`（失联回收写入）不在作业状态枚举里，配色单独兜底 */
+function attemptStatusTagType(status: string) {
+  return status === "timeout" ? "danger" : statusTagType(status);
+}
 
 async function loadJob() {
   job.value = await getJob(jobId);
@@ -358,6 +512,11 @@ onBeforeUnmount(stopAll);
             <template #attempts="{ row }">
               {{ row.attempts }} / {{ row.max_attempts }}
             </template>
+            <template #history="{ row }">
+              <el-button :size="size" link type="primary" @click="openAttempts(row)">
+                历史
+              </el-button>
+            </template>
             <template #worker_id="{ row }">
               {{ row.worker_id ?? "-" }}
             </template>
@@ -370,8 +529,9 @@ onBeforeUnmount(stopAll);
           </pure-table>
           <div class="mt-3 flex items-center justify-between text-sm">
             <span class="text-gray-500">
-              后端该接口无 status 过滤参数（筛选只作用于本页）；失败文件可用上方
-              “重试失败文件”重新排队（{{ failedCount }} 个失败）
+              状态筛选已下推到后端（<code>?status=</code>，非法值返回
+              422）；接口无总数，所以仍是窗口式翻页。失败文件可用上方
+              “重试失败文件”重新排队（{{ failedCount }} 个失败）；“历史”打开该任务的尝试记录
             </span>
             <div class="flex gap-2">
               <el-button :disabled="page.offset === 0" @click="(page.offset -= page.limit), loadFiles()">
@@ -385,5 +545,108 @@ onBeforeUnmount(stopAll);
         </template>
       </PureTableBar>
     </div>
+
+    <el-drawer
+      v-model="attempts.visible"
+      size="920px"
+      :title="
+        `尝试历史 · 文件任务 #${attempts.taskId ?? '-'}${
+          attempts.fileName ? `（${attempts.fileName}）` : ''
+        }`
+      "
+      @close="closeAttempts"
+    >
+      <div v-loading="attempts.loading" style="min-height: 8rem">
+        <p class="mb-3 text-xs text-gray-500">
+          作业 #{{ jobId }}。一行 = Worker 的一次领取：领取时写
+          <code>running</code>，结束时改写为
+          <code>succeeded</code> / <code>failed</code> /
+          <code>cancelled</code>，Worker 失联被维护任务回收时写
+          <code>timeout</code>。<br />
+          <b>“{{ UNKNOWN_TEXT }}” 表示该列没有值</b>（例如仍在执行的尝试没有结束时间、
+          成功的一次没有错误文案），不会用 0 或空文案顶替。
+        </p>
+
+        <el-alert
+          v-if="attempts.error"
+          type="error"
+          :closable="false"
+          show-icon
+          class="mb-3"
+          title="尝试历史加载失败：以下是接口错误，不代表「该任务没有尝试记录」"
+        >
+          <pre class="whitespace-pre-wrap">{{ attempts.error }}</pre>
+        </el-alert>
+
+        <pure-table
+          v-else-if="attempts.rows.length > 0"
+          size="small"
+          row-key="attempt_no"
+          adaptive
+          :border="true"
+          :data="attempts.rows"
+          :columns="attemptColumns"
+        >
+          <template #attempt_no="{ row }">
+            {{ countOrUnknown(row.attempt_no) }}
+          </template>
+          <template #status="{ row }">
+            <el-tag
+              :type="attemptStatusTagType(row.status)"
+              size="small"
+              effect="light"
+            >
+              {{ row.status }}
+            </el-tag>
+          </template>
+          <template #worker_id="{ row }">
+            {{ textOrUnknown(row.worker_id) }}
+          </template>
+          <template #worker_version="{ row }">
+            {{ textOrUnknown(row.worker_version) }}
+          </template>
+          <template #started_at="{ row }">
+            {{ row.started_at ? formatDateTime(row.started_at) : UNKNOWN_TEXT }}
+          </template>
+          <template #finished_at="{ row }">
+            {{ row.finished_at ? formatDateTime(row.finished_at) : UNKNOWN_TEXT }}
+          </template>
+          <template #processed_lines="{ row }">
+            {{ countOrUnknown(row.processed_lines) }}
+          </template>
+          <template #matched_rows="{ row }">
+            {{ countOrUnknown(row.matched_rows) }}
+          </template>
+          <template #error="{ row }">
+            <span v-if="row.error" class="text-red-500">{{ row.error }}</span>
+            <span v-else>{{ UNKNOWN_TEXT }}</span>
+          </template>
+        </pure-table>
+
+        <el-empty
+          v-else-if="attempts.loaded && !attempts.loading"
+          description="该任务尚无尝试记录（接口返回 200 空数组，未开始执行）"
+          :image-size="64"
+        />
+      </div>
+      <template #footer>
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-xs text-gray-500">
+            {{
+              attempts.error
+                ? "接口没有返回数据，表格已隐藏（不显示为空表）"
+                : `已加载 ${attempts.rows.length} 次尝试，后端按 attempt_no 升序返回`
+            }}
+          </span>
+          <el-button
+            :loading="attempts.loading"
+            :disabled="attempts.taskId === null"
+            @click="loadAttempts"
+          >
+            重新加载
+          </el-button>
+        </div>
+      </template>
+    </el-drawer>
   </div>
 </template>

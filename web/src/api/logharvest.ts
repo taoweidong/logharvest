@@ -2,6 +2,7 @@ import { http } from "@/utils/http";
 import type {
   DrainVersionResult,
   FileTask,
+  FileTaskAttempt,
   Job,
   JobCreatePayload,
   MaintenanceResult,
@@ -32,6 +33,16 @@ export function apiErrorDetail(error: unknown, fallback = "请求失败"): strin
   return fallback;
 }
 
+/**
+ * 取 HTTP 状态码（无响应 = 断网/超时时为 `undefined`）。
+ * 只读抽屉需要区分「404：后端还没有这个端点」与「500/断网」，文案不同，
+ * 不能都压成一句「加载失败」。
+ */
+export function apiErrorStatus(error: unknown): number | undefined {
+  const status = (error as any)?.response?.status;
+  return typeof status === "number" ? status : undefined;
+}
+
 /** 作业列表（按创建时间倒序） */
 export const listJobs = (params: ListParams = {}) =>
   http.request<Job[]>("get", "/jobs", { params });
@@ -57,6 +68,20 @@ export const listJobFiles = (id: number, params: FileTaskListParams = {}) =>
 /** 请求取消作业：返回取消后的作业（终态作业不会被改写） */
 export const cancelJob = (id: number) =>
   http.request<Job>("post", `/jobs/${id}/cancel`);
+
+/**
+ * 某个文件任务的尝试历史（返回**裸数组**，按 `attempt_no` 升序，与全站列表一致）。
+ * 契约：`GET /api/jobs/{job_id}/files/{task_id}/attempts` → `list[FileTaskAttemptRead]`（M2c Task 3）。
+ * 后端区分两种「没有数据」：
+ * - 任务存在且属于该作业但没有历史 → `200 []`（界面显示「该任务尚无尝试记录」）
+ * - 任务不存在或不属于该作业 → `404 {"detail": "file task not found"}`（界面显示错误）
+ * 该端点在当前运行的后端上**尚未存在**，界面必须把失败如实显示出来，不能退化成空表。
+ */
+export const listTaskAttempts = (jobId: number, taskId: number) =>
+  http.request<FileTaskAttempt[]>(
+    "get",
+    `/jobs/${jobId}/files/${taskId}/attempts`
+  );
 
 /**
  * 重试作业内全部失败的文件任务（把 `failed` 重置回 `pending` 等待 Worker 领取）。

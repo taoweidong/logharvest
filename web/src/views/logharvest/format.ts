@@ -1,6 +1,48 @@
 import dayjs from "dayjs";
 import type { JobStatus, TaskStatus } from "@/api/logharvestTypes";
 
+/**
+ * 「没有数据」的显示值。
+ *
+ * 后端的这些列可以为 `NULL`，且**列存在不等于有值**：Worker 的
+ * `cpu_percent`/`memory_bytes`/`temp_disk_free_bytes`/`last_error` 在 M2c Task 4 之前
+ * 没有任何写入方（心跳语句 `WORKER_HEARTBEAT_SQL` 只改 status/current_task_id/
+ * last_heartbeat），老版本 Worker 留下的行就是 `NULL`；尝试历史的 `finished_at`/
+ * `error` 同理。界面把 `NULL` 显示成 `0` 会被读成「CPU 空闲 / 临时盘已满」这类
+ * 假安心，所以未知一律走这个常量。
+ */
+export const UNKNOWN_TEXT = "—";
+
+/** 文本/标识列的未知值（空串按「没有内容」处理，不用 `0` 顶替） */
+export function textOrUnknown(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === "") return UNKNOWN_TEXT;
+  return String(value);
+}
+
+/** 计数字段的未知值：只有真正的数字才显示数字，`NULL` 绝不退化成 `0` */
+export function countOrUnknown(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return UNKNOWN_TEXT;
+  return String(value);
+}
+
+/** Worker CPU：一位小数 + `%`。psutil 在多核下可以 >100，这里不做截断 */
+export function formatCpuPercent(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return UNKNOWN_TEXT;
+  return `${value.toFixed(1)}%`;
+}
+
+/** Worker 进程内存 RSS：MB，一位小数 */
+export function formatMemoryMB(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return UNKNOWN_TEXT;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Worker 临时盘剩余空间：GB，两位小数（`—` 与真实的 `0.00 GB` 必须能区分） */
+export function formatDiskFreeGB(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return UNKNOWN_TEXT;
+  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
 /** 后端字节数为 `BIGINT`，列表页统一按 GB 展示（保留两位） */
 export function formatGB(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined) return "-";

@@ -12,7 +12,11 @@ import {
 } from "@/api/logharvest";
 import type { WorkerInfo, WorkerStatus } from "@/api/logharvestTypes";
 import {
+  UNKNOWN_TEXT,
+  formatCpuPercent,
   formatDateTime,
+  formatDiskFreeGB,
+  formatMemoryMB,
   fromNow,
   workerStatusTagType
 } from "../format";
@@ -145,17 +149,67 @@ async function onDrainVersion() {
   }
 }
 
+/**
+ * `@pureadmin/table` 3.3.0 只认列定义里的 `slot` 字段（不写 `slot` 时，与 `prop` 同名的
+ * 插槽模板会被静默忽略，单元格退回裸文本），所以每一列都要显式写 `slot`。
+ */
 const columns: TableColumnList = [
   { label: "Worker", prop: "id", minWidth: 200, showOverflowTooltip: true },
   { label: "主机名", prop: "hostname", minWidth: 160, showOverflowTooltip: true },
   { label: "版本", prop: "version", width: 130 },
-  { label: "状态", prop: "status", width: 110 },
-  { label: "当前文件任务", prop: "current_task_id", width: 130 },
+  { label: "状态", prop: "status", slot: "status", width: 110 },
+  {
+    label: "当前文件任务",
+    prop: "current_task_id",
+    slot: "current_task_id",
+    width: 130
+  },
   { label: "并发上限", prop: "max_concurrent_copies", width: 110 },
-  { label: "心跳", prop: "last_heartbeat", width: 190 },
-  { label: "排空标记", prop: "drain_requested", width: 110 },
-  { label: "操作", prop: "operation", width: 170, fixed: "right" }
+  { label: "CPU", prop: "cpu_percent", slot: "cpu_percent", width: 100 },
+  { label: "内存", prop: "memory_bytes", slot: "memory_bytes", width: 120 },
+  {
+    label: "临时盘空闲",
+    prop: "temp_disk_free_bytes",
+    slot: "temp_disk_free_bytes",
+    width: 140
+  },
+  { label: "心跳", prop: "last_heartbeat", slot: "last_heartbeat", width: 190 },
+  {
+    label: "排空标记",
+    prop: "drain_requested",
+    slot: "drain_requested",
+    width: 110
+  },
+  {
+    label: "最近错误",
+    prop: "last_error",
+    slot: "last_error",
+    minWidth: 180,
+    showOverflowTooltip: true
+  },
+  {
+    label: "操作",
+    prop: "operation",
+    slot: "operation",
+    width: 170,
+    fixed: "right"
+  }
 ];
+
+/**
+ * 资源三列与 `last_error` 都是可空列（见 `WorkerRead`）：M2c Task 4 之前心跳语句
+ * 只更新 `status`/`current_task_id`/`last_heartbeat`，所以老行与未重启的 Worker 这里是
+ * `NULL`。表头不做任何“默认 0”的兜底，`null` 一律走 `format*` 里的 `—`。
+ */
+const metricReported = computed(
+  () =>
+    filteredRows.value.filter(
+      item =>
+        typeof item.cpu_percent === "number" ||
+        typeof item.memory_bytes === "number" ||
+        typeof item.temp_disk_free_bytes === "number"
+    ).length
+);
 
 onMounted(load);
 </script>
@@ -171,6 +225,18 @@ onMounted(load);
       description="本界面只做「排空 / 恢复领取」的运维标记。Worker 镜像的替换与重启由
         Jenkins 流水线 + Docker Compose 完成；「按版本排空」用于滚动升级时先让旧版本的
         Worker 跑完手头的文件任务，离线机器上的标记会在其重启后生效。"
+    />
+
+    <el-alert
+      class="mb-3"
+      type="info"
+      :closable="false"
+      show-icon
+      title="CPU / 内存 / 临时盘空闲 / 最近错误：`—` 是「没有上报过」，不是 0"
+      description="这四列在 workers 表里一直存在，但直到 M2c Task 4 才有写入方——此前的心跳语句只更新
+        status / current_task_id / last_heartbeat。因此升级前留下的行、以及升级后还没重启的 Worker
+        都会显示破折号（未知）；把它读成「CPU 空闲」或「临时盘已满」就是本界面刻意避免的误判。
+        数值来自 Worker 自身采样（进程 CPU/内存 RSS、临时目录所在盘的剩余空间），不是 NAS 侧指标。"
     />
 
     <PureTableBar title="Worker" :columns="columns" @refresh="load">
@@ -227,6 +293,21 @@ onMounted(load);
           <template #current_task_id="{ row }">
             {{ row.current_task_id ?? "-" }}
           </template>
+          <template #cpu_percent="{ row }">
+            {{ formatCpuPercent(row.cpu_percent) }}
+          </template>
+          <template #memory_bytes="{ row }">
+            {{ formatMemoryMB(row.memory_bytes) }}
+          </template>
+          <template #temp_disk_free_bytes="{ row }">
+            {{ formatDiskFreeGB(row.temp_disk_free_bytes) }}
+          </template>
+          <template #last_error="{ row }">
+            <el-tooltip v-if="row.last_error" :content="row.last_error" placement="top">
+              <span class="text-red-500">{{ row.last_error }}</span>
+            </el-tooltip>
+            <span v-else>{{ UNKNOWN_TEXT }}</span>
+          </template>
           <template #last_heartbeat="{ row }">
             <el-tooltip :content="formatDateTime(row.last_heartbeat)" placement="top">
               <span>{{ fromNow(row.last_heartbeat) }}</span>
@@ -277,7 +358,9 @@ onMounted(load);
           <span class="text-gray-500">
             后端列表接口不返回总数：状态筛选只作用于本页；第
             {{ Math.floor(page.offset / page.limit) + 1 }} 页，本页
-            {{ rows.length }} 条，其中存活（online/busy/draining）{{ alive }} 台
+            {{ rows.length }} 条，其中存活（online/busy/draining）{{ alive }} 台；至少上报过一项资源的
+            {{ metricReported }} 台（其余显示「{{ UNKNOWN_TEXT }}」= 该 Worker
+            尚未上报，需升级到 M2c Task 4 的 Worker 并重启后才有数据）
           </span>
           <div class="flex gap-2">
             <el-button

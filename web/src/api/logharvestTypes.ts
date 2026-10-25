@@ -72,6 +72,29 @@ export type FileTask = {
   error: string | null;
 };
 
+/**
+ * 一次文件任务尝试的历史记录（后端 `FileTaskAttemptRead`，M2c Task 3 新增只读端点）。
+ * 字段逐列核对自 `service/src/domain/models/entities.py` 的 `FileTaskAttempt`：
+ * `file_task_id`/`attempt_no`/`worker_id`/`worker_version`/`status`/`started_at`
+ * /`finished_at`/`processed_lines`/`matched_rows`/`error`。
+ *
+ * 注意取值：`status` 除作业状态那套之外还会出现 `timeout`
+ * （失联回收时由 `RECOVER_STALE_SQL` 写入），所以这里用 `string` 而不是收窄联合。
+ * `finished_at`/`error` 可为 `null`：前者表示该次尝试仍在执行，后者表示没有错误。
+ */
+export type FileTaskAttempt = {
+  file_task_id: number;
+  attempt_no: number;
+  worker_id: string;
+  worker_version: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  processed_lines: number;
+  matched_rows: number;
+  error: string | null;
+};
+
 export type Match = {
   id: number;
   job_id: number;
@@ -93,6 +116,15 @@ export type Match = {
 
 export type WorkerStatus = "online" | "busy" | "draining" | "offline";
 
+/**
+ * `GET /api/workers` 的行，逐字段核对自 `service/src/api/v1/schemas.py` 的 `WorkerRead`。
+ *
+ * **可空字段的语义**：`cpu_percent`/`memory_bytes`/`temp_disk_free_bytes`/`last_error`
+ * 这四列在表里一直存在，但 M2c Task 4 之前没有任何写入方（心跳语句只更新状态与
+ * `last_heartbeat`），所以老版本 Worker 写下的行确实是 `NULL`。
+ * `NULL` 表示「没有上报过」，不是 0：把空当 0 显示会读成「CPU 空闲 / 临时盘满了」，
+ * 正是本项目反复踩过的假安心。界面必须显式区分两者。
+ */
 export type WorkerInfo = {
   id: string;
   hostname: string;
