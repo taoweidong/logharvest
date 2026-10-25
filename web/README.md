@@ -62,16 +62,44 @@ cd ../web && pnpm dev
 `parseSseChunk`，跨 chunk 的残帧留在缓冲区里等下一段）。代价是浏览器不会自动重连：
 组件里做了退化路径——流断开或响应不可用时改成每 5 秒轮询作业详情，终态后停止。
 
-## 已实现界面（M2b）
+## 已实现界面（M2b + M2c）
 
 | 路由 | 界面 | 数据来源 |
 |---|---|---|
 | `/home`、`/logharvest/overview` | 运行概览（首页） | `GET /api/system/overview`，失败退回 `GET /api/system/status`；`POST /api/system/maintenance` |
-| `/logharvest/jobs`、`/logharvest/jobs/:id` | 作业列表 / 新建 / 详情 + 实时进度 | `GET/POST /api/jobs`、`GET /api/jobs/{id}[/files]`、`POST /api/jobs/{id}/cancel`、SSE |
+| `/logharvest/jobs`、`/logharvest/jobs/:id` | 作业列表 / 新建 / 详情 + 实时进度 + **尝试历史抽屉** | `GET/POST /api/jobs`、`GET /api/jobs/{id}[/files]`、`POST /api/jobs/{id}/cancel`、`GET /api/jobs/{id}/files/{task_id}/attempts`、SSE |
 | `/logharvest/rulesets` | 规则集列表与结构化新建 | `GET/POST /api/rule-sets`、`GET /api/rule-sets/{id}` |
 | `/logharvest/datasources` | 数据源列表与新建、路径测试 | `GET/POST /api/data-sources`、`POST /api/data-sources/{id}/test` |
 | `/logharvest/matches` | 命中结果游标浏览 | `GET /api/matches` |
-| `/logharvest/workers` | Worker 管理与按版本排空 | `GET /api/workers`、`POST /api/workers/{id}/drain\|resume`、`POST /api/workers/drain-version?version=` |
+| `/logharvest/workers` | Worker 管理（按版本排空）+ **CPU / 内存 / 临时盘空闲 / 最近错误四列** | `GET /api/workers`、`POST /api/workers/{id}/drain\|resume`、`POST /api/workers/drain-version?version=` |
+
+### 尝试历史抽屉（M2c Task 5）
+
+文件任务表的「历史」列打开右侧抽屉，展示 `attempt_no` / `worker_id` / `worker_version` /
+`status` / `started_at` / `finished_at` / `processed_lines` / `matched_rows` / `error`。
+抽屉区分三种状态，绝不合并：
+
+- `200 []` → 「该任务尚无尝试记录」（一次都没跑过，不是错误）；
+- 请求失败 → 抽屉内红色 `el-alert` + 全局提示，原文带上后端 `detail` 与 HTTP 状态码
+  （`404` 会额外说明「后端还没有该端点，或该任务不属于本作业」），**不会显示成空表**；
+- 返回的不是裸数组 → 直接说「后端未按 `list[FileTaskAttemptRead]` 契约实现」。
+
+### Worker 资源列（M2c Task 5，依赖 Worker 上报）
+
+`cpu_percent` / `memory_bytes` / `temp_disk_free_bytes` / `last_error` 这四列在表里一直存在，
+但**直到 M2c Task 4 才有写入方**（此前 `WORKER_HEARTBEAT_SQL` 只更新
+`status` / `current_task_id` / `last_heartbeat`）。因此升级前留下的行、以及升级后还没重启的
+Worker 都会显示 `—`。界面把 `NULL` 一律渲染成 `—`（未知），**绝不渲染成 `0`**——
+`0` 会被读成「CPU 空闲 / 临时盘已满」，这正是本项目反复踩过的假安心。表尾的统计行会说明本页
+「至少上报过一项资源」的台数。
+
+### `@pureadmin/table` 的自定义列必须写 `slot`
+
+`@pureadmin/table@3.3.0` 只按列定义里的 `slot` 字段取内容插槽（`dist/index.es.js`：
+`s ? t[s]?.() : void 0`，`s` 即 `column.slot`）。**没有 `slot` 时不会回退到与 `prop` 同名的插槽**，
+插槽模板被整体忽略、单元格退回裸 `row[prop]` 文本；`typecheck`/`build` 都发现不了。
+新增或改列时，凡是有 `<template #xxx="{ row }">` 的列都要同时写 `slot: "xxx"`
+（`jobs/detail.vue`、`workers/index.vue` 已按此补齐）。
 
 接口约定：业务接口是纯 REST 对象（错误体 `{"detail": "..."}`），列表接口返回**裸数组、没有总数**，
 所以所有分页都是窗口式「上一页 / 下一页」（本页不足 `limit` 即视为末段）或游标式
@@ -88,14 +116,23 @@ cd ../web && pnpm dev
 
 **待合流复核**（契约按后端约定先行实现，当前运行的后端实例还没有这些端点）：
 `POST /api/login` 等认证接口、`GET /api/system/overview`、`POST /api/system/maintenance`、
-`GET /api/jobs/{id}/files?status=`（状态筛选下推到服务端）、`POST /api/jobs/{id}/files/retry-failed`、
+`GET /api/jobs/{id}/files?status=`（状态筛选下推到服务端，已在主仓 `routes_jobs.py:66-76` 源码核对）、
+`POST /api/jobs/{id}/files/retry-failed`、
+`GET /api/jobs/{id}/files/{task_id}/attempts`（M2c Task 3，按 `list[FileTaskAttemptRead]`
+先行对接，界面在接口缺失时显示 `HTTP 404` 原文而不是空表）、
 `python -m scripts.seed_admin` 的确切命令与密码来源。
+
+Worker 资源四列同样按 M2c Task 4 的约定对接：`WorkerRead` 的字段名与可空性已在
+`service/src/api/v1/schemas.py:130-144` 源码核对，但**写入方与实测值尚未验证**——
+需要升级到 Task 4 的 Worker 并重启后，页面上才会出现真实数字。
 
 ## 验证口径
 
 质量门槛是 `pnpm typecheck` 与 `pnpm build`。本项目的开发环境里内置浏览器是一个隐藏页
 （截图失败、`innerWidth` 为 0、`requestAnimationFrame` 冻结），**没有做过任何人工视觉确认**，
 因此上述命令只能证明类型与产物可构建，不能证明每个界面渲染正确。
+M2c Task 5 的尝试历史抽屉、Worker 资源列同样只过了这两道门；`@pureadmin/table` 的
+`slot` 约定（见上）是源码核对 + Node 侧插槽归一化行为验证的结论，也不是界面截图结论。
 
 后端接口清单见 `service/README.md`。
 
