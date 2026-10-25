@@ -468,7 +468,7 @@ git commit -m "feat: 添加 LogHarvest 接口客户端与 SSE 进度解析"
 - Consumes: Task 3 的 `listJobs`、`getJob`、`listJobFiles`、`cancelJob`、`retryFailedFiles`、`streamJobProgress`；`listDataSources`/`listRuleSets`（Task 5 提供，本任务先用已实现的 `/data-sources`、`/rule-sets` 列表函数——若尚未存在，就在本任务补进 `logharvest.ts`）
 - Produces: 路由 `/logharvest/jobs`、`/logharvest/jobs/:id`
 
-- [ ] **Step 1: 注册路由**
+- [x] **Step 1: 注册路由**
 
 Create `web/src/router/modules/logharvest.ts`（照 `home.ts` 的结构，`component: Layout`，子路由懒加载）:
 
@@ -501,15 +501,15 @@ const LogHarvest = {
 export default LogHarvest;
 ```
 
-- [ ] **Step 2: 作业列表**
+- [x] **Step 2: 作业列表**
 
 `views/logharvest/jobs/index.vue` 用 `@pureadmin/table`：列 = `id`、`name`、`status`（tag 着色）、`total_files`、`total_bytes`（GB 保留两位）、`created_at`、操作（详情/取消）。服务端分页绑定 `limit`/`offset`；顶部提供"新建作业"按钮与状态筛选。终态作业（`succeeded|partial|failed|cancelled`）的取消按钮禁用。
 
-- [ ] **Step 3: 新建作业对话框**
+- [x] **Step 3: 新建作业对话框**
 
 `create-dialog.vue` 表单字段严格对应 `POST /api/jobs`：`name`、`data_source_id`（下拉，取 `/data-sources`）、`source_path`、`rule_set_id`（下拉，取 `/rule-sets`）、`file_filter`（`recursive` 开关、`max_depth` 数字 1–20、`max_files` 数字 1–20000）。提交时带 `Idempotency-Key` 请求头（前端生成 `crypto.randomUUID()`，同一次提交失败重试用同一个值）。`400`/`409`/`422` 分别提示"路径不合法"、"幂等冲突：请求内容已变更"、"参数校验失败"，文案来自后端 `detail`。
 
-- [ ] **Step 4: 详情 + SSE 进度**
+- [x] **Step 4: 详情 + SSE 进度**
 
 `detail.vue`：
 - 头部：作业状态、`total_files`/`total_bytes`、开始/结束时间、错误。
@@ -519,7 +519,7 @@ export default LogHarvest;
 - 生命周期：`onMounted` 起流，`onBeforeUnmount` 调 `controller.abort()`；作业进入终态时后端会自己结束流，前端捕获 `done` 后停止 loading。
 - 失败降级：`streamJobProgress` 抛错时提示并回退到轮询 `getJob`（每 5 秒一次），不要白屏。
 
-- [ ] **Step 5: 验证与提交**
+- [x] **Step 5: 验证与提交**
 
 ```bash
 cd /e/GitHub/think/web && pnpm typecheck 2>&1 | tail -10

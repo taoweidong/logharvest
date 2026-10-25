@@ -1,10 +1,12 @@
 import { http } from "@/utils/http";
 import type {
+  DataSource,
   DrainVersionResult,
   FileTask,
   Job,
   JobCreatePayload,
   Match,
+  RuleSet,
   SystemStatus,
   WorkerActionRecord,
   WorkerInfo
@@ -56,6 +58,14 @@ export const cancelJob = (id: number) =>
   http.request<Job>("post", `/jobs/${id}/cancel`);
 
 /**
+ * 重试作业内全部失败的文件任务（把 `failed` 重置回 `pending` 等待 Worker 领取）。
+ * 契约：`POST /api/jobs/{id}/files/retry-failed` → `{"retried": n}`。
+ * 该端点由后端 M2a 并行轨道补充实现，前端按其约定先行对接。
+ */
+export const retryFailedFiles = (id: number) =>
+  http.request<{ retried: number }>("post", `/jobs/${id}/files/retry-failed`);
+
+/**
  * 命中结果查询（游标分页）。
  * 后端约束：必须给 `job_id`，或同时给 `created_from` + `created_to`；
  * `created_before` + `id_before` 必须成对提供（取上一页最后一行的 `created_at` 与 `id`）；
@@ -80,6 +90,17 @@ export const listMatches = (params: MatchQuery) =>
 /** 系统状态（文件任务计数、最老 pending 等待秒数、在线 Worker 数） */
 export const systemStatus = () =>
   http.request<SystemStatus>("get", "/system/status");
+
+/**
+ * 数据源下拉（作业创建对话框用）。
+ * 后端为裸数组 + `limit`/`offset`；这里取一页 500 条，LogHarvest 的数据源数量是个位数。
+ */
+export const listDataSources = (params: ListParams = { limit: 500, offset: 0 }) =>
+  http.request<DataSource[]>("get", "/data-sources", { params });
+
+/** 规则集轻量列表（不含 `config`），同名只会有多个版本 */
+export const listRuleSets = (params: ListParams = { limit: 500, offset: 0 }) =>
+  http.request<RuleSet[]>("get", "/rule-sets", { params });
 
 /** Worker 列表（`limit` 上限 200） */
 export const listWorkers = (params: ListParams = {}) =>

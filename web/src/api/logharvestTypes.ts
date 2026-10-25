@@ -116,6 +116,80 @@ export type SystemStatus = {
   workers_online: number;
 };
 
+/** `DataSourceRead`（service/src/api/v1/schemas.py） */
+export type DataSource = {
+  id: number;
+  name: string;
+  /** 后端当前固定为 `mount`（企业磁盘挂载点） */
+  type: string;
+  root_path: string;
+  read_only: boolean;
+  copy_to_local: boolean;
+  enabled: boolean;
+  description: string;
+  created_at: string;
+};
+
+/** `RuleSetRead`：列表接口不返回 `config` 与 `created_by` */
+export type RuleSet = {
+  id: number;
+  name: string;
+  version: number;
+  created_at: string;
+};
+
+/** `RuleSetDetailRead`：详情接口才带完整配置与创建者 */
+export type RuleSetDetail = RuleSet & {
+  config: RuleSetConfig;
+  created_by: string;
+};
+
+/** 与后端 `src/domain/rules/models.py` 的 `RuleSetConfig` 对齐 */
+export type RuleSetConfig = {
+  name: string;
+  file_glob: string;
+  encoding: string;
+  fallback_encoding: string;
+  rules: Rule[];
+};
+
+export type Rule = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  severity: string;
+  tags: string[];
+  match: KeywordMatch | RegexMatch;
+  threshold: Threshold | null;
+};
+
+export type KeywordMatch = {
+  type: "keyword";
+  any: string[];
+  all: string[];
+  case_sensitive: boolean;
+};
+
+export type RegexMatch = {
+  type: "regex";
+  pattern: string;
+  flags: string;
+  timeout_ms: number;
+};
+
+export type Threshold = {
+  field: string;
+  op: "gt" | "gte" | "lt" | "lte" | "eq";
+  value: string | number;
+};
+
+/** `POST /api/data-sources/{id}/test` */
+export type DataSourceTestResult = {
+  exists: boolean;
+  is_dir: boolean;
+  readable: boolean;
+};
+
 /** Worker 管理写接口的返回（drain / resume 共用） */
 export type WorkerActionRecord = {
   id: string;
