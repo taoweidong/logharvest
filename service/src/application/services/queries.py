@@ -4,7 +4,7 @@ from typing import Any
 from sqlalchemy import and_, func, or_
 from sqlmodel import Session, select
 
-from src.domain.models.entities import FileTask, Job, Match, Worker, utcnow
+from src.domain.models.entities import FileTask, FileTaskAttempt, Job, Match, Worker, utcnow
 
 # Workers that still report in. ``offline`` rows are historical and are never
 # counted as online, but they stay in the version distribution.
@@ -87,6 +87,20 @@ def list_matches(
 
 def list_workers(session: Session, limit: int = 50, offset: int = 0) -> list[Worker]:
     statement = select(Worker).order_by(Worker.id).offset(offset).limit(limit)
+    return list(session.exec(statement).all())
+
+
+def list_task_attempts(session: Session, job_id: int, task_id: int) -> list[FileTaskAttempt]:
+    """One file task's attempt history, or ``[]`` when the task does not belong
+    to that job（调用方据归属给 404，避免跨作业读到别人的重试记录）。"""
+    task = session.get(FileTask, task_id)
+    if task is None or task.job_id != job_id:
+        return []
+    statement = (
+        select(FileTaskAttempt)
+        .where(FileTaskAttempt.file_task_id == task_id)
+        .order_by(FileTaskAttempt.attempt_no)
+    )
     return list(session.exec(statement).all())
 
 

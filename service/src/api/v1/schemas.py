@@ -128,6 +128,20 @@ class FileTaskRead(BaseModel):
     error: str | None
 
 
+class FileTaskAttemptRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    file_task_id: int
+    attempt_no: int
+    worker_id: str
+    worker_version: str
+    status: str
+    started_at: datetime
+    finished_at: datetime | None
+    processed_lines: int
+    matched_rows: int
+    error: str | None
+
+
 class MatchRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int

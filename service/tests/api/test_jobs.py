@@ -8,7 +8,7 @@ from src.application.services import jobs as jobs_service
 from src.config.settings import settings
 from src.domain import source_guard
 from src.domain.archive.models import ScanLimitError
-from src.domain.models.entities import FileTask, Job, Worker
+from src.domain.models.entities import FileTask, FileTaskAttempt, Job, Worker
 from src.domain.source_guard import UNKNOWN, WRITABLE
 
 
@@ -728,3 +728,82 @@ def test_retry_failed_reports_tasks_left_beyond_the_batch(client, auth_headers, 
     response = client.post(f"/api/jobs/{job_id}/files/retry-failed", headers=auth_headers)
 
     assert response.json() == {"retried": 200, "remaining_failed": 1}
+
+
+def _task_id_of(session, job_id: int) -> int:
+    return session.exec(select(FileTask).where(FileTask.job_id == job_id)).one().id
+
+
+def test_task_attempts_are_returned_in_order_scoped_to_the_job(
+    client, auth_headers, session
+) -> None:
+    job_id = _seed_job_with_tasks(session, [("failed", "a.zip")])
+    task_id = _task_id_of(session, job_id)
+    session.add_all(
+        [
+            FileTaskAttempt(
+                file_task_id=task_id,
+                attempt_no=2,
+                worker_id="w1",
+                worker_version="0.1.0",
+                status="timeout",
+                error="worker heartbeat timeout",
+            ),
+            FileTaskAttempt(
+                file_task_id=task_id,
+                attempt_no=1,
+                worker_id="w1",
+                worker_version="0.1.0",
+                status="failed",
+                error="read timeout",
+            ),
+        ]
+    )
+    session.commit()
+
+    body = client.get(f"/api/jobs/{job_id}/files/{task_id}/attempts", headers=auth_headers).json()
+
+    assert [item["attempt_no"] for item in body] == [1, 2]
+    assert [item["status"] for item in body] == ["failed", "timeout"]
+    assert body[0]["worker_id"] == "w1"
+    assert "file_task_id" in body[0]
+
+
+def test_attempts_of_other_job_task_is_404(client, auth_headers, session) -> None:
+    """尝试历史按作业隔离：跨作业访问别人的重试记录必须是 404，不是空列表。"""
+    job_a = _seed_job_with_tasks(session, [("failed", "a.zip")])
+    job_b = _seed_job_with_tasks(session, [("failed", "b.zip")])
+    task_of_b = _task_id_of(session, job_b)
+
+    assert (
+        client.get(
+            f"/api/jobs/{job_a}/files/{task_of_b}/attempts", headers=auth_headers
+        ).status_code
+        == 404
+    )
+
+
+def test_attempts_of_task_without_history_returns_empty_list(client, auth_headers, session) -> None:
+    """任务存在、属于该作业、还没跑过 → 200 []，不能误报 404。"""
+    job_id = _seed_job_with_tasks(session, [("pending", "a.zip")])
+    task_id = _task_id_of(session, job_id)
+
+    response = client.get(f"/api/jobs/{job_id}/files/{task_id}/attempts", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_attempts_of_missing_job_or_task_is_404(client, auth_headers, session) -> None:
+    job_id = _seed_job_with_tasks(session, [("pending", "a.zip")])
+
+    assert client.get("/api/jobs/9999/files/1/attempts", headers=auth_headers).status_code == 404
+    missing_task = client.get(f"/api/jobs/{job_id}/files/9999/attempts", headers=auth_headers)
+    assert missing_task.status_code == 404
+
+
+def test_attempts_requires_admin(client, auth_headers, session) -> None:
+    job_id = _seed_job_with_tasks(session, [("failed", "a.zip")])
+    task_id = _task_id_of(session, job_id)
+
+    assert client.get(f"/api/jobs/{job_id}/files/{task_id}/attempts").status_code == 401
