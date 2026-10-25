@@ -63,12 +63,21 @@ const onLogin = async (formEl: FormInstance | undefined) => {
           // 菜单与路由全部前端静态定义，这里只是把本地路由表装载进 router
           await initRouter();
           disabled.value = true;
-          router.push(getTopMenu(true).path).then(() => {
+          // 支持 /login?redirect=xxx 回跳（守卫在鉴权失败时写入），否则进首个菜单
+          const redirect = router.currentRoute.value.query?.redirect as
+            | string
+            | undefined;
+          const target = redirect
+            ? decodeURIComponent(redirect)
+            : getTopMenu(true).path;
+          router.push(target).then(() => {
             message(t("login.pureLoginSuccess"), { type: "success" });
           });
         })
-        .catch(_err => {
-          message(t("login.pureLoginFail"), { type: "error" });
+        .catch((err: unknown) => {
+          // 后端 401 返回 {"detail": "..."}，store 已把它放进 Error.message
+          const detail = err instanceof Error ? err.message : "";
+          message(detail || t("login.pureLoginFail"), { type: "error" });
         })
         .finally(() => {
           disabled.value = false;

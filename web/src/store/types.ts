@@ -44,8 +44,6 @@ export type userType = {
   roles?: Array<string>;
   /** 按钮级别权限（基于菜单name） */
   permissions?: Array<string>;
-  verifyCode?: string;
-  currentPage?: number;
   isRemembered?: boolean;
   loginDay?: number;
 };

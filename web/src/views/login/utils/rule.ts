@@ -1,113 +1,20 @@
 import { reactive } from "vue";
-import { isPhone } from "@pureadmin/utils";
 import type { FormRules } from "element-plus";
 import { $t, transformI18n } from "@/plugins/i18n";
-import { useUserStoreHook } from "@/store/modules/user";
 
-/** 6位数字验证码正则 */
-export const REGEXP_SIX = /^\d{6}$/;
-
-/** 密码正则（密码格式应为8-18位数字、字母、符号的任意两种组合） */
-export const REGEXP_PWD =
-  /^(?![0-9]+$)(?![a-z]+$)(?![A-Z]+$)(?!([^(0-9a-zA-Z)]|[()])+$)(?!^.*[\u4E00-\u9FA5].*$)([^(0-9a-zA-Z)]|[()]|[a-z]|[A-Z]|[0-9]){8,18}$/;
-
-/** 是否跳过验证码校验（开发环境配置） */
-const skipCaptcha = import.meta.env.VITE_SKIP_CAPTCHA === "true";
-
-/** 登录校验 */
+/**
+ * 登录校验。
+ *
+ * 只校验“必填”：密码强度与格式由后端（M2a 的 JWT 登录）判定，
+ * 前端不再复制基座的密码正则与验证码规则，避免把管理员种下的
+ * 合法密码挡在表单里。
+ */
 const loginRules = reactive<FormRules>({
-  password: [
+  username: [
     {
       validator: (rule, value, callback) => {
-        if (value === "") {
-          callback(new Error(transformI18n($t("login.purePassWordReg"))));
-        } else if (!REGEXP_PWD.test(value)) {
-          callback(new Error(transformI18n($t("login.purePassWordRuleReg"))));
-        } else {
-          callback();
-        }
-      },
-      trigger: "blur"
-    }
-  ],
-  verifyCode: [
-    {
-      validator: (rule, value, callback) => {
-        // 开发环境跳过验证码校验
-        if (skipCaptcha) {
-          callback();
-          return;
-        }
-        if (value === "") {
-          callback(new Error(transformI18n($t("login.pureVerifyCodeReg"))));
-        } else if (useUserStoreHook().verifyCode !== value) {
-          callback(
-            new Error(transformI18n($t("login.pureVerifyCodeCorrectReg")))
-          );
-        } else {
-          callback();
-        }
-      },
-      trigger: "blur"
-    }
-  ]
-});
-
-/** 手机登录校验 */
-const phoneRules = reactive<FormRules>({
-  phone: [
-    {
-      validator: (rule, value, callback) => {
-        if (value === "") {
-          callback(new Error(transformI18n($t("login.purePhoneReg"))));
-        } else if (!isPhone(value)) {
-          callback(new Error(transformI18n($t("login.purePhoneCorrectReg"))));
-        } else {
-          callback();
-        }
-      },
-      trigger: "blur"
-    }
-  ],
-  verifyCode: [
-    {
-      validator: (rule, value, callback) => {
-        if (value === "") {
-          callback(new Error(transformI18n($t("login.pureVerifyCodeReg"))));
-        } else if (!REGEXP_SIX.test(value)) {
-          callback(new Error(transformI18n($t("login.pureVerifyCodeSixReg"))));
-        } else {
-          callback();
-        }
-      },
-      trigger: "blur"
-    }
-  ]
-});
-
-/** 忘记密码校验 */
-const updateRules = reactive<FormRules>({
-  phone: [
-    {
-      validator: (rule, value, callback) => {
-        if (value === "") {
-          callback(new Error(transformI18n($t("login.purePhoneReg"))));
-        } else if (!isPhone(value)) {
-          callback(new Error(transformI18n($t("login.purePhoneCorrectReg"))));
-        } else {
-          callback();
-        }
-      },
-      trigger: "blur"
-    }
-  ],
-  verifyCode: [
-    {
-      validator: (rule, value, callback) => {
-        if (value === "") {
-          callback(new Error(transformI18n($t("login.pureVerifyCodeReg"))));
-        } else if (!REGEXP_SIX.test(value)) {
-          callback(new Error(transformI18n($t("login.pureVerifyCodeSixReg"))));
+        if (value === "" || value === null || value === undefined) {
+          callback(new Error(transformI18n($t("login.pureUsernameReg"))));
         } else {
           callback();
         }
@@ -120,8 +27,6 @@ const updateRules = reactive<FormRules>({
       validator: (rule, value, callback) => {
         if (value === "") {
           callback(new Error(transformI18n($t("login.purePassWordReg"))));
-        } else if (!REGEXP_PWD.test(value)) {
-          callback(new Error(transformI18n($t("login.purePassWordRuleReg"))));
         } else {
           callback();
         }
@@ -131,4 +36,4 @@ const updateRules = reactive<FormRules>({
   ]
 });
 
-export { loginRules, phoneRules, updateRules };
+export { loginRules };

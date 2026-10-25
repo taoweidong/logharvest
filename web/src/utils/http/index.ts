@@ -17,8 +17,9 @@ import { useUserStoreHook } from "@/store/modules/user";
 
 // 相关配置请参考：www.axios-js.com/zh-cn/docs/#axios-request-config-1
 const defaultConfig: AxiosRequestConfig = {
-  // API 基础路径，所有请求会自动添加此前缀
-  baseURL: "/api/system",
+  // API 基础路径：认证接口为 /api/login 等（{code,message,data} 信封），
+  // 业务接口为 /api/jobs、/api/matches 等（纯 REST 对象，错误为 {detail}）
+  baseURL: "/api",
   // 请求超时时间
   timeout: 10000,
   headers: {

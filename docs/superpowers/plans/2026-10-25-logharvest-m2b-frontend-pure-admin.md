@@ -134,7 +134,7 @@ cd /e/GitHub/think/web && pnpm typecheck 2>&1 | tail -20
 ```
 Expected: typecheck 无错误；dev server 返回 `200`；`platform-config.json` 可取到 JSON。任何 typecheck 报错都必须在此任务内修掉（多半是 Step 3 的悬空 import），不要留给后续任务。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add web
@@ -162,7 +162,7 @@ git commit -m "feat: 移植 vue-pure-admin 框架层为 LogHarvest 前端骨架"
   - `POST /api/logout` → `200 {"code":0,...,"data":null}`
 - Produces: `login(username, password): Promise<UserInfo>`、`PureHttp` 在业务接口上返回原始 JSON（不套信封）
 
-- [ ] **Step 1: 改 baseURL 与认证接口路径**
+- [x] **Step 1: 改 baseURL 与认证接口路径**
 
 Modify `web/src/utils/http/index.ts`：`baseURL: "/api/system"` → `baseURL: "/api"`。保留 `whiteList = ["/refresh-token", "/login"]`、`formatToken` 注入 `Authorization: Bearer <accessToken>`、以及 401 → `logOut()` + 跳 `/login` 的处理。
 
@@ -206,21 +206,21 @@ export const getAsyncRoutes = () => http.request<Envelope<unknown[]>>("get", "/a
 export const logout = () => http.request<Envelope<null>>("post", "/logout");
 ```
 
-- [ ] **Step 2: store 适配新响应**
+- [x] **Step 2: store 适配新响应**
 
 Modify `web/src/store/modules/user.ts` 的 `loginIn`：保留 `data.code === 0` 作为成功闸门，其余字段按 Step 1 的 `LoginData` 读写（`accessToken`/`refreshToken`/`expires`/`roles`/`permissions`）；删除对 `data.data.avatar` 之外不存在字段的引用；`setToken(data.data)` 仍写 `authorized-token` cookie（`expires` 是 epoch ms，与 `utils/auth.ts` 现有实现一致）。
 登录失败时后端返回 HTTP 401 + `{"detail": "..."}`：把 `detail` 作为提示文案（`createMessage`），不要显示 `message: undefined`。
 
 Modify `web/src/store/modules/permission.ts` + `web/src/router/index.ts`：不再请求 `getAsyncRoutes()` 合并路由，`handleAsyncRoutes` 路径改为直接返回 `filterAsyncRoutes(routes)` 的静态结果（保留函数签名以免 `layout` 调用点崩）；`getAsyncRoutes` 只在 `permission` store 里保留导出但不再被 `initRouter` 调用。这样菜单完全来自 `src/router/modules/*.ts`。
 
-- [ ] **Step 3: 登录页只留账号密码**
+- [x] **Step 3: 登录页只留账号密码**
 
 Modify `web/src/views/login/index.vue`：只保留用户名/密码表单与登录按钮，删除验证码、手机/扫码/注册 tab 与 `utils/verifyCode.ts` 的引用；`web/src/views/login/utils/static.ts` 里删掉不再使用的 tab 配置项。提交表单调用 Step 1 的 `login()`，成功后 `router.push(decodeURIComponent(...)) || "/logharvest/jobs"`。
 
 Run: `cd /e/GitHub/think/web && pnpm typecheck 2>&1 | tail -20`
 Expected: 无错误
 
-- [ ] **Step 4: 端到端验证（真后端）**
+- [x] **Step 4: 端到端验证（真后端）**
 
 ```bash
 cd /e/GitHub/think/service && LOGHARVEST_DATABASE_URL="sqlite:///./web-dev.db" uv run --python 3.12 -m scripts.seed_admin
@@ -233,7 +233,7 @@ Expected: 通过 vite 代理拿到 `{"code":0,...,"data":{"accessToken":...}}`�
 
 注：本环境的内置浏览器是隐藏页，截图与几何不可信，因此**不做视觉确认**，并在最终报告里写明这一点。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add web
