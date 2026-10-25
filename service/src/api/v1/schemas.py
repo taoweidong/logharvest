@@ -79,6 +79,16 @@ class JobRead(BaseModel):
     error: str | None
 
 
+FileTaskStatus = Literal[
+    "pending",
+    "running",
+    "succeeded",
+    "partial",
+    "failed",
+    "cancelled",
+]
+
+
 class FileTaskRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -138,3 +148,24 @@ class SystemStatusRead(BaseModel):
     file_tasks: dict[str, int]
     pending_oldest_seconds: float | None
     workers_online: int
+
+
+class WorkerOverviewRead(BaseModel):
+    # ``online`` 只统计仍在心跳的 Worker（online/busy/draining），
+    # ``by_version`` 含 offline 行，升级时用于确认旧版本是否真的清零。
+    online: int
+    by_version: dict[str, int]
+
+
+class SystemOverviewRead(BaseModel):
+    jobs: dict[str, int]
+    file_tasks: dict[str, int]
+    matches_24h: int
+    workers: WorkerOverviewRead
+    oldest_pending_seconds: int | None
+
+
+class MaintenanceRunRead(BaseModel):
+    recovered: int
+    workers_demoted: int
+    jobs_finalized: int

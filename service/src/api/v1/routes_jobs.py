@@ -2,7 +2,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Response
 from sqlmodel import Session
 
 from src.api.dependencies import AdminDep, SessionDep
-from src.api.v1.schemas import FileTaskRead, JobCreate, JobRead
+from src.api.v1.schemas import FileTaskRead, FileTaskStatus, JobCreate, JobRead
 from src.application.services.jobs import (
     TERMINAL_JOB_STATUSES,
     cancel_job,
@@ -69,11 +69,12 @@ def get_job_files(
     job_id: int,
     session: SessionDep,
     _: AdminDep,
+    status: FileTaskStatus | None = None,
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
     get_job_or_404(session, job_id)
-    return list_file_tasks(session, job_id, limit=limit, offset=offset)
+    return list_file_tasks(session, job_id, limit=limit, offset=offset, status=status)
 
 
 @router.post("/{job_id}/cancel", response_model=JobRead)

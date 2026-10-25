@@ -1309,7 +1309,7 @@ git commit -m "feat: 接入 Alembic 迁移与应用启动建表"
   - `PostgresTaskRepository.complete(..., retryable: bool = True) -> None`
   - `retry_failed_tasks(session, job_id) -> int`
 
-- [ ] **Step 1: 写失败测试（取消检查与永久失败）**
+- [x] **Step 1: 写失败测试（取消检查与永久失败）**
 
 追加到 `service/tests/application/worker/test_processor.py`:
 
@@ -1365,7 +1365,7 @@ def test_size_change_is_permanent_failure(tmp_path: Path) -> None:
 Run: `cd service && uv run --python 3.12 pytest tests/application/worker/test_processor.py -q`
 Expected: FAIL（`cancel_check` 未知参数 / `PermanentTaskFailure` 未定义）
 
-- [ ] **Step 2: 实现处理器语义**
+- [x] **Step 2: 实现处理器语义**
 
 Modify `service/src/application/worker/processor.py`：新增异常与构造参数，并在复制前后各加一道校验。
 
@@ -1444,7 +1444,7 @@ class PermanentTaskFailure(RuntimeError):
 
 （`LeaseLost` 仍原样向上抛，不写终态。）
 
-- [ ] **Step 3: 队列侧支持取消判定、不可重试与领取字段**
+- [x] **Step 3: 队列侧支持取消判定、不可重试与领取字段**
 
 Modify `service/src/application/worker/ports.py`：`ClaimedTask` 追加
 
@@ -1510,7 +1510,7 @@ def is_job_cancelled(self, job_id: int) -> bool:
         return bool(conn.execute(text(JOB_CANCELLED_SQL), {"job_id": job_id}).scalar_one_or_none())
 ```
 
-- [ ] **Step 4: Worker 循环接线 + 手动重试接口**
+- [x] **Step 4: Worker 循环接线 + 手动重试接口**
 
 Modify `service/src/worker/main.py`：给 `TaskProcessor` 传 `cancel_check`。
 
@@ -1558,7 +1558,7 @@ def retry_failed(job_id: int, session: SessionDep, admin: AdminDep):
     return {"retried": retry_failed_tasks(session, job_id)}
 ```
 
-- [ ] **Step 5: 测试**
+- [x] **Step 5: 测试**
 
 追加到 `service/tests/api/test_jobs.py`:
 
@@ -1633,7 +1633,7 @@ Expected: passed
 Run: `cd service && uv run --python 3.12 pytest -q`
 Expected: 全量绿
 
-- [ ] **Step 6: Lint 与提交**
+- [x] **Step 6: Lint 与提交**
 
 ```bash
 cd service && uv run --python 3.12 ruff check src tests && uv run --python 3.12 ruff format src tests
@@ -1660,7 +1660,7 @@ git commit -m "feat: 补齐取消检查、永久失败判定与失败任务手�
   - `GET /api/system/overview` → `{"jobs": {status: count}, "file_tasks": {status: count}, "matches_24h": int, "workers": {"online": int, "by_version": {version: count}}, "oldest_pending_seconds": int | None}`
   - `GET /api/jobs/{id}/files?status=`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加 `service/tests/api/test_system.py`:
 
@@ -1706,7 +1706,23 @@ def test_job_files_can_be_filtered_by_status(client, auth_headers, session):
 Run: `cd service && uv run --python 3.12 pytest tests/api/test_system.py -q`
 Expected: FAIL（404）
 
-- [ ] **Step 2: 维护服务**
+**实现落定后的偏差说明（与代码一致，保留备查）：**
+- `GET /api/jobs/{id}/files` 保持既有**纯列表**响应，不改成 `{items,total,limit,offset}`：全局约束要求业务接口不加信封、
+  且 M1a/M1b 已有断言（`files.json()[0]["file_name"]`）依赖纯列表，本计划 Self-Review 第 3 条也写明"与既有断言不冲突"。
+  因此示例里的 `pending["items"]` 落地为 `pending.json()`；`status` 与 `attempts` 已在 `FileTaskRead` 中，无需新增字段。
+  分页信封若统一引入，应作为独立任务覆盖所有业务列表，而不是只改这一个端点。
+- `system_overview` 的查询实现放在 `src/application/services/queries.py`（与 `system_status`、`list_*` 同一层），
+  路由只做参数与依赖，遵循既有分层；`workers.online` 用 `ONLINE_WORKER_STATUSES`（online/busy/draining），
+  `by_version` 含 offline 行，与示例中 `{"0.1.0": 2}` 的语义一致。
+- 概览响应加了 `SystemOverviewRead`/`MaintenanceRunRead`/`WorkerOverviewRead` 三个 schema（Task 5 文件清单里的
+  `schemas.py`），给前端一个显式契约。
+- 维护端点在内存 SQLite 上真实执行 `mark_dead_workers` 与 `finalize_finished_jobs`；`recover_stale` 的
+  `SKIP LOCKED`/`make_interval` 在 SQLite 上是语法错误（已实测：`sqlite3.OperationalError near ">"`），
+  故测试里只把这一步替换为计数桩，SQL 仍由 `tests/infrastructure/test_task_queue.py` 的形状断言覆盖，
+  **未在 PostgreSQL 上验证过**。
+- 状态筛选测试用 `tests/api/test_jobs.py` 里已有的 `_seed_job_with_tasks`，不新建 fixture。
+
+- [x] **Step 2: 维护服务**
 
 Create `service/src/application/services/maintenance.py`:
 
@@ -1788,7 +1804,7 @@ def system_overview(session: SessionDep, _: AdminDep):
 
 （补 `Counter`、`timedelta`、`utcnow`、`Job`/`FileTask`/`Match`/`Worker`、`func`/`select` 的导入。）
 
-- [ ] **Step 3: 文件任务状态筛选**
+- [x] **Step 3: 文件任务状态筛选**
 
 Modify `service/src/api/v1/routes_jobs.py` 的 `GET /{job_id}/files`：新增查询参数并下推到服务层。
 
