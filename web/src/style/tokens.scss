@@ -1,0 +1,111 @@
+/* ============================================================
+ * 全局设计令牌（Design Tokens）
+ *
+ * 收敛四类规范：间距 / 动效 / 圆角阴影 / 层级。
+ * 以 CSS 变量形式定义，天然全局可用，无需在各文件 @use。
+ * 修改规范时只改本文件，避免同类组件样式二次分叉。
+ * ============================================================ */
+
+:root {
+  /* ---------- 1. 间距刻度（4px 基准） ---------- */
+  --pure-space-1: 4px;
+  --pure-space-2: 8px;
+  --pure-space-3: 12px;
+  --pure-space-4: 16px;
+  --pure-space-5: 20px;
+  --pure-space-6: 24px;
+  --pure-space-8: 32px;
+
+  /* 语义化间距：搜索表单内边距、表单项下边距、内容区外边距 */
+
+  /*
+   * 横向 32px：沿用 12 个页面中 10 个原本的 `pl-8`；另 2 个是 pl-4(16px) 与
+   * pl-2(8px)。原实现只有左内边距，右侧为 0，搜索按钮会紧贴卡片右边缘，
+   * 这里补齐为左右对称，消除拥挤感。
+   */
+  --pure-search-form-padding-x: var(--pure-space-8);
+  --pure-search-form-padding-y: var(--pure-space-3);
+  --pure-form-item-gap: var(--pure-space-3);
+  --pure-content-margin: var(--pure-space-2);
+
+  /* ---------- 1b. 纵向占满型面板高度 ---------- */
+
+  /*
+   * 左侧树面板（字典类型树 / 用户部门树）此前各写一份
+   * `calc(100vh - 141px)` 与 `calc(100vh - 210px)`，属于复制粘贴的魔法数。
+   * 141px = 顶部导航栏 + 页签栏 + 内容区外边距；210px 再减去面板内的
+   * 搜索框与底部操作按钮。改布局时只需改这两处。
+   */
+  --pure-panel-height: calc(100vh - 141px);
+  --pure-panel-scroll-height: calc(100vh - 210px);
+
+  /* ---------- 2. 动效：时长 ---------- */
+
+  /* 微交互（hover / 按钮 / 图标）：150-220ms */
+  --pure-duration-fast: 0.15s;
+  --pure-duration-base: 0.2s;
+
+  /* 面板 / 弹窗 / 路由切换：200-300ms */
+  --pure-duration-panel: 0.25s;
+  --pure-duration-slow: 0.3s;
+
+  /* ---------- 3. 动效：缓动 ---------- */
+
+  /* 标准曲线：进出通用（Material standard） */
+  --pure-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 强调曲线：进入用，带轻微过冲感 */
+  --pure-ease-emphasized: cubic-bezier(0.7, 0.3, 0.1, 1);
+
+  /* 退出用：加速离场 */
+  --pure-ease-out: cubic-bezier(0, 0, 0.2, 1);
+
+  /* ---------- 4. 圆角 ---------- */
+  --pure-radius-sm: 4px; /* 控件：按钮、输入框、标签 */
+  --pure-radius-md: 6px; /* 容器：卡片、下拉、气泡 */
+  --pure-radius-lg: 8px; /* 大容器：对话框、抽屉 */
+  --pure-radius-full: 50%;
+
+  /* ---------- 5. 阴影（三级，按层级不按场景） ---------- */
+  --pure-shadow-1: 0 1px 2px 0 rgb(0 0 0 / 6%); /* 卡片 / 悬浮 */
+  --pure-shadow-2: 0 2px 8px rgb(0 0 0 / 10%); /* 下拉 / 气泡 */
+  --pure-shadow-3: 0 4px 16px rgb(0 0 0 / 12%); /* 对话框 / 抽屉 */
+
+  /* ---------- 6. 层级（z-index） ---------- */
+  --pure-z-base: 1;
+  --pure-z-sticky: 100;
+  --pure-z-dropdown: 1000;
+  --pure-z-overlay: 2000; /* 遮罩 */
+  --pure-z-modal: 2001; /* 弹窗 / 侧边栏 */
+  --pure-z-popper: 3000; /* tooltip / popconfirm */
+  --pure-z-top: 4000; /* 设置面板等全局浮层 */
+}
+
+/* 深色模式下的阴影需要加强，否则层级感丢失 */
+.dark {
+  --pure-shadow-1: 0 1px 2px 0 rgb(0 0 0 / 30%);
+  --pure-shadow-2: 0 2px 8px rgb(0 0 0 / 40%);
+  --pure-shadow-3: 0 4px 16px rgb(0 0 0 / 50%);
+}
+
+/* ---------- 7. 全局响应式断点 ---------- */
+
+/*
+ * 项目此前业务层响应式覆盖率≈0（仅 3 个 error 页用了 Tailwind 前缀）。
+ * 这里提供统一的断点工具类，供窄屏（手机 / 平板）复用。
+ */
+@media (width <= 768px) {
+  :root {
+    /* 窄屏收紧横向内边距，给搜索控件让出更多宽度 */
+    --pure-search-form-padding-x: var(--pure-space-4);
+    --pure-content-margin: var(--pure-space-1);
+  }
+}
+
+/* 触摸设备：放大可点击区域到 44px 基准（WCAG 2.5.5 / iOS HIG） */
+@media (pointer: coarse) {
+  .pure-touch-target {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
