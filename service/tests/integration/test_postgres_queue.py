@@ -21,6 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
+from src.application.worker.ports import WorkerStats
 from src.domain.models.entities import (
     DataSource,
     FileTask,
@@ -361,13 +362,30 @@ def test_worker_registry_and_dead_worker_demotion(
 ) -> None:
     """ON CONFLICT 注册（含并发预算）与 portable 降级必须在 PG 上真实走通。"""
     repo.register_worker("w-reg", "host-a", "1.0.0")
-    repo.heartbeat_worker("w-reg", "busy", 42)
+    repo.heartbeat_worker(
+        "w-reg",
+        "busy",
+        42,
+        stats=WorkerStats(cpu_percent=12.5, memory_bytes=2048, temp_disk_free_bytes=4096),
+    )
 
     with Session(engine) as session:
         worker = session.get(Worker, "w-reg")
     assert worker.status == "busy"
     assert worker.current_task_id == 42
     assert worker.max_concurrent_copies == 4
+    assert worker.cpu_percent == 12.5
+    assert worker.memory_bytes == 2048
+    assert worker.temp_disk_free_bytes == 4096
+
+    # 不带 stats 的普通心跳不能把已知资源值抹成 NULL。
+    repo.heartbeat_worker("w-reg", "online", None)
+    with Session(engine) as session:
+        worker = session.get(Worker, "w-reg")
+    assert worker.status == "online"
+    assert worker.cpu_percent == 12.5
+    assert worker.memory_bytes == 2048
+    assert worker.temp_disk_free_bytes == 4096
 
     repo.register_worker("w-reg", "host-b", "2.0.0")  # ON CONFLICT 路径
     with Session(engine) as session:

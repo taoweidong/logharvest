@@ -4,7 +4,7 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from src.application.worker.ports import ClaimedTask
+from src.application.worker.ports import ClaimedTask, WorkerStats
 from src.domain.models.entities import utcnow
 
 # Atomic claim: lock one eligible row with SKIP LOCKED, then flip it to running
@@ -202,7 +202,10 @@ WORKER_HEARTBEAT_SQL = """
 UPDATE workers
 SET status = :status,
     current_task_id = :task_id,
-    last_heartbeat = now()
+    cpu_percent = COALESCE(:cpu_percent, cpu_percent),
+    memory_bytes = COALESCE(:memory_bytes, memory_bytes),
+    temp_disk_free_bytes = COALESCE(:temp_disk_free_bytes, temp_disk_free_bytes),
+    last_heartbeat = :last_heartbeat
 WHERE id = :id
 """
 
@@ -338,12 +341,27 @@ class PostgresTaskRepository:
             )
 
     def heartbeat_worker(
-        self, worker_id: str, status: str, current_task_id: int | None = None
+        self,
+        worker_id: str,
+        status: str,
+        current_task_id: int | None = None,
+        stats: WorkerStats | None = None,
     ) -> None:
+        values = stats or WorkerStats()
         with self._engine.begin() as conn:
             conn.execute(
                 text(WORKER_HEARTBEAT_SQL),
-                {"id": worker_id, "status": status, "task_id": current_task_id},
+                {
+                    "id": worker_id,
+                    "status": status,
+                    "task_id": current_task_id,
+                    "cpu_percent": values.cpu_percent,
+                    "memory_bytes": values.memory_bytes,
+                    "temp_disk_free_bytes": values.temp_disk_free_bytes,
+                    # 绑定参数而非 now()：语句保持可移植，SQLite 测试能真实执行；
+                    # 会话时区已在连接层固定为 UTC。
+                    "last_heartbeat": utcnow(),
+                },
             )
 
     def is_draining(self, worker_id: str) -> bool:

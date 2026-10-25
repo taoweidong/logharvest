@@ -50,6 +50,15 @@ class TaskResult:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class WorkerStats:
+    """Resource sample reported with worker heartbeats; absent values stay None."""
+
+    cpu_percent: float | None = None
+    memory_bytes: int | None = None
+    temp_disk_free_bytes: int | None = None
+
+
 class TaskRepository(Protocol):
     def touch(self, task_id: int, attempts: int) -> bool: ...
 

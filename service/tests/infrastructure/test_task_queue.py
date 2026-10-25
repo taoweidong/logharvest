@@ -4,7 +4,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlmodel import Session
 
-from src.application.worker.ports import ClaimedTask
+from src.application.worker.ports import ClaimedTask, WorkerStats
 from src.domain.models.entities import Job, Worker, utcnow
 from src.infrastructure.task_queue import (
     CLAIM_SQL,
@@ -143,6 +143,55 @@ def test_register_worker_records_the_declared_copy_budget() -> None:
     normalized = _normalized(REGISTER_WORKER_SQL)
     assert "MAX_CONCURRENT_COPIES" in normalized
     assert "EXCLUDED.MAX_CONCURRENT_COPIES" in normalized
+
+
+def _seed_worker(engine, worker_id: str) -> None:
+    # register_worker 的 SQL 用了 now()，SQLite 上执行不了；直接建行。
+    with Session(engine) as session:
+        session.add(Worker(id=worker_id, hostname="host", version="0.1.0", status="online"))
+        session.commit()
+
+
+def test_worker_heartbeat_persists_resource_stats(engine) -> None:
+    """列一直在 WorkerRead 里暴露，但此前没有任何写入方。"""
+    _seed_worker(engine, "w-stats")
+    repo = PostgresTaskRepository(engine)
+    repo.heartbeat_worker(
+        "w-stats",
+        "busy",
+        7,
+        stats=WorkerStats(cpu_percent=12.5, memory_bytes=2048, temp_disk_free_bytes=4096),
+    )
+
+    with Session(engine) as session:
+        worker = session.get(Worker, "w-stats")
+
+    assert worker is not None
+    assert worker.cpu_percent == 12.5
+    assert worker.memory_bytes == 2048
+    assert worker.temp_disk_free_bytes == 4096
+    assert worker.current_task_id == 7
+
+
+def test_worker_heartbeat_without_stats_keeps_previous_values(engine) -> None:
+    """不带 stats 的普通心跳不能把已知资源值抹成 NULL。"""
+    _seed_worker(engine, "w-keep")
+    repo = PostgresTaskRepository(engine)
+    repo.heartbeat_worker(
+        "w-keep",
+        "busy",
+        1,
+        stats=WorkerStats(cpu_percent=9.0, memory_bytes=1, temp_disk_free_bytes=2),
+    )
+    repo.heartbeat_worker("w-keep", "online", None)
+
+    with Session(engine) as session:
+        worker = session.get(Worker, "w-keep")
+
+    assert worker.current_task_id is None
+    assert worker.cpu_percent == 9.0
+    assert worker.memory_bytes == 1
+    assert worker.temp_disk_free_bytes == 2
 
 
 def test_mark_dead_workers_demotes_only_silent_live_workers(engine) -> None:

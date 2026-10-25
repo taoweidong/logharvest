@@ -8,7 +8,7 @@ from pathlib import Path
 from threading import Event
 from time import monotonic, time
 
-from src.application.worker.ports import ClaimedTask
+from src.application.worker.ports import ClaimedTask, WorkerStats
 from src.application.worker.processor import LeaseLost, TaskProcessor
 from src.config.settings import settings
 from src.domain.rules.evaluator import CompiledRuleSet, compile_ruleset
@@ -17,6 +17,8 @@ from src.domain.source_guard import POLICY_ENFORCE
 from src.infrastructure.database import engine
 from src.infrastructure.match_writer import PostgresMatchWriter
 from src.infrastructure.task_queue import PostgresTaskRepository
+from src.worker.logging_setup import configure_worker_logging
+from src.worker.metrics import collect_worker_stats
 
 # Copying refreshes the lease at least every processor copy-heartbeat interval
 # (5s by default), so a live worker is never 120s stale. The periodic sweep
@@ -48,6 +50,8 @@ class WorkerRuntime:
         recover_interval_seconds: float = DEFAULT_RECOVER_INTERVAL_SECONDS,
         batch_size: int = 1000,
         nas_read_only_policy: str = POLICY_ENFORCE,
+        collect_stats: Callable[[Path], WorkerStats] | None = None,
+        logger=None,
     ) -> None:
         self._repo = repo
         self._writer = writer
@@ -60,20 +64,41 @@ class WorkerRuntime:
         self._recover_interval_seconds = recover_interval_seconds
         self._batch_size = batch_size
         self._nas_read_only_policy = nas_read_only_policy
+        self._collect_stats = collect_stats
+        self._logger = logger
+
+    def _stats(self) -> WorkerStats | None:
+        """None 表示未注入采集器：轻量 fake 与测试保持零依赖。"""
+        if self._collect_stats is None:
+            return None
+        return self._collect_stats(self._work_dir)
+
+    def _log(self, level: str, event: str, **kwargs) -> None:
+        if self._logger is None:
+            return
+        getattr(self._logger, level)(event, **kwargs)
 
     def run_once(self) -> bool:
         """Claim and process at most one task; return whether work was attempted."""
         if self._repo.is_draining(self._worker_id):
             # Keep the management view in sync without claiming new work.
-            self._repo.heartbeat_worker(self._worker_id, "draining")
+            self._repo.heartbeat_worker(self._worker_id, "draining", stats=self._stats())
             return False
 
         task = self._repo.claim_next(self._worker_id, self._worker_version)
         if task is None:
-            self._repo.heartbeat_worker(self._worker_id, "online")
+            self._repo.heartbeat_worker(self._worker_id, "online", stats=self._stats())
             return False
 
-        self._repo.heartbeat_worker(self._worker_id, "busy", task.id)
+        self._repo.heartbeat_worker(self._worker_id, "busy", task.id, stats=self._stats())
+        self._log(
+            "info",
+            "task_claimed",
+            task_id=task.id,
+            job_id=task.job_id,
+            file=task.file_name,
+            attempt=task.attempts,
+        )
         # 轻量测试替身可能没有 is_job_cancelled；缺失时不传取消检查。
         cancel_check = (
             (lambda: self._repo.is_job_cancelled(task.job_id))
@@ -94,24 +119,51 @@ class WorkerRuntime:
                     # fresh so the management view and the peer dead-worker
                     # sweep do not see a live process as stalled.
                     on_lease_refresh=lambda: self._repo.heartbeat_worker(
-                        self._worker_id, "busy", task.id
+                        self._worker_id, "busy", task.id, stats=self._stats()
                     ),
                 )
             except Exception as exc:  # noqa: BLE001
                 # A broken rule config or work-dir setup must not leave the
                 # claimed task running until stale recovery notices it.
                 self._repo.complete(task.id, task.attempts, "failed", 0, 0, str(exc))
+                self._log(
+                    "error",
+                    "task_failed",
+                    task_id=task.id,
+                    job_id=task.job_id,
+                    status="failed",
+                    error=str(exc),
+                )
                 self._finalize_job(task.job_id)
             else:
                 try:
-                    processor.process(task)
+                    result = processor.process(task)
                 except LeaseLost:
                     # Another worker owns (or recovery returned) the task now.
-                    pass
+                    self._log("warning", "task_lease_lost", task_id=task.id, job_id=task.job_id)
                 else:
+                    self._log(
+                        "info",
+                        "task_finished",
+                        task_id=task.id,
+                        job_id=task.job_id,
+                        status=result.status,
+                        processed_lines=result.processed_lines,
+                        matched_rows=result.matched_rows,
+                    )
+                    if result.status == "failed":
+                        # 永久失败不打断循环，但必须能从日志直接看到原因。
+                        self._log(
+                            "error",
+                            "task_failed",
+                            task_id=task.id,
+                            job_id=task.job_id,
+                            status="failed",
+                            error=result.error,
+                        )
                     self._finalize_job(task.job_id)
         finally:
-            self._repo.heartbeat_worker(self._worker_id, "online")
+            self._repo.heartbeat_worker(self._worker_id, "online", stats=self._stats())
         return True
 
     def run_forever(self, stop_event: Event | None = None) -> None:
@@ -134,7 +186,7 @@ class WorkerRuntime:
                 if not self.run_once():
                     stop.wait(self._poll_seconds)
         finally:
-            self._repo.heartbeat_worker(self._worker_id, "offline")
+            self._repo.heartbeat_worker(self._worker_id, "offline", stats=self._stats())
 
     def _recover_stale(self) -> None:
         """Return tasks abandoned by dead workers before claiming new work.
@@ -202,6 +254,8 @@ def main() -> None:
         poll_seconds=settings.worker_poll_seconds,
         batch_size=settings.matches_batch_size,
         nas_read_only_policy=settings.nas_read_only_policy,
+        collect_stats=collect_worker_stats,
+        logger=configure_worker_logging(worker_id=worker_id),
     )
 
     stop = Event()

@@ -9,7 +9,7 @@ from threading import Event
 import pytest
 
 import src.worker.main as worker_main
-from src.application.worker.ports import ClaimedTask, TaskResult
+from src.application.worker.ports import ClaimedTask, TaskResult, WorkerStats
 from src.application.worker.processor import LeaseLost
 from src.domain.rules.evaluator import compile_ruleset
 from src.domain.rules.models import RuleSetConfig
@@ -42,8 +42,8 @@ class FakeRepo:
             return self.tasks.pop(0)
         return None
 
-    def heartbeat_worker(self, worker_id, status, current_task_id=None):
-        self.worker_heartbeats.append((status, current_task_id))
+    def heartbeat_worker(self, worker_id, status, current_task_id=None, stats=None):
+        self.worker_heartbeats.append((status, current_task_id, stats))
 
     def touch(self, task_id, attempts):
         return True
@@ -133,11 +133,11 @@ def test_run_once_processes_claimed_task(tmp_path):
 
     assert len(writer.written) == 1
     assert repo.completed == [(1, 1, "succeeded", 1, 1, None)]
-    assert repo.worker_heartbeats[0] == ("busy", 1)
-    assert repo.worker_heartbeats[-1] == ("online", None)
+    assert repo.worker_heartbeats[0] == ("busy", 1, None)
+    assert repo.worker_heartbeats[-1] == ("online", None, None)
     # A task that runs for minutes must keep refreshing workers.last_heartbeat,
     # so the peer dead-worker sweep never sees a live process as stalled.
-    assert set(repo.worker_heartbeats[1:-1]) == {("busy", 1)}
+    assert set(repo.worker_heartbeats[1:-1]) == {("busy", 1, None)}
     assert len(repo.worker_heartbeats) > 2
     assert repo.claims == [("w1", "0.1.0")]
     # The completing worker closes the job when it held the last open task.
@@ -193,7 +193,7 @@ def test_run_once_does_not_claim_while_draining(tmp_path):
 
     assert repo.claims == []
     assert repo.completed == []
-    assert repo.worker_heartbeats == [("draining", None)]
+    assert repo.worker_heartbeats == [("draining", None, None)]
     assert writer.written == []
 
 
@@ -203,7 +203,7 @@ def test_run_once_returns_false_when_queue_is_empty(tmp_path):
 
     assert runtime.run_once() is False
 
-    assert repo.worker_heartbeats == [("online", None)]
+    assert repo.worker_heartbeats == [("online", None, None)]
 
 
 def test_run_once_records_failed_task_when_rules_cannot_compile(tmp_path):
@@ -216,7 +216,7 @@ def test_run_once_records_failed_task_when_rules_cannot_compile(tmp_path):
     assert runtime.run_once() is True
 
     assert repo.completed == [(1, 1, "failed", 0, 0, "invalid rule config")]
-    assert repo.worker_heartbeats == [("busy", 1), ("online", None)]
+    assert repo.worker_heartbeats == [("busy", 1, None), ("online", None, None)]
     assert repo.finalized == [2]
 
 
@@ -235,7 +235,7 @@ def test_run_once_continues_after_lease_is_lost(tmp_path, monkeypatch):
     assert runtime.run_once() is True
 
     assert repo.completed == []
-    assert repo.worker_heartbeats == [("busy", 1), ("online", None)]
+    assert repo.worker_heartbeats == [("busy", 1, None), ("online", None, None)]
     # A worker that lost the lease no longer owns the task, so it must not
     # decide the job's outcome.
     assert repo.finalized == []
@@ -273,7 +273,7 @@ def test_run_forever_registers_recovers_and_stops(tmp_path):
     # A process that was SIGKILLed cannot report its own exit.
     assert repo.demoted == [120]
     assert repo.swept == 1
-    assert repo.worker_heartbeats == [("online", None), ("offline", None)]
+    assert repo.worker_heartbeats == [("online", None, None), ("offline", None, None)]
 
 
 def test_run_forever_sweeps_jobs_right_after_recovering_tasks(tmp_path):
@@ -320,7 +320,7 @@ def test_run_forever_marks_worker_offline_when_loop_raises(tmp_path):
     with pytest.raises(RuntimeError, match="claim failed"):
         runtime.run_forever(Event())
 
-    assert repo.worker_heartbeats[-1] == ("offline", None)
+    assert repo.worker_heartbeats[-1] == ("offline", None, None)
 
 
 def test_main_wires_stop_event_and_signals(monkeypatch):
@@ -396,5 +396,78 @@ def test_run_once_refreshes_worker_heartbeat_while_lease_is_held(tmp_path):
 
     assert runtime.run_once() is True
 
-    busy = [beat for beat in repo.worker_heartbeats if beat == ("busy", 1)]
+    busy = [beat for beat in repo.worker_heartbeats if beat[:2] == ("busy", 1)]
     assert len(busy) > 1
+
+
+def test_run_once_forwards_collected_stats_on_heartbeats(tmp_path):
+    """collect_stats 注入后，每次心跳都带上同一份资源采样。"""
+    stats = WorkerStats(cpu_percent=1.5, memory_bytes=10, temp_disk_free_bytes=20)
+    seen_dirs = []
+
+    def fake_collect(work_dir: Path) -> WorkerStats:
+        seen_dirs.append(work_dir)
+        return stats
+
+    repo = FakeRepo([make_task(tmp_path)])
+    runtime = make_runtime(repo, FakeWriter(), tmp_path, collect_stats=fake_collect)
+
+    assert runtime.run_once() is True
+
+    assert seen_dirs
+    assert all(beat[2] == stats for beat in repo.worker_heartbeats)
+
+
+def test_run_once_emits_structured_log_events(tmp_path, monkeypatch):
+    """领取、完成、丢租约三个关键事件都要有结构化日志。"""
+    events = []
+
+    class RecordingLogger:
+        def info(self, event, **kwargs):
+            events.append((event, kwargs))
+
+        def warning(self, event, **kwargs):
+            events.append((event, kwargs))
+
+        def error(self, event, **kwargs):
+            events.append((event, kwargs))
+
+    repo = FakeRepo([make_task(tmp_path)])
+    runtime = make_runtime(repo, FakeWriter(), tmp_path, logger=RecordingLogger())
+
+    assert runtime.run_once() is True
+
+    names = [event for event, _ in events]
+    assert "task_claimed" in names
+    assert "task_finished" in names
+    finished = next(kwargs for event, kwargs in events if event == "task_finished")
+    assert finished["status"] == "succeeded"
+
+
+def test_run_once_logs_lease_loss_as_warning(tmp_path, monkeypatch):
+    events = []
+
+    class RecordingLogger:
+        def info(self, event, **kwargs):
+            events.append((event, "info"))
+
+        def warning(self, event, **kwargs):
+            events.append((event, "warning"))
+
+        def error(self, event, **kwargs):
+            events.append((event, "error"))
+
+    class LeaseLostProcessor:
+        def __init__(self, **kwargs):
+            pass
+
+        def process(self, task):
+            raise LeaseLost("lease lost")
+
+    monkeypatch.setattr(worker_main, "TaskProcessor", LeaseLostProcessor)
+    repo = FakeRepo([make_task(tmp_path)])
+    runtime = make_runtime(repo, FakeWriter(), tmp_path, logger=RecordingLogger())
+
+    assert runtime.run_once() is True
+
+    assert ("task_lease_lost", "warning") in events
