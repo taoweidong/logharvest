@@ -34,18 +34,14 @@ def get_engine() -> Engine:
 
 EngineDep = Annotated[Engine, Depends(get_engine)]
 
-# JWT 未配置时（dev/test）用固定回退密钥，测试与本地开发共享同一密钥；
-# 生产环境通过 settings.jwt_secret_key 强制显式配置。
-DEV_FALLBACK_SECRET = "unit-secret-key-0123456789-abcdef"
-
 _bearer = HTTPBearer(auto_error=False)
 
 
 @lru_cache(maxsize=1)
 def get_token_service() -> TokenService:
-    secret = settings.jwt_secret_key or DEV_FALLBACK_SECRET
+    # settings 已强制 jwt_secret_key 非空且足够长，这里不再有代码内的回退密钥。
     return TokenService(
-        secret_key=secret,
+        secret_key=settings.jwt_secret_key,
         access_minutes=settings.access_token_expire_minutes,
         refresh_days=settings.refresh_token_expire_days,
     )

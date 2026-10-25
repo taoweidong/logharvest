@@ -29,10 +29,14 @@ pnpm build
 cd ../service
 uv sync --python 3.12
 export LOGHARVEST_DATABASE_URL="sqlite:///./web-dev.db"
+#    签名密钥任何环境都必填（含 dev），留空会在启动时直接报错：
+export LOGHARVEST_JWT_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
 #    建表：dev 下 `LOGHARVEST_AUTO_CREATE_TABLES=true` 会在启动时执行 Alembic upgrade head，
 #    也可以手动：
 uv run --python 3.12 alembic upgrade head
+```
 
+```bash
 # 2) 建管理员（密码来自 LOGHARVEST_ADMIN_PASSWORD，至少 8 位；不给会拒绝执行）
 LOGHARVEST_ADMIN_PASSWORD='devpass123' uv run --python 3.12 -m scripts.seed_admin
 

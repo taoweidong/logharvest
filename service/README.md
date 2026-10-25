@@ -62,12 +62,11 @@ curl -s http://127.0.0.1:8000/api/jobs -H "Authorization: Bearer <accessToken>"
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `LOGHARVEST_ENVIRONMENT` | `dev` | 运行环境标识；`dev`/`test` 之外的环境会强制下面的 JWT 与管理员口令 |
-| `LOGHARVEST_JWT_SECRET_KEY` | `""` | HS256 签名密钥，**最短 32 字符**；`dev`/`test` 可留空（回退到固定的开发密钥 `unit-secret-key-0123456789-abcdef`），非 `dev`/`test` 必填且留空会在配置校验阶段报错 |
+| `LOGHARVEST_JWT_SECRET_KEY` | `""` | HS256 签名密钥，**最短 32 字符，任何环境都必填**（含 `dev`）。留空或过短都会在配置校验阶段直接报错启动失败；代码里不再有任何内置开发密钥。生成示例：`python -c "import secrets; print(secrets.token_urlsafe(48))"` |
 | `LOGHARVEST_ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | `accessToken` 有效期（分钟） |
 | `LOGHARVEST_REFRESH_TOKEN_EXPIRE_DAYS` | `7` | `refreshToken` 有效期（天） |
 | `LOGHARVEST_ADMIN_USERNAME` | `admin` | `scripts/seed_admin` 创建的管理员用户名；登录本身只校验库中已有的用户 |
 | `LOGHARVEST_ADMIN_PASSWORD` | `""` | 种子脚本读取的口令来源；非 `dev`/`test` 环境必须显式配置（留空在配置校验阶段报错），少于 8 位时种子脚本拒绝执行 |
-| `LOGHARVEST_ADMIN_TOKEN` | `dev-admin-token` | **历史字段，已不参与任何鉴权**：静态 token 认证已随 JWT 登录移除，`Authorization: Bearer <该值>` 一律 `401`。字段与"非 `dev`/`test` 不得使用默认值"的校验暂时保留，仅为兼容既有部署的环境文件，删除留待后续清理 |
 | `LOGHARVEST_DATABASE_URL` | `sqlite:///./logharvest.db` | 相对路径基于启动目录；控制面 API 测试使用内存 SQLite。**启动 Worker 必须改为 PostgreSQL 连接串**，队列 SQL 依赖 PostgreSQL 语法 |
 | `LOGHARVEST_AUTO_CREATE_TABLES` | `true` | 现在表示**应用启动时执行 `alembic upgrade head`**（`src/main.py` 的 lifespan），不再是"未接入的开关"；置为 `false` 时启动不动表结构。测试夹具通过 autouse fixture 强制关掉它，改用内存 SQLite 的 `create_all`，因此跑测试不会碰到开发库 |
 | `LOGHARVEST_WORKER_ID` | 主机名 | Worker 标识；同机启动多个 Worker 进程时必须逐个设为唯一值，否则会共用 `workers` 表的同一行 |
@@ -101,7 +100,7 @@ uv run --python 3.12 alembic current        # 0002 (head)
 
 ## 认证
 
-M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` **已退出认证路径**：把它的值当作 Bearer token 提交一律 `401`（该配置字段本身暂时保留，见上面配置表）。
+M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` 已从认证路径与配置字段中一并移除：不存在任何「静态 token 也能过」的后门，`Settings` 里也没有这个字段。
 
 流程：
 
@@ -113,7 +112,7 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` **已退出认证路�
 令牌与口令：
 
 - HS256，声明为 `sub`（用户 id 的字符串形式）、`username`、`type`（`access` / `refresh`）、`exp`。
-- 签名密钥取 `LOGHARVEST_JWT_SECRET_KEY`（最短 32 字符）；`dev`/`test` 环境可以留空，此时使用固定的开发密钥 `unit-secret-key-0123456789-abcdef`，本地与测试共享同一把，生产环境留空会在配置校验阶段报错。
+- 签名密钥只取自 `LOGHARVEST_JWT_SECRET_KEY`（最短 32 字符），**任何环境留空都拒绝启动**。此前 dev 有一个内置回退常量，而 `environment` 默认就是 `dev`——忘记配置环境的部署会接受用该公开常量伪造的管理员 token，所以常量连同回退逻辑一起删除。本地开发必须显式给一把密钥（生成命令见 `.env.example`）。
 - 口令存 bcrypt；超过 72 字节的口令先做 SHA-256 再哈希，避免 bcrypt 静默截断尾部差异。
 
 | 状态码 | 场景 | `detail` |
@@ -272,7 +271,7 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 
 ## 测试
 
-- API 测试（`tests/api/`、`tests/test_health.py`）使用内存 SQLite（`StaticPool`）与 FastAPI `dependency_overrides`，不需要 PostgreSQL；每个 API 用例通过 `create_db_and_tables()` 建表。`tests/conftest.py` 的 autouse fixture 会把 `settings.auto_create_tables` 置为 `False`，因此测试进程从不执行 Alembic，也不会碰开发库；`auth_headers` 夹具用固定开发密钥签发真实 access token（不再传静态 token）。`tests/domain/` 与 `tests/application/` 为领域/应用单元测试，不经过 API 与依赖覆盖（模型测试自行使用内存 SQLite 验证建表）。
+- API 测试（`tests/api/`、`tests/test_health.py`）使用内存 SQLite（`StaticPool`）与 FastAPI `dependency_overrides`，不需要 PostgreSQL；每个 API 用例通过 `create_db_and_tables()` 建表。`tests/conftest.py` 的 autouse fixture 会把 `settings.auto_create_tables` 置为 `False`，因此测试进程从不执行 Alembic，也不会碰开发库；`tests/conftest.py` 在任何 `src` 导入之前用 `os.environ.setdefault` 注入 `LOGHARVEST_ENVIRONMENT=test` 与测试签名密钥（`Settings` 在模块导入时即完成校验），`auth_headers` 夹具再用 `settings.jwt_secret_key` 签发真实 access token。`tests/domain/` 与 `tests/application/` 为领域/应用单元测试，不经过 API 与依赖覆盖（模型测试自行使用内存 SQLite 验证建表）。
 - `tests/api/` 覆盖 JWT 登录/刷新/登出/停用账号、数据源、规则集、作业规划/幂等/路径校验/取消/失败重试、结果查询、Worker 管理、SSE、系统状态与概览/维护接口；`tests/domain/services/` 覆盖 bcrypt 与 `TokenService`（含过期、错密钥、access/refresh 不可互换）；`tests/scripts/test_seed_admin.py` 覆盖管理员种子的幂等与弱口令拒绝；`tests/application/` 覆盖 Worker 处理器的复制续租、时间心跳、租约丢失、取消检查与永久失败；`tests/worker/` 用 fake 仓库覆盖领取循环、drain、注册、僵死回收、周期补偿、取消检查接线与信号退出；`tests/infrastructure/` 覆盖队列 SQL 形状、批量写入、作业终态汇总（后两者在真实建表的 SQLite 上执行）以及迁移结果与 `SQLModel.metadata` 的逐表逐列比对。
 - 作业唯一约束、幂等并发回退、作业终态栅栏等并发语义仅在 SQLite 上验证；`SKIP LOCKED` 领取、`make_interval` 退避、`ON CONFLICT` 注册、`RECOVER_STALE_SQL` 回收等 PostgreSQL 行为留待真实环境验证。概览与维护接口的 `recover_stale` 一步在测试里被替换为计数桩（该语句在 SQLite 上是语法错误），其余两步真实执行。
 

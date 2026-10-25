@@ -1,8 +1,8 @@
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEFAULT_ADMIN_TOKEN = "dev-admin-token"
 PROTECTED_ENVIRONMENTS = frozenset({"dev", "test"})
+MIN_SECRET_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -14,7 +14,6 @@ class Settings(BaseSettings):
 
     app_name: str = "LogHarvest"
     environment: str = "dev"
-    admin_token: str = DEFAULT_ADMIN_TOKEN
     database_url: str = "sqlite:///./logharvest.db"
     auto_create_tables: bool = True
     worker_poll_seconds: float = 1.0
@@ -30,26 +29,20 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_auth_settings(self) -> "Settings":
-        token = self.admin_token.strip()
-        if not token:
-            raise ValueError("admin_token must not be empty")
+        secret = self.jwt_secret_key.strip()
+        # 每个环境都必须显式提供签名密钥。此前 dev 有一个代码内的回退常量，
+        # 而 environment 默认就是 dev —— 忘记配置 LOGHARVEST_ENVIRONMENT 的部署
+        # 会接受用这个公开常量伪造的管理员 token。
+        if not secret:
+            raise ValueError("jwt_secret_key is required (set LOGHARVEST_JWT_SECRET_KEY)")
+        if len(secret) < MIN_SECRET_LENGTH:
+            raise ValueError(f"jwt_secret_key must be at least {MIN_SECRET_LENGTH} characters")
+        self.jwt_secret_key = secret
         if (
             self.environment.strip().lower() not in PROTECTED_ENVIRONMENTS
-            and token == DEFAULT_ADMIN_TOKEN
+            and not self.admin_password.strip()
         ):
-            raise ValueError(
-                "the default admin token is only allowed when environment is dev or test"
-            )
-        self.admin_token = token
-        # dev/test 允许空 secret（走静态 admin_token 测试路径）；其他环境必须显式配置。
-        if self.jwt_secret_key.strip() and len(self.jwt_secret_key.strip()) < 32:
-            raise ValueError("jwt_secret_key must be at least 32 characters")
-        if self.environment.strip().lower() not in PROTECTED_ENVIRONMENTS:
-            if not self.jwt_secret_key.strip():
-                raise ValueError("jwt_secret_key is required outside dev and test")
-            if not self.admin_password.strip():
-                raise ValueError("admin_password is required outside dev and test")
-        self.jwt_secret_key = self.jwt_secret_key.strip()
+            raise ValueError("admin_password is required outside dev and test")
         return self
 
 

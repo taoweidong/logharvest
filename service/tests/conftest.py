@@ -1,3 +1,10 @@
+import os
+
+# Settings 在模块导入时就完成校验，而 jwt_secret_key 现在任何环境都必填，
+# 所以测试密钥必须先落到环境里，再导入任何 src 模块。
+os.environ.setdefault("LOGHARVEST_ENVIRONMENT", "test")
+os.environ.setdefault("LOGHARVEST_JWT_SECRET_KEY", "unit-secret-key-0123456789-abcdef")
+
 from collections.abc import Iterator
 
 import pytest
@@ -14,7 +21,7 @@ from src.domain.services.tokens import TokenService
 from src.infrastructure.database import create_db_and_tables
 from src.main import create_app
 
-UNIT_SECRET = "unit-secret-key-0123456789-abcdef"
+UNIT_SECRET = settings.jwt_secret_key
 
 
 @pytest.fixture(autouse=True)
