@@ -1,86 +1,126 @@
-import pydantic
-import pytest
-from fastapi import HTTPException
+from sqlmodel import Session
 
-from src.api import dependencies
-from src.api.dependencies import require_admin
-from src.config.settings import Settings, settings
+from src.application.services.auth import ensure_admin
+from src.domain.models.auth import ADMIN_ROLE_CODE, User
+from src.domain.services.tokens import TokenService
 
-
-def test_require_admin_accepts_configured_token() -> None:
-    assert require_admin(f"Bearer {settings.admin_token}") == "admin"
+UNIT_SECRET = "unit-secret-key-0123456789-abcdef"
 
 
-def test_admin_token_defaults_to_dev_placeholder(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LOGHARVEST_ADMIN_TOKEN", raising=False)
-    assert Settings(_env_file=None).admin_token == "dev-admin-token"
+def test_login_returns_envelope_with_tokens_and_roles(client, session) -> None:
+    ensure_admin(session, "admin", "Sup3r-Secret")
+
+    response = client.post("/api/login", json={"username": "admin", "password": "Sup3r-Secret"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == 0
+    assert body["message"] == "ok"
+    data = body["data"]
+    assert data["username"] == "admin"
+    assert data["roles"] == [ADMIN_ROLE_CODE]
+    assert data["permissions"] == []
+    assert data["accessToken"] and data["refreshToken"]
+    assert isinstance(data["expires"], int)
 
 
-def test_require_admin_rejects_missing_or_wrong_token() -> None:
-    with pytest.raises(HTTPException) as missing:
-        require_admin(None)
-    assert missing.value.status_code == 401
-    assert missing.value.headers["WWW-Authenticate"] == "Bearer"
+def test_login_rejects_bad_password_and_unknown_user(client, session) -> None:
+    ensure_admin(session, "admin", "Sup3r-Secret")
 
-    with pytest.raises(HTTPException) as wrong:
-        require_admin(f"Bearer {settings.admin_token}-wrong")
-    assert wrong.value.status_code == 401
-    assert wrong.value.detail == "invalid admin token"
-    assert wrong.value.headers["WWW-Authenticate"] == "Bearer"
+    bad = client.post("/api/login", json={"username": "admin", "password": "nope"})
+    unknown = client.post("/api/login", json={"username": "ghost", "password": "x"})
+    assert bad.status_code == 401
+    assert unknown.status_code == 401
 
 
-@pytest.mark.parametrize("header", ["", "Bearer", "Bearer ", "Basic abc", "bearer token"])
-def test_require_admin_rejects_empty_or_malformed_headers(header: str) -> None:
-    with pytest.raises(HTTPException) as exc:
-        require_admin(header)
-    assert exc.value.status_code == 401
-    assert exc.value.headers["WWW-Authenticate"] == "Bearer"
+def test_login_on_empty_database_returns_401(client) -> None:
+    # 库里没有任何用户时，登录只做校验：返回 401 而不是 500。
+    response = client.post("/api/login", json={"username": "admin", "password": "whatever"})
+    assert response.status_code == 401
 
 
-def test_require_admin_rejects_empty_configured_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "admin_token", "")
-    with pytest.raises(HTTPException) as exc:
-        require_admin("Bearer ")
-    assert exc.value.status_code == 401
-
-
-def test_require_admin_uses_constant_time_compare(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[bytes, bytes]] = []
-    real_compare = dependencies.secrets.compare_digest
-
-    def spy(left: bytes, right: bytes) -> bool:
-        calls.append((left, right))
-        return real_compare(left, right)
-
-    monkeypatch.setattr(dependencies.secrets, "compare_digest", spy)
-
-    assert require_admin(f"Bearer {settings.admin_token}") == "admin"
-    token = settings.admin_token.encode("utf-8")
-    assert calls == [(token, token)]
-
-
-def test_admin_token_settings_validation() -> None:
-    with pytest.raises(pydantic.ValidationError):
-        Settings(_env_file=None, environment="prod", admin_token="dev-admin-token")
-    with pytest.raises(pydantic.ValidationError):
-        Settings(_env_file=None, admin_token="   ")
-    # 非 dev/test 必须提供 JWT secret 与管理员口令。
-    with pytest.raises(pydantic.ValidationError):
-        Settings(_env_file=None, environment="prod", admin_token="real-secret")
-
-    assert Settings(_env_file=None, environment="test").admin_token == "dev-admin-token"
-    prod = Settings(
-        _env_file=None,
-        environment="prod",
-        admin_token="real-secret",
-        jwt_secret_key="prod-secret-key-0123456789-abcdefgh",
-        admin_password="Sup3r-Secret",
+def test_business_route_requires_valid_access_token(client, session) -> None:
+    user = ensure_admin(session, "admin", "Sup3r-Secret")
+    token, _ = TokenService(secret_key=UNIT_SECRET).create_access_token(
+        {"sub": str(user.id), "username": user.username}
     )
-    assert prod.admin_token == "real-secret"
+
+    # 未认证 -> 401；错误签名 -> 401；正确 token -> 200。
+    missing = client.get("/api/data-sources")
+    bogus = client.get("/api/data-sources", headers={"Authorization": "Bearer bogus"})
+    valid = client.get("/api/data-sources", headers={"Authorization": f"Bearer {token}"})
+
+    assert missing.status_code == 401
+    assert bogus.status_code == 401
+    assert valid.status_code == 200
+
+
+def test_refresh_token_cannot_be_used_as_access_token(client, session) -> None:
+    user = ensure_admin(session, "admin", "Sup3r-Secret")
+    refresh, _ = TokenService(secret_key=UNIT_SECRET).create_refresh_token(
+        {"sub": str(user.id), "username": user.username}
+    )
+
+    response = client.get("/api/data-sources", headers={"Authorization": f"Bearer {refresh}"})
+    assert response.status_code == 401
+
+
+def test_refresh_returns_new_access_token(client, session) -> None:
+    user = ensure_admin(session, "admin", "Sup3r-Secret")
+    service = TokenService(secret_key=UNIT_SECRET)
+    refresh, _ = service.create_refresh_token({"sub": str(user.id), "username": user.username})
+
+    response = client.post("/api/refresh-token", json={"refreshToken": refresh})
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["accessToken"]
+    assert isinstance(data["expires"], int)
+
+
+def test_refresh_rejects_access_token(client, session) -> None:
+    user = ensure_admin(session, "admin", "Sup3r-Secret")
+    access, _ = TokenService(secret_key=UNIT_SECRET).create_access_token(
+        {"sub": str(user.id), "username": user.username}
+    )
+
+    response = client.post("/api/refresh-token", json={"refreshToken": access})
+    assert response.status_code == 401
+
+
+def test_inactive_user_token_is_rejected(client, session) -> None:
+    user = ensure_admin(session, "admin", "Sup3r-Secret")
+    token, _ = TokenService(secret_key=UNIT_SECRET).create_access_token(
+        {"sub": str(user.id), "username": user.username}
+    )
+
+    stored = session.get(User, user.id)
+    assert stored is not None
+    stored.is_active = False
+    session.add(stored)
+    session.commit()
+
+    response = client.get("/api/data-sources", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 401
+
+
+def test_auth_routes_and_logout_require_login(client, session) -> None:
+    assert client.get("/api/auth/routes").status_code == 401
+    assert client.post("/api/logout").status_code == 401
+
+    user = ensure_admin(session, "admin", "Sup3r-Secret")
+    token, _ = TokenService(secret_key=UNIT_SECRET).create_access_token(
+        {"sub": str(user.id), "username": user.username}
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    routes = client.get("/api/auth/routes", headers=headers)
+    assert routes.status_code == 200
+    assert routes.json() == {"code": 0, "message": "ok", "data": []}
+
+    logout = client.post("/api/logout", headers=headers)
+    assert logout.status_code == 200
+    assert logout.json() == {"code": 0, "message": "ok", "data": None}
 
 
 def test_health_does_not_require_auth(client) -> None:
@@ -93,3 +133,13 @@ def test_unauthorized_response_includes_www_authenticate(client) -> None:
     response = client.get("/api/jobs")
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
+
+
+def test_login_uses_injected_session_not_module_engine(client, engine) -> None:
+    # 认证写库必须走请求级 session（测试覆盖到内存库），不碰模块级默认引擎。
+    with Session(engine) as session:
+        user = ensure_admin(session, "admin", "Sup3r-Secret")
+        token, _ = TokenService(secret_key=UNIT_SECRET).create_access_token(
+            {"sub": str(user.id), "username": user.username}
+        )
+    assert client.get("/api/jobs", headers={"Authorization": f"Bearer {token}"}).status_code == 200

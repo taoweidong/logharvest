@@ -30,7 +30,7 @@ def get_rule_set(rule_set_id: int, session: SessionDep, _: AdminDep):
 @router.post("", response_model=RuleSetRead, status_code=201)
 def post_rule_set(payload: RuleSetCreate, session: SessionDep, admin: AdminDep):
     try:
-        return create_rule_set_version(session, payload.name, payload.config, admin)
+        return create_rule_set_version(session, payload.name, payload.config, admin.username)
     except (ValueError, LookupError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except IntegrityError as exc:

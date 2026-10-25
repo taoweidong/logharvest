@@ -1,12 +1,16 @@
-import secrets
 from collections.abc import Iterator
+from functools import lru_cache
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.engine import Engine
 from sqlmodel import Session
 
+from src.application.services.auth import role_codes
 from src.config.settings import settings
+from src.domain.models.auth import ADMIN_ROLE_CODE, User
+from src.domain.services.tokens import TokenService
 from src.infrastructure.database import engine
 
 
@@ -30,24 +34,57 @@ def get_engine() -> Engine:
 
 EngineDep = Annotated[Engine, Depends(get_engine)]
 
+# JWT 未配置时（dev/test）用固定回退密钥，测试与本地开发共享同一密钥；
+# 生产环境通过 settings.jwt_secret_key 强制显式配置。
+DEV_FALLBACK_SECRET = "unit-secret-key-0123456789-abcdef"
 
-def require_admin(
-    authorization: str | None = Header(default=None),
-) -> str:
-    header = authorization or ""
-    token = header[len("Bearer ") :] if header.startswith("Bearer ") else ""
-    expected = settings.admin_token
-    if (
-        not token
-        or not expected
-        or not secrets.compare_digest(token.encode("utf-8"), expected.encode("utf-8"))
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid admin token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return "admin"
+_bearer = HTTPBearer(auto_error=False)
 
 
-AdminDep = Annotated[str, Depends(require_admin)]
+@lru_cache(maxsize=1)
+def get_token_service() -> TokenService:
+    secret = settings.jwt_secret_key or DEV_FALLBACK_SECRET
+    return TokenService(
+        secret_key=secret,
+        access_minutes=settings.access_token_expire_minutes,
+        refresh_days=settings.refresh_token_expire_days,
+    )
+
+
+def _unauthorized(reason: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=reason,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    session: SessionDep,
+    service: Annotated[TokenService, Depends(get_token_service)],
+) -> User:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise _unauthorized("missing bearer token")
+    claims = service.decode(credentials.credentials, expected_type="access")
+    if claims is None:
+        raise _unauthorized("invalid or expired token")
+    user_id = claims.get("sub")
+    if not isinstance(user_id, str) or not user_id.isdigit():
+        raise _unauthorized("invalid token payload")
+    user = session.get(User, int(user_id))
+    if user is None or not user.is_active:
+        raise _unauthorized("user is not available")
+    return user
+
+
+CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def require_admin_user(user: CurrentUser, session: SessionDep) -> User:
+    if ADMIN_ROLE_CODE not in role_codes(session, user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin role required")
+    return user
+
+
+AdminDep = Annotated[User, Depends(require_admin_user)]

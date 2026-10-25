@@ -442,7 +442,7 @@ git commit -m "feat: 添加 JWT 与口令哈希认证领域核心"
   - `POST /api/login`、`POST /api/refresh-token`、`GET /api/auth/routes`、`POST /api/logout`
   - `ensure_admin(session: Session, username: str, password: str) -> User`（幂等）
 
-- [ ] **Step 1: 写失败测试（登录与受保护接口）**
+- [x] **Step 1: 写失败测试（登录与受保护接口）**
 
 `service/tests/api/test_auth.py`:
 
@@ -530,7 +530,7 @@ def test_inactive_user_token_is_rejected(client, session):
 Run: `cd service && uv run --python 3.12 pytest tests/api/test_auth.py -v`
 Expected: FAIL，`ModuleNotFoundError: ... routes_auth` / `ensure_admin`
 
-- [ ] **Step 2: 实现认证服务与登录路由**
+- [x] **Step 2: 实现认证服务与登录路由**
 
 Create `service/src/application/services/auth.py`:
 
@@ -706,7 +706,7 @@ def logout(_: CurrentUser):
     return ok(None)
 ```
 
-- [ ] **Step 3: 用 JWT 依赖替换静态 admin_token**
+- [x] **Step 3: 用 JWT 依赖替换静态 admin_token**
 
 Modify `service/src/api/dependencies.py`：删除 `secrets` 导入与 `require_admin` 实现，替换为：
 
@@ -788,7 +788,7 @@ Modify `service/src/api/v1/router.py`：`from src.api.v1 import routes_auth` 并
 Run: `cd service && uv run --python 3.12 pytest tests/api/test_auth.py -v`
 Expected: FAIL 直到 conftest 更新；`test_login_*` 两例先绿
 
-- [ ] **Step 4: conftest 改为签发 JWT，种子脚本可用**
+- [x] **Step 4: conftest 改为签发 JWT，种子脚本可用**
 
 Modify `service/tests/conftest.py` 的 `auth_headers`：
 
@@ -845,7 +845,7 @@ if __name__ == "__main__":
 
 Create `service/scripts/__init__.py`（空文件）。
 
-- [ ] **Step 5: 种子脚本测试**
+- [x] **Step 5: 种子脚本测试**
 
 `service/tests/scripts/test_seed_admin.py`:
 
@@ -887,7 +887,7 @@ Expected: 全部 passed（如 `main()` 返回值而非抛 SystemExit，把断言
 Run: `cd service && uv run --python 3.12 pytest -q`
 Expected: 全量绿（约 230 passed, 1 skipped）。若个别旧用例断言 `401 detail == "invalid admin token"`，改为断言状态码与新 detail `"missing bearer token"`，因为认证文案随机制一起更换。
 
-- [ ] **Step 6: Lint 与提交**
+- [x] **Step 6: Lint 与提交**
 
 ```bash
 cd service && uv run --python 3.12 ruff check src tests && uv run --python 3.12 ruff format src scripts tests

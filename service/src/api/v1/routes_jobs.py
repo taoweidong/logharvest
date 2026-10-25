@@ -48,7 +48,7 @@ def post_job(
     admin: AdminDep,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    job, created = create_job(session, payload, admin, idempotency_key)
+    job, created = create_job(session, payload, admin.username, idempotency_key)
     if not created:
         response.status_code = 200
     return job
