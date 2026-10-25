@@ -1,5 +1,6 @@
 import bz2
 import gzip
+import io
 import logging
 import lzma
 import os
@@ -12,7 +13,27 @@ import pytest
 
 from src.domain.archive import ArchiveFormatError, ScanLimitError
 from src.domain.archive import reader as reader_module
-from src.domain.archive.reader import discover_archives, iter_archive_lines
+from src.domain.archive.reader import discover_archives, iter_archive_lines, scan_archive
+
+
+def corrupt_zip_member(path: Path, member_name: str) -> None:
+    with zipfile.ZipFile(path) as archive:
+        info = archive.getinfo(member_name)
+        data_start = (
+            info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
+        )
+    with path.open("r+b") as stream:
+        stream.seek(data_start)
+        original = stream.read(1)
+        stream.seek(data_start)
+        stream.write(bytes([original[0] ^ 0xFF]))
+
+
+def truncate_tar_member(path: Path, member_name: str) -> None:
+    with tarfile.open(path) as archive:
+        info = archive.getmember(member_name)
+        cut = info.offset_data + info.size // 2
+    path.write_bytes(path.read_bytes()[:cut])
 
 
 def test_discover_archives_is_recursive_and_skips_hidden(tmp_path) -> None:
@@ -130,6 +151,55 @@ def test_corrupt_zip_raises_without_records(tmp_path) -> None:
     with pytest.raises(ArchiveFormatError, match="invalid zip archive"):
         records = list(iter_archive_lines(path))
     assert records == []
+
+
+def test_scan_archive_continues_after_corrupt_zip_member(tmp_path) -> None:
+    archive = tmp_path / "partial.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("bad.log", "bad line\n" * 100)
+        zf.writestr("good.log", "good line\n")
+    corrupt_zip_member(archive, "bad.log")
+
+    scan = scan_archive(archive)
+    records = list(scan.lines)
+
+    assert [(record.member_path, record.text) for record in records] == [
+        ("good.log", "good line")
+    ]
+    assert scan.succeeded_members == {"good.log"}
+    assert [error.member_path for error in scan.member_errors] == ["bad.log"]
+    assert "decompress" in scan.member_errors[0].message
+
+
+def test_scan_archive_stops_after_corrupt_tar_member(tmp_path) -> None:
+    archive = tmp_path / "partial.tar"
+    with tarfile.open(archive, "w") as tf:
+        for name, text in (("good.log", "good line\n"), ("bad.log", "bad line\n" * 100)):
+            payload = text.encode("utf-8")
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            tf.addfile(info, io.BytesIO(payload))
+    truncate_tar_member(archive, "bad.log")
+
+    scan = scan_archive(archive)
+    records = list(scan.lines)
+
+    assert [(record.member_path, record.text) for record in records] == [
+        ("good.log", "good line")
+    ]
+    assert scan.succeeded_members == {"good.log"}
+    assert [error.member_path for error in scan.member_errors] == ["bad.log"]
+
+
+def test_iter_archive_lines_stays_strict_after_member_error(tmp_path) -> None:
+    archive = tmp_path / "partial.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("bad.log", "bad line\n" * 100)
+        zf.writestr("good.log", "good line\n")
+    corrupt_zip_member(archive, "bad.log")
+
+    with pytest.raises(ArchiveFormatError, match="bad.log"):
+        list(iter_archive_lines(archive))
 
 
 @pytest.mark.parametrize(

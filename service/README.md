@@ -1,8 +1,8 @@
 # LogHarvest Service
 
-M0 核心引擎 + M1a 控制面 API + M1b Worker/队列 + M2a 认证/运维：规则编译/匹配、压缩包发现与流式读取、Worker 任务处理器、七张核心表 SQLModel 模型；数据源、规则集版本、作业规划、文件任务、结果与系统状态 REST API；PostgreSQL `SKIP LOCKED` 任务队列、Worker 常驻领取循环、SSE 作业进度与 Worker drain/resume 管理；JWT 登录与管理员种子、Alembic 迁移与启动接线、取消/永久失败/手动重试语义、概览统计与服务端维护入口。
+M0 核心引擎 + M1a 控制面 API + M1b Worker/队列 + M2a 认证/运维 + M2c 安全/可观测性：规则编译/匹配、压缩包发现与流式读取、Worker 任务处理器（成员级 `partial`）、七张核心表 SQLModel 模型；数据源、规则集版本、作业规划、文件任务、结果与系统状态 REST API；PostgreSQL `SKIP LOCKED` 任务队列、Worker 常驻领取循环、SSE 作业进度与 Worker drain/resume 管理；JWT 登录与管理员种子、Alembic 迁移与启动接线、取消/永久失败/手动重试语义、概览统计与服务端维护入口。
 
-Worker 与队列需要 PostgreSQL；控制面 API 测试仍使用内存 SQLite，无需外部服务。前端（M2b）不在本里程碑。
+Worker 与队列需要 PostgreSQL；控制面 API 测试仍使用内存 SQLite，无需外部服务。前端（M2b）见 [`../web/`](../web/)。
 
 ## 环境要求
 
@@ -204,6 +204,8 @@ LOGHARVEST_DATABASE_URL=postgresql://logharvest:logharvest@127.0.0.1:5432/loghar
 10. 任务处理成功后尝试汇总作业终态；队列为空时等待 `LOGHARVEST_WORKER_POLL_SECONDS` 再继续领取。Worker 不绑定作业，不会因为某个作业结束而退出。
 11. 每 300 秒重复执行僵死回收 + 作业终态补偿，覆盖没有完成回调的路径。
 
+成员级容错：zip 遇到损坏成员时记录错误并继续读取剩余成员；流式 tar 无法越过损坏成员，会在该处停止（`scan_incomplete`）。处理器按 `file_glob` 汇总成员结果：至少一个匹配成员完整读完 → `partial`；所有匹配成员失败 → `failed`；两者均以 `retryable=False` 写终态，不自动重试，错误摘要写入 `file_tasks.error`。被 `file_glob` 排除且扫描仍能继续的 zip 成员损坏不影响任务状态；但流式 tar 的停止位置之后可能还有匹配成员，因此该错误始终计入。
+
 租约栅栏（M1b 写栅栏，M2a 未放宽）：任何 `matches` 写库前都必须先确认 `(file_task_id, attempts, status='running')` 仍然成立（`_verify_lease` → `touch`），丢租约立即 `LeaseLost` 中止且不写终态；`delete_for_task` 之前同样先过栅栏。
 
 手动重试的边界：`retry_failed_tasks` 只搬 `failed` 行、保留 `attempts`，所以一次手动重试仍受 `max_attempts` 约束（回收与 `COMPLETE_SQL` 的比较都是 `attempts < LEAST(max_attempts, 队列上限)`）；`cancelled` 的任务不会被放回。
@@ -225,7 +227,7 @@ LOGHARVEST_DATABASE_URL=postgresql://logharvest:logharvest@127.0.0.1:5432/loghar
 | `cancel_requested` 为真 | `cancelled` |
 | 文件任务全部被取消 | `cancelled` |
 
-仅在作业仍为 `running` 且不存在 `pending`/`running` 文件任务时写入，同时设置 `finished_at`。并发汇总以 `jobs.status = 'running'` 行级栅栏保证单一写入者；触发点是完成任务的 Worker，兜底是 Worker 启动与每 300 秒的补偿扫描，以及下节的 `POST /api/system/maintenance`。文件级 `partial`（单个压缩包内部分成员解析失败）仍未实现。
+仅在作业仍为 `running` 且不存在 `pending`/`running` 文件任务时写入，同时设置 `finished_at`。并发汇总以 `jobs.status = 'running'` 行级栅栏保证单一写入者；触发点是完成任务的 Worker，兜底是 Worker 启动与每 300 秒的补偿扫描，以及下节的 `POST /api/system/maintenance`。文件任务级 `partial` 已实现：压缩包内部分成员损坏、其余匹配成员成功时写 `partial`，作业汇总按上表计入 `partial`。
 
 ## 服务端维护入口
 
@@ -243,7 +245,7 @@ LOGHARVEST_DATABASE_URL=postgresql://logharvest:logharvest@127.0.0.1:5432/loghar
 
 三步都是幂等 SQL，可重复执行，因此**调度交给外部**（cron、systemd timer 或 compose job，例如每分钟一次）：本服务不内置定时器，也不引入 Redis/后台线程。接口没有请求体，`stale_seconds` 目前是服务层默认参数 120 秒，尚未暴露为查询参数。
 
-验证边界：`mark_dead_workers` 与 `finalize_finished_jobs` 是可移植写法，已在内存 SQLite 上真实执行验证；`recover_stale` 是 PostgreSQL 专有语句（SQLite 上直接语法错误，已实测），仅由 SQL 形状断言覆盖，**未在 PostgreSQL 上执行过**。
+验证边界：`mark_dead_workers` 与 `finalize_finished_jobs` 是可移植写法，已在内存 SQLite 上真实执行验证；`recover_stale` 是 PostgreSQL 专有语句（SQLite 上直接语法错误，已实测），已由 `tests/integration/test_postgres_queue.py` 在真实 PostgreSQL 上执行验证。
 
 ## SSE 作业进度
 
@@ -264,7 +266,7 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 
 ## PostgreSQL 依赖与验证边界
 
-- 队列 SQL（`FOR UPDATE SKIP LOCKED`、`make_interval`、`ON CONFLICT`、CTE `UPDATE ... RETURNING`）只能在 PostgreSQL 上执行。当前开发机没有 PostgreSQL 实例，因此队列部分以 SQL 形状断言 + fake 运行时验证，真实 PostgreSQL 环境与 `SKIP LOCKED` 并发行为仍待补验。
+- 队列 SQL（`FOR UPDATE SKIP LOCKED`、`make_interval`、`ON CONFLICT`、CTE `UPDATE ... RETURNING`）只能在 PostgreSQL 上执行。真实执行与 `SKIP LOCKED` 并发行为由 `tests/integration/test_postgres_queue.py` 覆盖（设置 `LOGHARVEST_TEST_PG_URL`，每个用例重建 schema）；SQLite 套件只验证可移植语句。
 - PostgreSQL 连接会强制 `timezone=UTC`（`connect_args_for`）：时间戳列是 `without time zone`，SQL `now()` 写入的是会话时区的墙上时间，而 Python 侧写入 UTC。若会话不是 UTC，`heartbeat_at`、僵死回收阈值与"静默 Worker 降级"的比较会整体偏移，降级可能永远不触发。
 - 作业终态汇总 SQL 使用可移植写法，已在真实建表的 SQLite 上验证聚合与栅栏语义。
 - 表结构 DDL 已交给 Alembic（`0001_baseline`、`0002_auth_tables`），并在启动时按 `LOGHARVEST_AUTO_CREATE_TABLES` 执行 `upgrade head`；`create_db_and_tables()` 仍然存在，用途收缩为测试夹具建表。迁移只在临时 SQLite 文件上真实跑过 `upgrade head` / `current` / `downgrade base`，**没有在 PostgreSQL 上执行过**：`0001` 的 `create_all` 捷径与 `0002` 的显式 op 生成的语句在 PG 方言下的行为（`JSONB`、`BIGSERIAL`、`BIGINT` 列类型）仍待补验。
@@ -272,7 +274,7 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 ## 测试
 
 - API 测试（`tests/api/`、`tests/test_health.py`）使用内存 SQLite（`StaticPool`）与 FastAPI `dependency_overrides`，不需要 PostgreSQL；每个 API 用例通过 `create_db_and_tables()` 建表。`tests/conftest.py` 的 autouse fixture 会把 `settings.auto_create_tables` 置为 `False`，因此测试进程从不执行 Alembic，也不会碰开发库；`tests/conftest.py` 在任何 `src` 导入之前用 `os.environ.setdefault` 注入 `LOGHARVEST_ENVIRONMENT=test` 与测试签名密钥（`Settings` 在模块导入时即完成校验），`auth_headers` 夹具再用 `settings.jwt_secret_key` 签发真实 access token。`tests/domain/` 与 `tests/application/` 为领域/应用单元测试，不经过 API 与依赖覆盖（模型测试自行使用内存 SQLite 验证建表）。
-- `tests/api/` 覆盖 JWT 登录/刷新/登出/停用账号、数据源、规则集、作业规划/幂等/路径校验/取消/失败重试、结果查询、Worker 管理、SSE、系统状态与概览/维护接口；`tests/domain/services/` 覆盖 bcrypt 与 `TokenService`（含过期、错密钥、access/refresh 不可互换）；`tests/scripts/test_seed_admin.py` 覆盖管理员种子的幂等与弱口令拒绝；`tests/application/` 覆盖 Worker 处理器的复制续租、时间心跳、租约丢失、取消检查与永久失败；`tests/worker/` 用 fake 仓库覆盖领取循环、drain、注册、僵死回收、周期补偿、取消检查接线与信号退出；`tests/infrastructure/` 覆盖队列 SQL 形状、批量写入、作业终态汇总（后两者在真实建表的 SQLite 上执行）以及迁移结果与 `SQLModel.metadata` 的逐表逐列比对。
+- `tests/api/` 覆盖 JWT 登录/刷新/登出/停用账号、数据源、规则集、作业规划/幂等/路径校验/取消/失败重试、结果查询、Worker 管理、SSE、系统状态与概览/维护接口；`tests/domain/services/` 覆盖 bcrypt 与 `TokenService`（含过期、错密钥、access/refresh 不可互换）；`tests/scripts/test_seed_admin.py` 覆盖管理员种子的幂等与弱口令拒绝；`tests/application/` 覆盖 Worker 处理器的复制续租、时间心跳、租约丢失、取消检查与永久失败；`tests/worker/` 用 fake 仓库覆盖领取循环、drain、注册、僵死回收、周期补偿、取消检查接线与信号退出；`tests/infrastructure/` 覆盖队列 SQL 形状、批量写入、作业终态汇总（后两者在真实建表的 SQLite 上执行）以及迁移结果与 `SQLModel.metadata` 的逐表逐列比对；`tests/integration/` 在真实 PostgreSQL 上覆盖 `SKIP LOCKED` 并发领取、租约栅栏、重试/取消/永久失败、成员级 `partial`、僵死回收、作业汇总与批量写入。
 - 作业唯一约束、幂等并发回退、作业终态栅栏等并发语义仅在 SQLite 上验证；`SKIP LOCKED` 领取、`make_interval` 退避、`ON CONFLICT` 注册、`RECOVER_STALE_SQL` 回收等 PostgreSQL 行为留待真实环境验证。维护入口在测试里分两层：`tests/application/test_maintenance.py` 直接真实执行两步可移植清扫（降级静默 Worker、收尾作业）并断言 `run_maintenance` 在非 PostgreSQL 上拒绝；`tests/api/test_system.py` 只断言该场景返回 `503`。
 
 ## 范围
@@ -281,7 +283,7 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 
 - 规则编译/匹配：关键字 `any`/`all`、正则命名分组、数值门限、禁用规则、超时恢复。
 - 压缩包发现与流式读取：递归发现、zip、tar.gz、单文件 gz/bz2/xz、原始文本、GBK 回退、超长行截断。
-- Worker 处理器：本地复制、规则集成员 glob 与编码回退解析、逐行匹配、批量结果缓冲、重试清场、成功/失败终态。
+- Worker 处理器：本地复制、规则集成员 glob 与编码回退解析、逐行匹配、批量结果缓冲、重试清场、成功/部分成功/失败终态。
 - 七张核心表的 SQLModel 模型：`data_sources`、`rule_sets`、`jobs`、`file_tasks`、`file_task_attempts`、`matches`、`workers`；PostgreSQL 方言下字节/内存计数为 `BIGINT`、`Match.id` 为 `BIGSERIAL`、JSON 列为 `JSONB`。
 
 ### M1a（已交付）
@@ -311,9 +313,9 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 ### 明确不包含（后续里程碑）
 
 - 前端本身在仓库的 [`../web/`](../web/)（M2b 已交付，见其 README）；后端不为前端提供动态菜单接口，`GET /api/auth/routes` 有意返回空数组。
-- 真实 PostgreSQL 集成测试环境（当前只有 SQL 形状断言与 fake 运行时）；Alembic 迁移与 `alembic upgrade head` 在 PostgreSQL 上的执行同样未验证（含多副本启动的 advisory lock 串行化）。
+- Alembic 迁移与 `alembic upgrade head` 在 PostgreSQL 上的执行验证（含多副本启动的 advisory lock 串行化）；队列 SQL 已有 `tests/integration/test_postgres_queue.py` 的真实 PostgreSQL 覆盖。
 - Docker/PostgreSQL 部署编排；镜像替换由 Jenkins + Docker Compose 执行，Web 不承载部署。
-- 进程内复制并发池与 `LOGHARVEST_MAX_MATCHES_PER_TASK` 强制执行；单文件级 `partial` 成员状态。
+- 进程内复制并发池与 `LOGHARVEST_MAX_MATCHES_PER_TASK` 强制执行。
 - 多行堆栈规则；v1 保持单行优先。
 - 动态菜单与按钮级权限、用户/角色管理接口（`roles`/`user_roles` 只是为 RBAC 留的表，当前只有 `admin` 一个角色码参与判断）。
 - Token 黑名单与服务端会话、Redis 缓存、进程内后台定时器：`POST /api/system/maintenance` 只执行一次补偿，周期由外部 cron / compose job 负责。

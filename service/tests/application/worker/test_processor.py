@@ -115,6 +115,33 @@ def write_zip(path: Path, members: dict[str, str | bytes]) -> Path:
     return path
 
 
+def write_deflated_zip(path: Path, members: dict[str, str | bytes]) -> Path:
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, content in members.items():
+            zf.writestr(name, content)
+    return path
+
+
+def corrupt_zip_member(path: Path, member_name: str) -> None:
+    with zipfile.ZipFile(path) as archive:
+        info = archive.getinfo(member_name)
+        data_start = (
+            info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
+        )
+    with path.open("r+b") as stream:
+        stream.seek(data_start)
+        original = stream.read(1)
+        stream.seek(data_start)
+        stream.write(bytes([original[0] ^ 0xFF]))
+
+
+def truncate_tar_member(path: Path, member_name: str) -> None:
+    with tarfile.open(path) as archive:
+        info = archive.getmember(member_name)
+        cut = info.offset_data + info.size // 2
+    path.write_bytes(path.read_bytes()[:cut])
+
+
 def make_task(
     tmp_path: Path,
     attempts: int = 1,
@@ -241,13 +268,13 @@ def test_tar_gz_copy_keeps_original_name_and_processes_members(tmp_path: Path, m
         tf.addfile(info, io.BytesIO(payload))
 
     captured: list[Path] = []
-    real_iter = processor_module.iter_archive_lines
+    real_scan = processor_module.scan_archive
 
-    def spy(path, encoding="utf-8", fallback_encoding="gb18030"):
+    def spy(path, **kwargs):
         captured.append(Path(path))
-        yield from real_iter(path, encoding=encoding, fallback_encoding=fallback_encoding)
+        return real_scan(path, **kwargs)
 
-    monkeypatch.setattr(processor_module, "iter_archive_lines", spy)
+    monkeypatch.setattr(processor_module, "scan_archive", spy)
 
     repo = FakeRepo()
     writer = FakeWriter()
@@ -346,6 +373,137 @@ def test_invalid_archive_completes_failed_and_removes_work_dir(tmp_path: Path) -
     assert repo.completed == [(11, 1, "failed", 0, 0, result.error)]
     assert writer.written == []
     assert not (work_dir / "11").exists()
+
+
+def test_partial_when_some_members_are_corrupt(tmp_path: Path) -> None:
+    archive = write_deflated_zip(
+        tmp_path / "partial.zip",
+        {"bad.log": "ERROR bad\n" * 100, "app.log": "ERROR one\n"},
+    )
+    corrupt_zip_member(archive, "bad.log")
+    repo = FakeRepo()
+    writer = FakeWriter()
+    task = ClaimedTask(
+        id=10,
+        job_id=20,
+        source_path=archive,
+        file_name="partial.zip",
+        attempts=1,
+        rule_set_id=30,
+        rule_version=1,
+    )
+
+    result = make_processor(repo, writer, tmp_path / "work").process(task)
+
+    assert result.status == "partial"
+    assert "bad.log" in (result.error or "")
+    assert repo.completed == [(10, 1, "partial", 1, 1, result.error)]
+    assert repo.retryables == [(10, False)]
+    assert [(match.member_path, match.line_no) for match in writer.written] == [
+        ("app.log", 1)
+    ]
+
+
+def test_failed_when_every_member_is_corrupt(tmp_path: Path) -> None:
+    archive = write_deflated_zip(
+        tmp_path / "broken.zip",
+        {"one.log": "ERROR one\n" * 100, "two.log": "ERROR two\n" * 100},
+    )
+    corrupt_zip_member(archive, "one.log")
+    corrupt_zip_member(archive, "two.log")
+    repo = FakeRepo()
+    writer = FakeWriter()
+    task = ClaimedTask(
+        id=10,
+        job_id=20,
+        source_path=archive,
+        file_name="broken.zip",
+        attempts=1,
+        rule_set_id=30,
+        rule_version=1,
+    )
+
+    result = make_processor(repo, writer, tmp_path / "work").process(task)
+
+    assert result.status == "failed"
+    assert "one.log" in (result.error or "")
+    assert "two.log" in (result.error or "")
+    assert repo.completed == [(10, 1, "failed", 0, 0, result.error)]
+    assert repo.retryables == [(10, False)]
+    assert writer.written == []
+
+
+def test_corrupt_member_outside_file_glob_does_not_degrade_status(tmp_path: Path) -> None:
+    archive = write_deflated_zip(
+        tmp_path / "mixed.zip",
+        {"notes.txt": "ERROR notes\n" * 100, "app.log": "ERROR one\n"},
+    )
+    corrupt_zip_member(archive, "notes.txt")
+    repo = FakeRepo()
+    writer = FakeWriter()
+    task = ClaimedTask(
+        id=10,
+        job_id=20,
+        source_path=archive,
+        file_name="mixed.zip",
+        attempts=1,
+        rule_set_id=30,
+        rule_version=1,
+    )
+
+    result = make_processor(
+        repo,
+        writer,
+        tmp_path / "work",
+        rules=make_rules(file_glob="**/*.log"),
+    ).process(task)
+
+    assert result.status == "succeeded"
+    assert result.error is None
+    assert repo.completed == [(10, 1, "succeeded", 1, 1, None)]
+    assert repo.retryables == [(10, True)]
+    assert [(match.member_path, match.line_no) for match in writer.written] == [
+        ("app.log", 1)
+    ]
+
+
+def test_corrupt_tar_member_outside_glob_cannot_report_success(tmp_path: Path) -> None:
+    archive = tmp_path / "mixed.tar"
+    with tarfile.open(archive, "w") as tf:
+        for name, text in (
+            ("notes.txt", "notes\n" * 100),
+            ("app.log", "ERROR one\n"),
+        ):
+            payload = text.encode("utf-8")
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            tf.addfile(info, io.BytesIO(payload))
+    truncate_tar_member(archive, "notes.txt")
+    repo = FakeRepo()
+    writer = FakeWriter()
+    task = ClaimedTask(
+        id=10,
+        job_id=20,
+        source_path=archive,
+        file_name="mixed.tar",
+        attempts=1,
+        rule_set_id=30,
+        rule_version=1,
+    )
+
+    result = make_processor(
+        repo,
+        writer,
+        tmp_path / "work",
+        rules=make_rules(file_glob="**/*.log"),
+    ).process(task)
+
+    # A streaming tar stops at the damaged member, so the matching member
+    # behind it was never examined; the task must not claim success.
+    assert result.status == "failed"
+    assert "notes.txt" in (result.error or "")
+    assert repo.retryables == [(10, False)]
+    assert writer.written == []
 
 
 def test_incomplete_copy_fails_task_before_processing(tmp_path: Path, monkeypatch) -> None:

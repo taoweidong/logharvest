@@ -277,6 +277,36 @@ def test_non_retryable_failure_is_terminal(repo: PostgresTaskRepository, engine:
     assert "size changed" in (stored.error or "")
 
 
+def test_partial_completion_is_terminal_and_finalizes_job_partial(
+    repo: PostgresTaskRepository, engine: Engine
+) -> None:
+    """成员级部分失败是终态：不回 pending，且作业汇总为 partial。"""
+    job_id, _task_ids = _seed(engine, ["pending", "succeeded"], scheduled_delta_seconds=-5)
+    task = repo.claim_next("w-partial", "0.1.0")
+    assert task is not None
+
+    repo.complete(
+        task.id,
+        task.attempts,
+        "partial",
+        10,
+        2,
+        "1 member(s) failed: bad.log: invalid compressed data",
+        retryable=False,
+    )
+
+    with Session(engine) as session:
+        stored = session.get(FileTask, task.id)
+        attempt = session.exec(
+            select(FileTaskAttempt).where(FileTaskAttempt.file_task_id == task.id)
+        ).one()
+    assert stored.status == "partial"
+    assert stored.finished_at is not None
+    assert "bad.log" in (stored.error or "")
+    assert attempt.status == "partial"
+    assert repo.finalize_job(job_id) == "partial"
+
+
 def test_cancelled_job_attempt_becomes_cancelled_not_requeued(
     repo: PostgresTaskRepository, engine: Engine
 ) -> None:

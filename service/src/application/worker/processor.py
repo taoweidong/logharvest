@@ -14,12 +14,13 @@ from src.application.worker.ports import (
     TaskRepository,
     TaskResult,
 )
-from src.domain.archive.reader import iter_archive_lines
+from src.domain.archive.reader import ArchiveMemberError, ArchiveScan, scan_archive
 from src.domain.rules.evaluator import CompiledRuleSet, evaluate_line
 from src.domain.source_guard import POLICY_ENFORCE, SourceNotReadOnly, guard_source
 
 RAW_LINE_LIMIT = 4096
 COPY_CHUNK_SIZE = 1024 * 1024
+ERROR_TEXT_LIMIT = 2000
 
 
 class LeaseLost(RuntimeError):
@@ -40,6 +41,16 @@ def _truncate_raw_line(text: str) -> tuple[str, bool]:
         return text, False
     # errors="ignore" only drops an incomplete multi-byte sequence at the cut.
     return encoded[:RAW_LINE_LIMIT].decode("utf-8", errors="ignore"), True
+
+
+def _format_member_errors(errors: list[ArchiveMemberError]) -> str:
+    details = "; ".join(
+        f"{error.member_path or '<archive>'}: {error.message}" for error in errors
+    )
+    text = f"{len(errors)} member(s) failed: {details}"
+    if len(text) <= ERROR_TEXT_LIMIT:
+        return text
+    return text[: ERROR_TEXT_LIMIT - 3] + "..."
 
 
 class TaskProcessor:
@@ -117,6 +128,21 @@ class TaskProcessor:
             if int(stat.st_mtime) != int(expected.timestamp()):
                 raise PermanentTaskFailure("source mtime changed since planning")
 
+    def _member_outcome(self, scan: ArchiveScan) -> tuple[str, str | None]:
+        relevant_errors = [
+            error
+            for error in scan.member_errors
+            if error.scan_incomplete
+            or error.member_path is None
+            or self._member_spec.match_file(error.member_path)
+        ]
+        if not relevant_errors:
+            return "succeeded", None
+        succeeded = any(
+            self._member_spec.match_file(member) for member in scan.succeeded_members
+        )
+        return ("partial" if succeeded else "failed"), _format_member_errors(relevant_errors)
+
     def process(self, task: ClaimedTask) -> TaskResult:
         processed_lines = 0
         matched_rows = 0
@@ -127,6 +153,7 @@ class TaskProcessor:
         fallback_encoding = task.fallback_encoding or self._rules.config.fallback_encoding
 
         result: TaskResult
+        scan: ArchiveScan | None = None
         try:
             # 只读守卫排在最前面：可写挂载上连 stat、租约栅栏和本地复制都不该发生
             # （规格 §7.2）。判定按压缩包所在目录，嵌套挂载可以各自不同。
@@ -143,11 +170,12 @@ class TaskProcessor:
             task_dir.mkdir(parents=True, exist_ok=True)
             local_path = self._copy_to_local(task, task_dir)
 
-            for line in iter_archive_lines(
+            scan = scan_archive(
                 local_path,
                 encoding=encoding,
                 fallback_encoding=fallback_encoding,
-            ):
+            )
+            for line in scan.lines:
                 processed_lines += 1
                 if self._member_spec.match_file(line.member_path):
                     matches = evaluate_line(self._rules, line.text, line.line_no)
@@ -201,7 +229,8 @@ class TaskProcessor:
             if buffer:
                 self._verify_lease(task)
                 self._writer.write_batch(tuple(buffer))
-            result = TaskResult("succeeded", processed_lines, matched_rows)
+            status, member_error = self._member_outcome(scan)
+            result = TaskResult(status, processed_lines, matched_rows, member_error)
         except LeaseLost:
             raise
         except JobCancelled:
@@ -245,9 +274,30 @@ class TaskProcessor:
             )
             return TaskResult("failed", processed_lines, matched_rows, str(exc))
         else:
-            self._repo.complete(task.id, task.attempts, "succeeded", processed_lines, matched_rows)
+            if result.status == "succeeded":
+                self._repo.complete(
+                    task.id, task.attempts, "succeeded", processed_lines, matched_rows
+                )
+            else:
+                # A damaged member is a content failure: retrying the same
+                # archive would fail again and only burn attempts.
+                self._repo.complete(
+                    task.id,
+                    task.attempts,
+                    result.status,
+                    processed_lines,
+                    matched_rows,
+                    result.error,
+                    retryable=False,
+                )
             return result
         finally:
+            # The scan generator owns the archive handle; close it before the
+            # work directory is removed or Windows keeps the file locked.
+            if scan is not None:
+                close = getattr(scan.lines, "close", None)
+                if close is not None:
+                    close()
             shutil.rmtree(task_dir, ignore_errors=True)
 
     def _copy_to_local(self, task: ClaimedTask, task_dir: Path) -> Path:

@@ -7,7 +7,9 @@ import stat
 import tarfile
 import time
 import zipfile
+import zlib
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from src.domain.archive.models import ArchiveFormatError, LineRecord, ScanLimitError
@@ -20,6 +22,37 @@ RAW_SUFFIXES = frozenset({".log", ".txt"})
 ARCHIVE_SUFFIXES = frozenset({".zip"}) | TAR_SUFFIXES | SINGLE_COMPRESSED_SUFFIXES
 
 _SINGLE_OPENERS = {".gz": gzip.open, ".bz2": bz2.open, ".xz": lzma.open}
+_TAR_ERRORS = (tarfile.TarError, EOFError, lzma.LZMAError, gzip.BadGzipFile)
+_ZIP_MEMBER_ERRORS = (
+    zipfile.BadZipFile,
+    RuntimeError,
+    NotImplementedError,
+    EOFError,
+    zlib.error,
+)
+
+
+@dataclass(frozen=True)
+class ArchiveMemberError:
+    """A member that could not be read; ``None`` means the container itself.
+
+    ``scan_incomplete`` marks an error after which remaining members could not
+    be examined (streaming tar), so the caller must not dismiss it via a
+    member-path filter.
+    """
+
+    member_path: str | None
+    message: str
+    scan_incomplete: bool = False
+
+
+@dataclass
+class ArchiveScan:
+    """Line stream plus member-level outcomes observed while consuming it."""
+
+    lines: Iterator[LineRecord]
+    succeeded_members: set[str] = field(default_factory=set)
+    member_errors: list[ArchiveMemberError] = field(default_factory=list)
 
 
 def normalize_suffixes(suffixes: set[str]) -> set[str]:
@@ -154,8 +187,9 @@ def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
     return stat.S_ISLNK(info.external_attr >> 16)
 
 
-def _iter_zip(
+def _scan_zip(
     path: Path,
+    scan: ArchiveScan,
     encoding: str,
     fallback_encoding: str,
     max_line_bytes: int,
@@ -165,15 +199,22 @@ def _iter_zip(
             for info in archive.infolist():
                 if info.is_dir() or _is_zip_symlink(info):
                     continue
-                with archive.open(info) as stream:
-                    yield from _iter_binary_lines(
-                        stream,
-                        info.filename,
-                        Path(info.filename).name,
-                        encoding,
-                        fallback_encoding,
-                        max_line_bytes,
-                    )
+                try:
+                    with archive.open(info) as stream:
+                        yield from _iter_binary_lines(
+                            stream,
+                            info.filename,
+                            Path(info.filename).name,
+                            encoding,
+                            fallback_encoding,
+                            max_line_bytes,
+                        )
+                except _ZIP_MEMBER_ERRORS as exc:
+                    # A zip central directory allows random access, so one
+                    # damaged member must not abandon the remaining members.
+                    scan.member_errors.append(ArchiveMemberError(info.filename, str(exc)))
+                else:
+                    scan.succeeded_members.add(info.filename)
     except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
         raise ArchiveFormatError(f"invalid zip archive: {path}") from exc
 
@@ -183,30 +224,56 @@ def _is_tar_name(name: str) -> bool:
     return any(lowered.endswith(suffix) for suffix in TAR_SUFFIXES)
 
 
-def _iter_tar(
+def _scan_tar(
     path: Path,
+    scan: ArchiveScan,
     encoding: str,
     fallback_encoding: str,
     max_line_bytes: int,
 ) -> Iterator[LineRecord]:
     try:
         with tarfile.open(path, mode="r|*") as archive:
-            for member in archive:
-                if not member.isfile():
-                    continue
-                stream = archive.extractfile(member)
-                if stream is None:
-                    continue
-                with stream:
-                    yield from _iter_binary_lines(
-                        stream,
-                        member.name,
-                        Path(member.name).name,
-                        encoding,
-                        fallback_encoding,
-                        max_line_bytes,
-                    )
-    except (tarfile.TarError, EOFError, lzma.LZMAError, gzip.BadGzipFile) as exc:
+            try:
+                for member in archive:
+                    if not member.isfile():
+                        continue
+                    try:
+                        stream = archive.extractfile(member)
+                        if stream is None:
+                            continue
+                        with stream:
+                            yield from _iter_binary_lines(
+                                stream,
+                                member.name,
+                                Path(member.name).name,
+                                encoding,
+                                fallback_encoding,
+                                max_line_bytes,
+                            )
+                    except _TAR_ERRORS as exc:
+                        # Streaming tar cannot reliably seek past a damaged
+                        # member, so stop here and let the caller keep the
+                        # members that were already read.
+                        scan.member_errors.append(
+                            ArchiveMemberError(member.name, str(exc), scan_incomplete=True)
+                        )
+                        return
+                    except OSError as exc:
+                        if isinstance(
+                            exc, (FileNotFoundError, PermissionError, IsADirectoryError)
+                        ):
+                            raise
+                        scan.member_errors.append(
+                            ArchiveMemberError(member.name, str(exc), scan_incomplete=True)
+                        )
+                        return
+                    scan.succeeded_members.add(member.name)
+            except _TAR_ERRORS as exc:
+                scan.member_errors.append(
+                    ArchiveMemberError(None, str(exc), scan_incomplete=True)
+                )
+                return
+    except _TAR_ERRORS as exc:
         raise ArchiveFormatError(f"invalid tar archive: {path}") from exc
     except OSError as exc:
         if isinstance(exc, (FileNotFoundError, PermissionError, IsADirectoryError)):
@@ -214,8 +281,9 @@ def _iter_tar(
         raise ArchiveFormatError(f"invalid tar archive: {path}") from exc
 
 
-def _iter_single_compressed(
+def _scan_single_compressed(
     path: Path,
+    scan: ArchiveScan,
     encoding: str,
     fallback_encoding: str,
     max_line_bytes: int,
@@ -231,6 +299,7 @@ def _iter_single_compressed(
                 fallback_encoding,
                 max_line_bytes,
             )
+        scan.succeeded_members.add(path.stem)
     except (EOFError, lzma.LZMAError, gzip.BadGzipFile) as exc:
         raise ArchiveFormatError(f"invalid compressed file: {path}") from exc
     except OSError as exc:
@@ -239,31 +308,68 @@ def _iter_single_compressed(
         raise ArchiveFormatError(f"invalid compressed file: {path}") from exc
 
 
+def _scan_raw(
+    path: Path,
+    scan: ArchiveScan,
+    encoding: str,
+    fallback_encoding: str,
+    max_line_bytes: int,
+) -> Iterator[LineRecord]:
+    with path.open("rb") as stream:
+        yield from _iter_binary_lines(
+            stream,
+            path.name,
+            path.name,
+            encoding,
+            fallback_encoding,
+            max_line_bytes,
+        )
+    scan.succeeded_members.add(path.name)
+
+
+def scan_archive(
+    path: Path,
+    encoding: str = "utf-8",
+    fallback_encoding: str = "gb18030",
+    max_line_bytes: int = 1_048_576,
+) -> ArchiveScan:
+    """Stream one archive while reporting which members could be read.
+
+    Consume ``scan.lines`` to completion before inspecting the member
+    outcomes. Container-level format errors still raise ``ArchiveFormatError``;
+    damaged members are recorded instead so the worker can finish the healthy
+    members and mark the task ``partial``.
+    """
+    path = Path(path)
+    scan = ArchiveScan(lines=iter(()))
+    suffix = path.suffix.lower()
+    if suffix == ".zip":
+        scan.lines = _scan_zip(path, scan, encoding, fallback_encoding, max_line_bytes)
+    elif _is_tar_name(path.name):
+        # The name declares a tar container; never fall back to decoding the
+        # bytes as a single compressed log stream.
+        scan.lines = _scan_tar(path, scan, encoding, fallback_encoding, max_line_bytes)
+    elif suffix in SINGLE_COMPRESSED_SUFFIXES:
+        scan.lines = _scan_single_compressed(
+            path, scan, encoding, fallback_encoding, max_line_bytes
+        )
+    elif suffix in RAW_SUFFIXES:
+        scan.lines = _scan_raw(path, scan, encoding, fallback_encoding, max_line_bytes)
+    else:
+        raise ValueError(f"unsupported archive type: {path}")
+    return scan
+
+
 def iter_archive_lines(
     path: Path,
     encoding: str = "utf-8",
     fallback_encoding: str = "gb18030",
     max_line_bytes: int = 1_048_576,
 ) -> Iterator[LineRecord]:
-    path = Path(path)
-    suffix = path.suffix.lower()
-    if suffix == ".zip":
-        yield from _iter_zip(path, encoding, fallback_encoding, max_line_bytes)
-    elif _is_tar_name(path.name):
-        # The name declares a tar container; never fall back to decoding the
-        # bytes as a single compressed log stream.
-        yield from _iter_tar(path, encoding, fallback_encoding, max_line_bytes)
-    elif suffix in SINGLE_COMPRESSED_SUFFIXES:
-        yield from _iter_single_compressed(path, encoding, fallback_encoding, max_line_bytes)
-    elif suffix in RAW_SUFFIXES:
-        with path.open("rb") as stream:
-            yield from _iter_binary_lines(
-                stream,
-                path.name,
-                path.name,
-                encoding,
-                fallback_encoding,
-                max_line_bytes,
-            )
-    else:
-        raise ValueError(f"unsupported archive type: {path}")
+    """Strict line-only view: any damaged member fails the whole iteration."""
+    scan = scan_archive(path, encoding, fallback_encoding, max_line_bytes)
+    yield from scan.lines
+    if scan.member_errors:
+        first = scan.member_errors[0]
+        location = first.member_path or "<archive>"
+        raise ArchiveFormatError(f"archive member failed: {location}: {first.message}")
