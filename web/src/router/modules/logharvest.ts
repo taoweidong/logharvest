@@ -35,6 +35,22 @@ const LogHarvest = {
         title: "作业详情",
         showLink: false
       }
+    },
+    {
+      path: "/logharvest/rulesets",
+      name: "RuleSets",
+      component: () => import("@/views/logharvest/rulesets/index.vue"),
+      meta: {
+        title: "规则集"
+      }
+    },
+    {
+      path: "/logharvest/datasources",
+      name: "DataSources",
+      component: () => import("@/views/logharvest/datasources/index.vue"),
+      meta: {
+        title: "数据源"
+      }
     }
   ]
 } satisfies RouteConfigsTable;

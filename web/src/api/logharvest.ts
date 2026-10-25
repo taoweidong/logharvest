@@ -1,12 +1,10 @@
 import { http } from "@/utils/http";
 import type {
-  DataSource,
   DrainVersionResult,
   FileTask,
   Job,
   JobCreatePayload,
   Match,
-  RuleSet,
   SystemStatus,
   WorkerActionRecord,
   WorkerInfo
@@ -92,15 +90,9 @@ export const systemStatus = () =>
   http.request<SystemStatus>("get", "/system/status");
 
 /**
- * 数据源下拉（作业创建对话框用）。
- * 后端为裸数组 + `limit`/`offset`；这里取一页 500 条，LogHarvest 的数据源数量是个位数。
+ * 数据源/规则集的列表与维护接口在 `logharvestAdmin.ts`（Task 5），
+ * 这里只保留作业、命中、系统状态与 Worker 相关的客户端。
  */
-export const listDataSources = (params: ListParams = { limit: 500, offset: 0 }) =>
-  http.request<DataSource[]>("get", "/data-sources", { params });
-
-/** 规则集轻量列表（不含 `config`），同名只会有多个版本 */
-export const listRuleSets = (params: ListParams = { limit: 500, offset: 0 }) =>
-  http.request<RuleSet[]>("get", "/rule-sets", { params });
 
 /** Worker 列表（`limit` 上限 200） */
 export const listWorkers = (params: ListParams = {}) =>

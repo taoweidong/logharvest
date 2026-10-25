@@ -2,7 +2,8 @@
 import { computed, reactive, ref, watch } from "vue";
 import type { FormInstance, FormRules } from "element-plus";
 import { message } from "@/utils/message";
-import { apiErrorDetail, createJob, listDataSources, listRuleSets } from "@/api/logharvest";
+import { apiErrorDetail, createJob } from "@/api/logharvest";
+import { listDataSources, listRuleSets } from "@/api/logharvestAdmin";
 import type { DataSource, Job, RuleSet } from "@/api/logharvestTypes";
 
 defineOptions({ name: "JobCreateDialog" });

@@ -550,19 +550,19 @@ git commit -m "feat: 添加分析作业列表、新建对话框与 SSE 实时进
 - Consumes: `GET/POST /api/rule-sets`、`GET /api/rule-sets/{id}`、`GET/POST /api/data-sources`、`POST /api/data-sources/{id}/test`
 - Produces: 路由 `/logharvest/rulesets`、`/logharvest/datasources`
 
-- [ ] **Step 1: 客户端**
+- [x] **Step 1: 客户端**
 
 Create `web/src/api/logharvestAdmin.ts`：`listRuleSets({limit,offset})`、`getRuleSet(id)`、`createRuleSet(payload)`、`listDataSources({limit,offset})`、`createDataSource(payload)`、`testDataSource(id)`；响应类型分别对应后端 `RuleSetRead`（含 `config`、`created_by`）、`DataSourceRead` 与 `/test` 的 `{exists, is_dir, readable}`。字段以 `service/src/api/v1/schemas.py` 为准。
 
-- [ ] **Step 2: 规则集列表 + 新建**
+- [x] **Step 2: 规则集列表 + 新建**
 
 列表页展示 `name`/`version`/规则数/`created_at`，点击进入详情抽屉。`edit-drawer.vue` 是 JSON 编辑器（`el-input type=textarea` + 校验）+ 结构化表单两条路：**只做结构化表单**（更贴合后端校验，不做自由 JSON 提交，避免用户绕过校验）。字段严格按后端 `RuleSetConfig`：`name`、`file_glob`、`encoding`、`fallback_encoding`、`rules[]`（`id`、`severity`、`match.type ∈ {keyword, regex}`、`keyword.any|all` 互斥、`regex.pattern/flags/timeout_ms>0`、可选 `threshold{field,op,value}` 且 `field` 必须是正则命名分组）。提交 `422` 时把后端 `detail` 原文显示为表单错误（后端已做规则编译/pathspec/codec 校验，前端不重复实现同套逻辑，只做互斥项的基本提示）。新建成功后提示"已创建版本 N"（后端同名 max+1）。
 
-- [ ] **Step 3: 数据源页**
+- [x] **Step 3: 数据源页**
 
 列表 = `name`/`root_path`/`enabled`/`created_at`；新建表单 = `name`、`root_path`、`description`，`read_only` 固定为 `true` 且只读显示（后端只接受 `true`，前端不提供开关）。每行"测试路径"按钮调 `POST /api/data-sources/{id}/test`，用三个 tag 显示 `exists`/`is_dir`/`readable`。
 
-- [ ] **Step 4: 路由与验证**
+- [x] **Step 4: 路由与验证**
 
 在 `logharvest.ts` 的 `children` 追加两条（`rank: 2` 规则集、`rank: 3` 数据源）。
 

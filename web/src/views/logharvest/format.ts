@@ -66,3 +66,24 @@ export function formatDuration(seconds: number | null | undefined): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)} 分`;
   return `${Math.floor(seconds / 3600)} 小时 ${Math.floor((seconds % 3600) / 60)} 分`;
 }
+
+/**
+ * 把后端错误压成可读的多行文本（422 的 `detail` 是 pydantic 校验错误数组，
+ * 每一条都含 `loc` 与 `msg`；字符串 `detail` 原样返回）。
+ * 后端已完成规则编译/pathspec/codec 校验，前端只转述、不重复实现。
+ */
+export function formatDetailError(error: unknown, fallback = "请求失败"): string {
+  const detail = (error as any)?.response?.data?.detail;
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail)) {
+    const lines = detail.map(item => {
+      const loc: string = Array.isArray(item?.loc)
+        ? item.loc.slice(1).join(".")
+        : String(item?.loc ?? "");
+      const msg = item?.msg ?? item?.detail ?? "校验失败";
+      return loc ? `${loc}: ${msg}` : String(msg);
+    });
+    return lines.join("\n");
+  }
+  return fallback;
+}

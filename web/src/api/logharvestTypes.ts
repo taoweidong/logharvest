@@ -190,6 +190,20 @@ export type DataSourceTestResult = {
   readable: boolean;
 };
 
+/** `DataSourceCreate`：`read_only` 后端是 `Literal[True]`，只接受 `true` */
+export type DataSourceCreatePayload = {
+  name: string;
+  root_path: string;
+  read_only: true;
+  description?: string;
+};
+
+/** `RuleSetCreate`：同名会自动 +1 生成新版本（后端 max+1） */
+export type RuleSetCreatePayload = {
+  name: string;
+  config: RuleSetConfig;
+};
+
 /** Worker 管理写接口的返回（drain / resume 共用） */
 export type WorkerActionRecord = {
   id: string;
