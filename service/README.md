@@ -151,7 +151,7 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` 已从认证路径与
 | `GET` | `/api/jobs/{id}` | 作业详情 |
 | `GET` | `/api/jobs/{id}/files` | 作业的文件任务，`limit`/`offset` 分页；可选 `status` 精确筛选（`pending`/`running`/`succeeded`/`partial`/`failed`/`cancelled`），值不在枚举内返回 `422`；条目含 `status`、`attempts`、`max_attempts`、`worker_id`、`heartbeat_at`、`error` |
 | `POST` | `/api/jobs/{id}/cancel` | 请求取消作业 |
-| `POST` | `/api/jobs/{id}/files/retry-failed` | 把该作业处于 `failed` 的文件任务放回队列（置 `pending`、清 `error`/`worker_id`/`finished_at`、`scheduled_at=now()`），`attempts` 历史保留、不重置；返回 `{retried: n}`；作业不存在 `404`，作业已处于非 `cancelled` 的终态 `409` |
+| `POST` | `/api/jobs/{id}/files/retry-failed` | 把该作业处于 `failed` 的文件任务放回队列（置 `pending`、清 `error`/`worker_id`/`finished_at`、`scheduled_at=now()`），`attempts` 历史保留、不重置；返回 `{retried: n, remaining_failed: m}`（单次最多 200 条，`remaining_failed` 是本次未取走的剩余数）；确有任务入队且作业处于终态时，作业被拉回 `running` 并清 `finished_at`，否则终态汇总看不到它；作业不存在 `404`，**已取消**（`cancel_requested` 或 `cancelled`）返回 `409` —— `CLAIM_SQL` 永不再领取取消作业的任务，重新入队会让它永久滞留 |
 | `GET` | `/api/matches` | 命中结果；必须提供 `job_id` 或 `created_from` + `created_to`，支持 `rule_id`、`file_name`、`severity`、`(created_at,id)` 游标与 `limit` |
 | `GET` | `/api/workers` | Worker 列表，`limit`/`offset` 分页（不包含心跳/管理写接口） |
 | `POST` | `/api/workers/{id}/drain` | 请求排空；返回 `{id, drain_requested, status}`，离线 Worker 只记录标记、状态保持 `offline` |
@@ -305,13 +305,13 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 - 认证领域核心：`users`/`roles`/`user_roles` 三张表、bcrypt 口令哈希（超 72 字节先 SHA-256，拒绝空口令）、HS256 `TokenService`（`access`/`refresh` 带 `type` 声明、密钥最短 32 字符、过期与错签名一律拒绝）。
 - JWT 登录链路：`POST /api/login`、`POST /api/refresh-token`、`GET /api/auth/routes`、`POST /api/logout`（四个端点返回 `{"code","message","data"}` 信封），`AdminDep` 由"比对静态 token"替换为"解码 access token + 校验 `admin` 角色码"并接入全部业务路由，`scripts/seed_admin.py` 幂等创建管理员。
 - Alembic：`0001_baseline`（七张业务表）+ `0002_auth_tables`（显式 op），`src/infrastructure/migrations.py:run_migrations()` 由 lifespan 按 `LOGHARVEST_AUTO_CREATE_TABLES` 执行 `upgrade head`；测试关掉迁移改用 `create_all`，并用逐表逐列断言防止漏写迁移。
-- 队列/Worker 遗留语义：领取语句带回 `size_bytes`/`mtime`，复制前源校验，源缺失或变更走 `PermanentTaskFailure` 并以 `retryable=False` 落 `failed`（不自动重试），行循环取消检查（`is_job_cancelled` → `cancelled`），手动重试 `POST /api/jobs/{id}/files/retry-failed`。
-- 概览与运维：`GET /api/system/overview`（作业/文件任务分组计数、24 小时命中量、在线 Worker 与版本分布、最老 pending 等待秒数）、`POST /api/system/maintenance`（`run_maintenance`：回收僵死任务、降级静默 Worker、收尾作业）、`GET /api/jobs/{id}/files?status=` 状态筛选。
+- 队列/Worker 遗留语义：领取语句带回 `size_bytes`/`mtime`，复制前源校验，源缺失或变更走 `PermanentTaskFailure` 并以 `retryable=False` 落 `failed`（不自动重试），取消检查按心跳预算执行（每 `heartbeat_every_lines` 行或每 `heartbeat_every_seconds` 秒一次，`is_job_cancelled` → `cancelled`；规格 §7.3 的"每 2 万行"，不是逐行 SELECT），手动重试 `POST /api/jobs/{id}/files/retry-failed`。
+- 概览与运维：`GET /api/system/overview`（作业/文件任务分组计数、24 小时命中量、在线 Worker 与版本分布、最老 pending 等待秒数）、`POST /api/system/maintenance`（`run_maintenance`：回收僵死任务、降级静默 Worker、收尾作业；**队列不是 PostgreSQL 时返回 503**，因为回收语句用了 PostgreSQL 专有语法）、`GET /api/jobs/{id}/files?status=` 状态筛选。
 
 ### 明确不包含（后续里程碑）
 
-- Vue 3 + TypeScript + Element Plus 前端与 Worker 管理页（M2b）。
-- 真实 PostgreSQL 集成测试环境（当前只有 SQL 形状断言与 fake 运行时）；Alembic 迁移与 `alembic upgrade head` 在 PostgreSQL 上的执行同样未验证。
+- 前端本身在仓库的 [`../web/`](../web/)（M2b 已交付，见其 README）；后端不为前端提供动态菜单接口，`GET /api/auth/routes` 有意返回空数组。
+- 真实 PostgreSQL 集成测试环境（当前只有 SQL 形状断言与 fake 运行时）；Alembic 迁移与 `alembic upgrade head` 在 PostgreSQL 上的执行同样未验证（含多副本启动的 advisory lock 串行化）。
 - Docker/PostgreSQL 部署编排；镜像替换由 Jenkins + Docker Compose 执行，Web 不承载部署。
 - 进程内复制并发池与 `LOGHARVEST_MAX_MATCHES_PER_TASK` 强制执行；单文件级 `partial` 成员状态。
 - 多行堆栈规则；v1 保持单行优先。

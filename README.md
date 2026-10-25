@@ -4,7 +4,9 @@
 
 LogHarvest 面向企业 NAS 上的海量压缩日志：按任务目录递归扫描压缩文件，拆分给多个 Worker 并行下载、解压和规则匹配，将命中记录连同压缩包路径、包内路径、文件名、物理行号、原始行和规则版本写入 PostgreSQL。
 
-M0 核心引擎、M1a 控制面 API、M1b Worker/队列与 M2a 后端认证/运维已落地：规则编译/匹配、压缩包发现与流式读取、Worker 处理器、七张核心表模型；数据源、规则集版本、作业规划、文件任务、结果与系统状态 REST API；PostgreSQL `SKIP LOCKED` 任务队列、Worker 常驻领取循环（复制/解析期租约续期、僵死回收、重试退避、尝试历史）、作业终态汇总、SSE 进度与 Worker drain/resume 管理；JWT 登录与最小 RBAC、Alembic 迁移与启动接线、取消/永久失败/手动重试语义、概览统计与服务端维护入口。代码位于 [`service/`](service/)，接口、登录流程、Worker 启动与开发说明见 [`service/README.md`](service/README.md)。前端（M2b）与真实 PostgreSQL 集成测试环境仍待落地，仓库同时归档架构设计与技术选型文档。
+M0 核心引擎、M1a 控制面 API、M1b Worker/队列、M2a 后端认证/运维与 M2b 前端已落地：规则编译/匹配、压缩包发现与流式读取、Worker 处理器、七张核心表模型；数据源、规则集版本、作业规划、文件任务、结果与系统状态 REST API；PostgreSQL `SKIP LOCKED` 任务队列、Worker 常驻领取循环（复制/解析期租约续期、僵死回收、重试退避、尝试历史）、作业终态汇总、SSE 进度与 Worker drain/resume 管理；JWT 登录与最小 RBAC、Alembic 迁移与启动接线、取消/永久失败/手动重试语义、概览统计与服务端维护入口；Vue 3 + TypeScript + Element Plus 前端（派生自 vue-pure-admin，MIT）含登录、概览、作业+SSE 实时进度、规则集、数据源、命中结果游标浏览与 Worker 管理。
+
+后端见 [`service/`](service/)（接口、登录流程、Worker 启动说明在 [`service/README.md`](service/README.md)），前端见 [`web/`](web/)（开发、联调与授权声明在 [`web/README.md`](web/README.md)）。真实 PostgreSQL 集成测试环境仍待补，仓库同时归档架构设计与技术选型文档。
 
 ## 核心约束
 
@@ -57,6 +59,7 @@ FastAPI Server ──────────────> PostgreSQL
 - M1b Worker/队列已实现：PostgreSQL `file_tasks` + `FOR UPDATE SKIP LOCKED` 领取、`attempts` 租约栅栏的心跳/复制续租/终态写回、`file_task_attempts` 尝试历史、失败线性退避、`recover_stale` 僵死回收与 Worker 启动/每 300 秒周期补偿、`matches` 批量写入与重试清理；Worker 常驻循环 `python -m src.worker`（drain 检查、不绑定作业、信号优雅退出）；作业终态汇总（`succeeded`/`partial`/`failed`/`cancelled`）由最后完成任务的 Worker 写入并周期兜底；SSE 作业进度 `GET /api/jobs/{id}/events`（终态或作业删除即结束、每轮独立短会话）；Worker 管理接口 `drain`/`resume`/`drain-version`。队列 SQL 为 PostgreSQL 专有，本机无实例，故以 SQL 形状断言与 fake 运行时验证，作业汇总语义在真实建表的 SQLite 上验证。
 - M2a 后端认证/运维已实现：`users`/`roles`/`user_roles` 三张表 + bcrypt 口令（超 72 字节先 SHA-256）+ HS256 `TokenService`（access/refresh 带 `type` 声明，不可互换）；`POST /api/login`、`POST /api/refresh-token`、`GET /api/auth/routes`、`POST /api/logout` 四个返回 `{code,message,data}` 信封的端点，其余业务接口保持纯 REST；`AdminDep` 改为解码 JWT 并校验 `admin` 角色码（`401` 缺失/无效/过期，`403` 非管理员）。Alembic `0001_baseline`/`0002_auth_tables` 与启动接线，测试用 autouse fixture 关掉迁移、改用 `create_all`，并逐表逐列比对迁移结果与模型 metadata。队列语义补齐：领取带回 `size_bytes`/`mtime`、复制前源校验、源缺失或变更判 `PermanentTaskFailure` 且 `retryable=False` 不自动重试、行循环取消检查（`is_job_cancelled` → `cancelled`）、`POST /api/jobs/{id}/files/retry-failed` 手动重试。运维接口：`GET /api/system/overview`（分组计数、24 小时命中量、在线 Worker 与版本分布、最老 pending 等待秒数）、`POST /api/system/maintenance`（服务端补偿：回收僵死任务、降级静默 Worker、收尾作业，幂等可重复，周期调度交给外部 cron/compose）、`GET /api/jobs/{id}/files?status=` 状态筛选。认证与迁移的 SQLite/测试边界见 [service/README.md](service/README.md)。
 - 本地运行注意：应用启动（lifespan）时按 `LOGHARVEST_AUTO_CREATE_TABLES=true` 执行 `alembic upgrade head`，不需要手工建表；新库先跑 `uv run --python 3.12 -m scripts.seed_admin` 建管理员，再用 `POST /api/login` 换 access token（静态管理员 token 已不再参与认证）。Worker 必须指向 PostgreSQL 连接串，命令与配置见 [service/README.md](service/README.md)。
-- 尚未实现（后续里程碑）：Vue 前端与 Worker 管理页（M2b）、真实 PostgreSQL 集成测试环境（队列 SQL 与 Alembic 迁移均只在本机 SQLite 上验证过可移植部分）、Docker/PostgreSQL 部署编排、进程内复制并发池与单任务命中上限强制、单文件级 `partial` 成员状态、多行堆栈规则、动态菜单与按钮级权限、token 黑名单/服务端会话与 Redis。
-- 下一步：M2b 接 Hello-FastApi 前端的任务/规则/Worker 管理界面（登录、静态菜单、概览、文件任务筛选与失败重试按钮），并在具备 PostgreSQL 的机器上补队列、`SKIP LOCKED` 并发与 Alembic 迁移的集成验证。
+- 尚未实现（后续里程碑）：真实 PostgreSQL 集成测试环境（队列 SQL 与 Alembic 迁移均只在本机 SQLite 上验证过可移植部分）、Docker/PostgreSQL 部署编排、进程内复制并发池与单任务命中上限强制、单文件级 `partial` 成员状态、多行堆栈规则、动态菜单与按钮级权限、token 黑名单/服务端会话与 Redis、Worker 资源指标（`cpu_percent`/`memory_bytes`/`temp_disk_free_bytes` 已在模型与接口里但尚无写入方）、`file_task_attempts` 的读取接口与界面。
+- 前端验证口径：`pnpm typecheck` 与 `pnpm build` 均通过，接口契约用真实后端逐条实测；但本机内置浏览器是隐藏页，**未做任何人工视觉确认**，没有界面被断言"渲染正确"。
+- 下一步：在具备 PostgreSQL 的机器上补队列、`SKIP LOCKED` 并发与 Alembic 迁移的集成验证，并把多副本启动的迁移锁与 Worker 资源上报接上。
 - 历史详细稿保留在本地 `docs/superpowers/specs/archive/`，未纳入仓库，避免与当前方案混淆。
