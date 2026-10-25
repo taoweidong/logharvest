@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from src.api.v1.schemas import JobCreate, JobFileFilter
+from src.config.settings import settings
 from src.domain.archive.models import ScanLimitError
 from src.domain.archive.reader import (
     ARCHIVE_SUFFIXES,
@@ -14,6 +15,7 @@ from src.domain.archive.reader import (
     normalize_suffixes,
 )
 from src.domain.models.entities import DataSource, FileTask, Job, RuleSet, utcnow
+from src.domain.source_guard import guard_source
 
 TERMINAL_JOB_STATUSES = frozenset({"succeeded", "partial", "failed", "cancelled"})
 
@@ -102,6 +104,10 @@ def create_job(
         raise HTTPException(status_code=400, detail="source_path is outside data source root")
     if not source_path.is_dir():
         raise HTTPException(status_code=400, detail="source_path is not a directory")
+
+    # 只读校验必须在扫描之前完成：一旦挂载被判定可写，后面的规划与执行都不该发生
+    # （规格 §7.2）。按真正要扫描的目录判定，嵌套挂载可以各自不同。
+    guard_source(source_path, policy=settings.nas_read_only_policy)
 
     source_id = source.id
     rule_set_id = rule_set.id

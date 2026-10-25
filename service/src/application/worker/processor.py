@@ -16,6 +16,7 @@ from src.application.worker.ports import (
 )
 from src.domain.archive.reader import iter_archive_lines
 from src.domain.rules.evaluator import CompiledRuleSet, evaluate_line
+from src.domain.source_guard import POLICY_ENFORCE, SourceNotReadOnly, guard_source
 
 RAW_LINE_LIMIT = 4096
 COPY_CHUNK_SIZE = 1024 * 1024
@@ -55,6 +56,7 @@ class TaskProcessor:
         clock: Callable[[], float] = monotonic,
         on_lease_refresh: Callable[[], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        nas_read_only_policy: str = POLICY_ENFORCE,
     ) -> None:
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -75,6 +77,7 @@ class TaskProcessor:
         self._clock = clock
         self._on_lease_refresh = on_lease_refresh
         self._cancel_check = cancel_check
+        self._nas_read_only_policy = nas_read_only_policy
         self._member_spec = pathspec.PathSpec.from_lines("gitwildmatch", [rules.config.file_glob])
 
     def _verify_lease(self, task: ClaimedTask) -> None:
@@ -125,6 +128,9 @@ class TaskProcessor:
 
         result: TaskResult
         try:
+            # 只读守卫排在最前面：可写挂载上连 stat、租约栅栏和本地复制都不该发生
+            # （规格 §7.2）。判定按压缩包所在目录，嵌套挂载可以各自不同。
+            guard_source(task.source_path.parent, policy=self._nas_read_only_policy)
             # A source that vanished or changed since planning must not be
             # retried; fail it permanently before spending a lease fence or copy.
             self._check_source(task)
@@ -202,6 +208,18 @@ class TaskProcessor:
             self._repo.complete(task.id, task.attempts, "cancelled", processed_lines, matched_rows)
             return TaskResult("cancelled", processed_lines, matched_rows, "job cancelled")
         except PermanentTaskFailure as exc:
+            self._repo.complete(
+                task.id,
+                task.attempts,
+                "failed",
+                processed_lines,
+                matched_rows,
+                str(exc),
+                retryable=False,
+            )
+            return TaskResult("failed", processed_lines, matched_rows, str(exc))
+        except SourceNotReadOnly as exc:
+            # 可写挂载是环境事实，不是抖动：重试只会同样失败并烧光 max_attempts。
             self._repo.complete(
                 task.id,
                 task.attempts,

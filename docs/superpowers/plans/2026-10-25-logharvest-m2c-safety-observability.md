@@ -356,7 +356,7 @@ git commit -m "feat: 添加无副作用的 NAS 只读判定与数据源检测结
 - Consumes: Task 1 的 `guard_source`、`SourceNotReadOnly`、`settings.nas_read_only_policy`
 - Produces: `POST /api/jobs` 在可写挂载上返回 `409`；Worker 在可写挂载上以永久失败落 `failed`（不自动重试）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加到 `service/tests/api/test_jobs.py`:
 
@@ -423,7 +423,7 @@ def test_writable_mount_is_a_permanent_failure(tmp_path: Path, monkeypatch) -> N
 Run: `cd service && uv run --python 3.12 pytest tests/api/test_jobs.py tests/application/worker/test_processor.py -q`
 Expected: FAIL（`guard_source` 名称不存在 → monkeypatch 的 raising 参数会报错）
 
-- [ ] **Step 2: 接线**
+- [x] **Step 2: 接线**
 
 Modify `service/src/application/services/jobs.py`：导入 `from src.domain.source_guard import SourceNotReadOnly, guard_source`，在 `create_job` 完成路径存在性与逃逸校验之后、开始扫描之前插入：
 
@@ -460,7 +460,7 @@ Modify `service/src/application/worker/processor.py`：导入 `from src.domain i
 Run: `cd service && uv run --python 3.12 pytest tests/api/test_jobs.py tests/application/worker tests/worker -q`
 Expected: passed
 
-- [ ] **Step 3: 全量与提交**
+- [x] **Step 3: 全量与提交**
 
 ```bash
 cd service && uv run --python 3.12 pytest -q

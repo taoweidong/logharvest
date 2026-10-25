@@ -13,6 +13,7 @@ from src.application.worker.processor import LeaseLost, TaskProcessor
 from src.config.settings import settings
 from src.domain.rules.evaluator import CompiledRuleSet, compile_ruleset
 from src.domain.rules.models import RuleSetConfig
+from src.domain.source_guard import POLICY_ENFORCE
 from src.infrastructure.database import engine
 from src.infrastructure.match_writer import PostgresMatchWriter
 from src.infrastructure.task_queue import PostgresTaskRepository
@@ -46,6 +47,7 @@ class WorkerRuntime:
         stale_seconds: int = DEFAULT_STALE_SECONDS,
         recover_interval_seconds: float = DEFAULT_RECOVER_INTERVAL_SECONDS,
         batch_size: int = 1000,
+        nas_read_only_policy: str = POLICY_ENFORCE,
     ) -> None:
         self._repo = repo
         self._writer = writer
@@ -57,6 +59,7 @@ class WorkerRuntime:
         self._stale_seconds = stale_seconds
         self._recover_interval_seconds = recover_interval_seconds
         self._batch_size = batch_size
+        self._nas_read_only_policy = nas_read_only_policy
 
     def run_once(self) -> bool:
         """Claim and process at most one task; return whether work was attempted."""
@@ -85,6 +88,7 @@ class WorkerRuntime:
                     rules=self._rules_factory(task),
                     work_dir=self._work_dir,
                     batch_size=self._batch_size,
+                    nas_read_only_policy=self._nas_read_only_policy,
                     cancel_check=cancel_check,
                     # A task can run for minutes; keep workers.last_heartbeat
                     # fresh so the management view and the peer dead-worker
@@ -197,6 +201,7 @@ def main() -> None:
         work_dir=work_dir,
         poll_seconds=settings.worker_poll_seconds,
         batch_size=settings.matches_batch_size,
+        nas_read_only_policy=settings.nas_read_only_policy,
     )
 
     stop = Event()
