@@ -55,6 +55,28 @@ async function onTest(row: DataSource) {
   }
 }
 
+/** 路径测试布尔项的中文化：不要直接把后端的字段名摆在界面上 */
+const TEST_FLAG_LABELS: Record<"exists" | "is_dir" | "readable", string> = {
+  exists: "存在",
+  is_dir: "目录",
+  readable: "可读"
+};
+
+/**
+ * 只读判定的展示。与后端 schema 的不变量保持一致：只有 `read_only_confirmed` 为真才
+ * 显示"已确认只读"。判不出来（Windows / SMB 挂载，后端返回 `unknown` + `false`）时
+ * 必须如实说"未确认"——给用户一个假的绿勾比承认判定不了更糟（规格 §7.2）。
+ */
+function readonlyVerdict(result: DataSourceTestResult) {
+  if (result.writability === "writable") {
+    return { text: "可写：禁止处理", type: "danger" as const };
+  }
+  if (result.read_only_confirmed) {
+    return { text: "只读已确认", type: "success" as const };
+  }
+  return { text: "只读未确认", type: "warning" as const };
+}
+
 async function onCreate() {
   if (!formRef.value) return;
   const valid = await formRef.value.validate().catch(() => false);
@@ -126,7 +148,7 @@ onMounted(load);
             {{ formatDateTime(row.created_at) }}
           </template>
           <template #test="{ row }">
-            <div v-if="testResults[row.id]" class="flex gap-1">
+            <div v-if="testResults[row.id]" class="flex flex-wrap gap-1">
               <el-tag
                 v-for="flag in (['exists', 'is_dir', 'readable'] as const)"
                 :key="flag"
@@ -134,7 +156,14 @@ onMounted(load);
                 :type="testResults[row.id][flag] ? 'success' : 'danger'"
                 effect="plain"
               >
-                {{ flag }}: {{ testResults[row.id][flag] ? "✓" : "✗" }}
+                {{ TEST_FLAG_LABELS[flag] }}: {{ testResults[row.id][flag] ? "✓" : "✗" }}
+              </el-tag>
+              <el-tag
+                :size="size"
+                :type="readonlyVerdict(testResults[row.id]).type"
+                effect="plain"
+              >
+                {{ readonlyVerdict(testResults[row.id]).text }}
               </el-tag>
             </div>
             <span v-else class="text-gray-400">未测试</span>

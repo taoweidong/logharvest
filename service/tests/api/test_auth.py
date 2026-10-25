@@ -1,7 +1,10 @@
+import pytest
 from sqlmodel import Session
 
+from src.api import dependencies
 from src.application.services.auth import ensure_admin
 from src.domain.models.auth import ADMIN_ROLE_CODE, User
+from src.domain.services.rate_limit import SlidingWindowLimiter
 from src.domain.services.tokens import TokenService
 
 UNIT_SECRET = "unit-secret-key-0123456789-abcdef"
@@ -211,3 +214,98 @@ def test_token_service_follows_the_current_secret(monkeypatch) -> None:
 
     stale = get_token_service()
     assert stale.decode(token, expected_type="access") is None
+
+
+# --- 登录限流 ---------------------------------------------------------------
+
+
+def install_limiter(
+    monkeypatch: pytest.MonkeyPatch, max_attempts: int = 3, window_seconds: int = 60
+) -> SlidingWindowLimiter:
+    """把进程级单例换成阈值可控的实例，免得为了触发 429 打十几次登录。"""
+    limiter = SlidingWindowLimiter(max_attempts=max_attempts, window_seconds=window_seconds)
+    monkeypatch.setattr(dependencies, "_login_limiter", limiter)
+    return limiter
+
+
+def test_login_is_rate_limited_after_repeated_failures(client, session, monkeypatch) -> None:
+    """阈值内照常 401；越过阈值必须 429，而且连 bcrypt 都不再跑。"""
+    from src.api.v1 import routes_auth
+
+    install_limiter(monkeypatch)
+    ensure_admin(session, "admin", "Sup3r-Secret")
+    calls: list[str] = []
+    monkeypatch.setattr(
+        routes_auth, "verify_password", lambda password, hashed: calls.append(hashed) or False
+    )
+
+    codes = [
+        client.post("/api/login", json={"username": "admin", "password": "wrong"}).status_code
+        for _ in range(4)
+    ]
+
+    assert codes == [401, 401, 401, 429]
+    # 第 4 次请求止于限流判定：bcrypt 才是这里最该省下来的开销。
+    assert len(calls) == 3
+
+
+def test_rate_limited_response_carries_retry_after(client, session, monkeypatch) -> None:
+    install_limiter(monkeypatch, max_attempts=1)
+    ensure_admin(session, "admin", "Sup3r-Secret")
+
+    client.post("/api/login", json={"username": "admin", "password": "wrong"})
+    blocked = client.post("/api/login", json={"username": "admin", "password": "wrong"})
+
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"] == "too many login attempts; try again later"
+    assert blocked.headers["retry-after"].isdigit()
+    assert int(blocked.headers["retry-after"]) >= 1
+
+
+def test_successful_login_clears_the_failure_counter(client, session, monkeypatch) -> None:
+    """知道口令的人不该被自己早先的输错挡在门外。"""
+    install_limiter(monkeypatch)
+    ensure_admin(session, "admin", "Sup3r-Secret")
+    for _ in range(2):
+        client.post("/api/login", json={"username": "admin", "password": "wrong"})
+
+    ok = client.post("/api/login", json={"username": "admin", "password": "Sup3r-Secret"})
+    assert ok.status_code == 200
+
+    # 成功之后重新累计，而不是接着之前的失败次数。
+    codes = [
+        client.post("/api/login", json={"username": "admin", "password": "wrong"}).status_code
+        for _ in range(3)
+    ]
+    assert codes == [401, 401, 401]
+
+
+def test_rate_limit_is_scoped_per_username(client, session, monkeypatch) -> None:
+    """一个用户名被按住不该连累别的用户名（同一来源下）。"""
+    install_limiter(monkeypatch, max_attempts=1)
+    ensure_admin(session, "admin", "Sup3r-Secret")
+
+    client.post("/api/login", json={"username": "admin", "password": "wrong"})
+    blocked = client.post("/api/login", json={"username": "admin", "password": "wrong"})
+    other = client.post("/api/login", json={"username": "ghost", "password": "wrong"})
+
+    assert blocked.status_code == 429
+    assert other.status_code == 401
+
+
+def test_disabled_account_does_not_consume_the_login_budget(client, session, monkeypatch) -> None:
+    """停用账号的口令是对的：计失败会让"停用"变成一把谁都能拧的反向锁。"""
+    install_limiter(monkeypatch, max_attempts=1)
+    user = ensure_admin(session, "suspended", "Suspend-Pass-1")
+    user.is_active = False
+    session.add(user)
+    session.commit()
+
+    codes = [
+        client.post(
+            "/api/login", json={"username": "suspended", "password": "Suspend-Pass-1"}
+        ).status_code
+        for _ in range(3)
+    ]
+
+    assert codes == [403, 403, 403]

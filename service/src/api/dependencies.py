@@ -9,6 +9,7 @@ from sqlmodel import Session
 from src.application.services.auth import role_codes
 from src.config.settings import settings
 from src.domain.models.auth import ADMIN_ROLE_CODE, User
+from src.domain.services.rate_limit import SlidingWindowLimiter
 from src.domain.services.tokens import TokenService
 from src.infrastructure.database import engine
 
@@ -47,6 +48,28 @@ def get_token_service() -> TokenService:
         access_minutes=settings.access_token_expire_minutes,
         refresh_days=settings.refresh_token_expire_days,
     )
+
+
+_login_limiter: SlidingWindowLimiter | None = None
+
+
+def get_login_limiter() -> SlidingWindowLimiter:
+    """登录限流器；与 :func:`get_token_service` 的"不缓存"正好相反。
+
+    限流状态本来就必须跨请求存活，缓存它就是目的。阈值只在首次调用时从 settings
+    读一次：限流不是密钥，没有轮换需求，而每次登录都重建一个限流器会让限流失效。
+    测试需要干净状态时请重置 ``_login_limiter``（conftest 已 autouse 处理）。
+    """
+    global _login_limiter
+    if _login_limiter is None:
+        _login_limiter = SlidingWindowLimiter(
+            max_attempts=settings.login_max_attempts,
+            window_seconds=settings.login_window_seconds,
+        )
+    return _login_limiter
+
+
+LoginRateLimiterDep = Annotated[SlidingWindowLimiter, Depends(get_login_limiter)]
 
 
 def _unauthorized(reason: str) -> HTTPException:

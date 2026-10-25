@@ -75,7 +75,6 @@ export const cancelJob = (id: number) =>
  * 后端区分两种「没有数据」：
  * - 任务存在且属于该作业但没有历史 → `200 []`（界面显示「该任务尚无尝试记录」）
  * - 任务不存在或不属于该作业 → `404 {"detail": "file task not found"}`（界面显示错误）
- * 该端点在当前运行的后端上**尚未存在**，界面必须把失败如实显示出来，不能退化成空表。
  */
 export const listTaskAttempts = (jobId: number, taskId: number) =>
   http.request<FileTaskAttempt[]>(
@@ -85,11 +84,16 @@ export const listTaskAttempts = (jobId: number, taskId: number) =>
 
 /**
  * 重试作业内全部失败的文件任务（把 `failed` 重置回 `pending` 等待 Worker 领取）。
- * 契约：`POST /api/jobs/{id}/files/retry-failed` → `{"retried": n}`。
- * 该端点由后端 M2a 并行轨道补充实现，前端按其约定先行对接。
+ * 契约：`POST /api/jobs/{id}/files/retry-failed` → `{"retried": n, "remaining_failed": m}`。
+ * 单次最多重置 200 个（后端 `limit`），`remaining_failed` 是本次没轮到的数量，必须
+ * 让操作者看见，否则"点一次重试"会被误认为是"全部重试完了"。
+ * 已取消的作业返回 `409`；`partial` 任务不在范围内（它已经有部分结果）。
  */
 export const retryFailedFiles = (id: number) =>
-  http.request<{ retried: number }>("post", `/jobs/${id}/files/retry-failed`);
+  http.request<{ retried: number; remaining_failed: number }>(
+    "post",
+    `/jobs/${id}/files/retry-failed`
+  );
 
 /**
  * 命中结果查询（游标分页）。

@@ -11,6 +11,7 @@ from time import monotonic, time
 from src.application.worker.ports import ClaimedTask, WorkerStats
 from src.application.worker.processor import LeaseLost, TaskProcessor
 from src.config.settings import settings
+from src.domain.archive.reader import ArchiveBudget
 from src.domain.rules.evaluator import CompiledRuleSet, compile_ruleset
 from src.domain.rules.models import RuleSetConfig
 from src.domain.source_guard import POLICY_ENFORCE
@@ -52,6 +53,7 @@ class WorkerRuntime:
         nas_read_only_policy: str = POLICY_ENFORCE,
         collect_stats: Callable[[Path], WorkerStats] | None = None,
         logger=None,
+        archive_budget: ArchiveBudget | None = None,
     ) -> None:
         self._repo = repo
         self._writer = writer
@@ -66,6 +68,7 @@ class WorkerRuntime:
         self._nas_read_only_policy = nas_read_only_policy
         self._collect_stats = collect_stats
         self._logger = logger
+        self._archive_budget = archive_budget
 
     def _stats(self) -> WorkerStats | None:
         """None 表示未注入采集器：轻量 fake 与测试保持零依赖。"""
@@ -78,19 +81,41 @@ class WorkerRuntime:
             return
         getattr(self._logger, level)(event, **kwargs)
 
+    def _report_status(self, status: str, task_id: int | None = None) -> None:
+        """向 workers 表上报状态；上报失败只记录，绝不允许反噬主循环。
+
+        ``workers.last_heartbeat`` 只服务于管理视图与对端死 Worker 清扫，租约的权威
+        判定是 ``file_tasks`` 上的 ``touch``（见 :mod:`processor`）。因此一次心跳
+        抖动必须能被容忍：把异常抛回处理器，只会导致本可以跑完的长任务被记成失败。
+        """
+        try:
+            self._repo.heartbeat_worker(self._worker_id, status, task_id, stats=self._stats())
+        except Exception as exc:  # noqa: BLE001
+            self._log("error", "worker_loop_error", stage="heartbeat", error=str(exc))
+
     def run_once(self) -> bool:
-        """Claim and process at most one task; return whether work was attempted."""
-        if self._repo.is_draining(self._worker_id):
-            # Keep the management view in sync without claiming new work.
-            self._repo.heartbeat_worker(self._worker_id, "draining", stats=self._stats())
+        """Claim and process at most one task; return whether work was attempted.
+
+        ``False`` 同时也是"本轮没有进展"的信号，:meth:`run_forever` 借此退避一个轮询
+        周期。仓库交互（drain 判定、认领、心跳）一律放进护栏：数据库抖动是常态，
+        让它穿透到 :func:`main` 会让进程静默消失——已认领的任务就只能在 120 秒后
+        等僵死回收（规格 §7.3 要求 Worker 长期驻留、故障自愈）。
+        """
+        try:
+            if self._repo.is_draining(self._worker_id):
+                # Keep the management view in sync without claiming new work.
+                self._report_status("draining")
+                return False
+
+            task = self._repo.claim_next(self._worker_id, self._worker_version)
+            if task is None:
+                self._report_status("online")
+                return False
+            self._report_status("busy", task.id)
+        except Exception as exc:  # noqa: BLE001
+            self._log("error", "worker_loop_error", stage="claim", error=str(exc))
             return False
 
-        task = self._repo.claim_next(self._worker_id, self._worker_version)
-        if task is None:
-            self._repo.heartbeat_worker(self._worker_id, "online", stats=self._stats())
-            return False
-
-        self._repo.heartbeat_worker(self._worker_id, "busy", task.id, stats=self._stats())
         self._log(
             "info",
             "task_claimed",
@@ -114,13 +139,12 @@ class WorkerRuntime:
                     work_dir=self._work_dir,
                     batch_size=self._batch_size,
                     nas_read_only_policy=self._nas_read_only_policy,
+                    budget=self._archive_budget,
                     cancel_check=cancel_check,
                     # A task can run for minutes; keep workers.last_heartbeat
                     # fresh so the management view and the peer dead-worker
                     # sweep do not see a live process as stalled.
-                    on_lease_refresh=lambda: self._repo.heartbeat_worker(
-                        self._worker_id, "busy", task.id, stats=self._stats()
-                    ),
+                    on_lease_refresh=lambda: self._report_status("busy", task.id),
                 )
             except Exception as exc:  # noqa: BLE001
                 # A broken rule config or work-dir setup must not leave the
@@ -163,7 +187,7 @@ class WorkerRuntime:
                         )
                     self._finalize_job(task.job_id)
         finally:
-            self._repo.heartbeat_worker(self._worker_id, "online", stats=self._stats())
+            self._report_status("online")
         return True
 
     def run_forever(self, stop_event: Event | None = None) -> None:
@@ -175,18 +199,35 @@ class WorkerRuntime:
         next_recover = monotonic() + self._recover_interval_seconds
         try:
             while not stop.is_set():
-                now = monotonic()
-                if now >= next_recover:
-                    # Periodic sweep so abandoned tasks are retried even when no
-                    # worker process restarts, and jobs closed by recovery or
-                    # cancellation are finalized without a completion callback.
-                    self._recover_stale()
-                    self._sweep_finished_jobs()
-                    next_recover = now + self._recover_interval_seconds
-                if not self.run_once():
+                # 兜底护栏：除了 KeyboardInterrupt / SystemExit（BaseException，
+                # 必须放行才能让 SIGINT 与 SIGTERM 真正停下进程），其余任何异常都只
+                # 记一条结构化日志后退避重试。漏网异常一旦穿透到这里，Worker 就会
+                # 静默消失，而它手上的任务要等到僵死回收才有人接手。
+                try:
+                    now = monotonic()
+                    if now >= next_recover:
+                        # Periodic sweep so abandoned tasks are retried even when no
+                        # worker process restarts, and jobs closed by recovery or
+                        # cancellation are finalized without a completion callback.
+                        self._run_periodic_maintenance()
+                        next_recover = now + self._recover_interval_seconds
+                    worked = self.run_once()
+                except Exception as exc:  # noqa: BLE001
+                    self._log("error", "worker_loop_error", stage="loop", error=str(exc))
+                    worked = False
+                # 出错和空闲都退避同一个轮询周期，避免对着一个坏掉的数据库刷日志。
+                if not worked:
                     stop.wait(self._poll_seconds)
         finally:
-            self._repo.heartbeat_worker(self._worker_id, "offline", stats=self._stats())
+            self._report_status("offline")
+
+    def _run_periodic_maintenance(self) -> None:
+        """周期性回收僵死任务与收尾作业；失败只记录，不能打断取任务的循环。"""
+        try:
+            self._recover_stale()
+            self._sweep_finished_jobs()
+        except Exception as exc:  # noqa: BLE001
+            self._log("error", "worker_loop_error", stage="maintenance", error=str(exc))
 
     def _recover_stale(self) -> None:
         """Return tasks abandoned by dead workers before claiming new work.
@@ -256,6 +297,12 @@ def main() -> None:
         nas_read_only_policy=settings.nas_read_only_policy,
         collect_stats=collect_worker_stats,
         logger=configure_worker_logging(worker_id=worker_id),
+        archive_budget=ArchiveBudget(
+            max_member_bytes=settings.archive_max_member_bytes,
+            max_total_bytes=settings.archive_max_total_bytes,
+            max_members=settings.archive_max_members,
+            max_ratio=settings.archive_max_ratio,
+        ),
     )
 
     stop = Event()

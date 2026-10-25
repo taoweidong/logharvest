@@ -362,10 +362,20 @@ async function onRetryFailed() {
     return;
   }
   try {
-    const { retried } = await retryFailedFiles(jobId);
-    message(`已重新排队 ${retried} 个失败文件`, { type: "success" });
+    const { retried, remaining_failed: remaining } = await retryFailedFiles(jobId);
+    // 后端单次只重置 200 个任务，剩下的要如实说出来，否则一次点击会被当成"全部重试完了"
+    let summary = `已重新排队 ${retried} 个失败文件`;
+    let level: "success" | "warning" | "info" = "success";
+    if (retried === 0) {
+      summary = "没有可重试的失败文件任务";
+      level = "info";
+    } else if (remaining > 0) {
+      summary = `已重新排队 ${retried} 个失败文件，仍有 ${remaining} 个待再次点击重试`;
+      level = "warning";
+    }
+    message(summary, { type: level });
     await Promise.all([loadJob(), loadFiles()]);
-    // 重试把作业从终态拉回 pending，作业仍非终态时恢复实时进度
+    // 重试把作业从终态拉回 running，作业仍非终态时恢复实时进度
     if (!terminal.value && !streaming.value && !pollingFallback.value) {
       startStream();
     }

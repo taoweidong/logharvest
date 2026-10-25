@@ -23,6 +23,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, create_engine
 
+from src.api import dependencies
 from src.api.dependencies import get_engine, get_session
 from src.application.services.auth import ensure_admin
 from src.config.settings import settings
@@ -50,6 +51,12 @@ def _no_host_mount_table(monkeypatch: pytest.MonkeyPatch) -> None:
 def _skip_startup_migrations(monkeypatch: pytest.MonkeyPatch) -> None:
     """Tests build their own in-memory schema; never migrate the developer database."""
     monkeypatch.setattr(settings, "auto_create_tables", False)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_login_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """登录限流是进程级单例：失败计数串到下一个用例会让它们莫名其妙地 429。"""
+    monkeypatch.setattr(dependencies, "_login_limiter", None)
 
 
 @pytest.fixture()

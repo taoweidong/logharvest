@@ -21,6 +21,10 @@ class ClaimedTask:
     # 规划时记录的源文件 size/mtime，处理器执行前用来判定永久失败。
     expected_size_bytes: int | None = None
     expected_mtime: datetime | None = None
+    # 规划时校验过的数据源根路径（规格 §11 的符号链接逃逸防护）。
+    # Worker 执行时用它复核真实路径仍在根下：规划与执行之间文件可能被替换成
+    # 指向根外的符号链接，而 `source_path` 只是当时记下的字符串。
+    root_path: Path | None = None
 
 
 @dataclass(frozen=True)

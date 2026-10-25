@@ -14,7 +14,13 @@ from src.application.worker.ports import (
     TaskRepository,
     TaskResult,
 )
-from src.domain.archive.reader import ArchiveMemberError, ArchiveScan, scan_archive
+from src.domain.archive.reader import (
+    DEFAULT_ARCHIVE_BUDGET,
+    ArchiveBudget,
+    ArchiveMemberError,
+    ArchiveScan,
+    scan_archive,
+)
 from src.domain.rules.evaluator import CompiledRuleSet, evaluate_line
 from src.domain.source_guard import POLICY_ENFORCE, SourceNotReadOnly, guard_source
 
@@ -44,9 +50,7 @@ def _truncate_raw_line(text: str) -> tuple[str, bool]:
 
 
 def _format_member_errors(errors: list[ArchiveMemberError]) -> str:
-    details = "; ".join(
-        f"{error.member_path or '<archive>'}: {error.message}" for error in errors
-    )
+    details = "; ".join(f"{error.member_path or '<archive>'}: {error.message}" for error in errors)
     text = f"{len(errors)} member(s) failed: {details}"
     if len(text) <= ERROR_TEXT_LIMIT:
         return text
@@ -68,6 +72,7 @@ class TaskProcessor:
         on_lease_refresh: Callable[[], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
         nas_read_only_policy: str = POLICY_ENFORCE,
+        budget: ArchiveBudget | None = None,
     ) -> None:
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -89,6 +94,7 @@ class TaskProcessor:
         self._on_lease_refresh = on_lease_refresh
         self._cancel_check = cancel_check
         self._nas_read_only_policy = nas_read_only_policy
+        self._budget = budget if budget is not None else DEFAULT_ARCHIVE_BUDGET
         self._member_spec = pathspec.PathSpec.from_lines("gitwildmatch", [rules.config.file_glob])
 
     def _verify_lease(self, task: ClaimedTask) -> None:
@@ -102,6 +108,27 @@ class TaskProcessor:
             raise LeaseLost(f"lease lost for task {task.id}")
         if self._on_lease_refresh is not None:
             self._on_lease_refresh()
+
+    def _check_root(self, task: ClaimedTask) -> None:
+        """Re-verify that the source still lives under its data source root.
+
+        规格 §11 要求"扫描和复制时使用 realpath 校验，禁止跟随指向根路径外的符号
+        链接"。规划期（`jobs.create_job`）已经用 ``resolve()`` 判过一次，但
+        ``file_tasks.source_path`` 只是当时记下的字符串：规划与执行之间源文件可能
+        被换成指向根外的符号链接。`stat()` 与 `open()` 都会跟随符号链接，所以执行
+        期必须按 realpath 再判一次，否则 Worker 会把越界内容复制并写进 `matches`。
+        """
+        if task.root_path is None:
+            return
+        root = Path(task.root_path).resolve()
+        try:
+            real_source = task.source_path.resolve()
+        except OSError as exc:
+            raise PermanentTaskFailure(f"source unavailable: {exc}") from exc
+        if not real_source.is_relative_to(root):
+            raise PermanentTaskFailure(
+                f"source escapes data source root: {real_source} is not under {root}"
+            )
 
     def _check_source(self, task: ClaimedTask) -> None:
         """Fail permanently when the archive no longer matches the plan.
@@ -138,9 +165,7 @@ class TaskProcessor:
         ]
         if not relevant_errors:
             return "succeeded", None
-        succeeded = any(
-            self._member_spec.match_file(member) for member in scan.succeeded_members
-        )
+        succeeded = any(self._member_spec.match_file(member) for member in scan.succeeded_members)
         return ("partial" if succeeded else "failed"), _format_member_errors(relevant_errors)
 
     def process(self, task: ClaimedTask) -> TaskResult:
@@ -158,6 +183,9 @@ class TaskProcessor:
             # 只读守卫排在最前面：可写挂载上连 stat、租约栅栏和本地复制都不该发生
             # （规格 §7.2）。判定按压缩包所在目录，嵌套挂载可以各自不同。
             guard_source(task.source_path.parent, policy=self._nas_read_only_policy)
+            # 越界校验排在任何 stat/open 之前：路径一旦逃出数据源根，
+            # 后面的校验与复制都会作用在越界内容上（规格 §11）。
+            self._check_root(task)
             # A source that vanished or changed since planning must not be
             # retried; fail it permanently before spending a lease fence or copy.
             self._check_source(task)
@@ -174,10 +202,19 @@ class TaskProcessor:
                 local_path,
                 encoding=encoding,
                 fallback_encoding=fallback_encoding,
+                budget=self._budget,
             )
+            # ``file_glob`` 只和成员路径有关，而成员路径在整个成员期间不变。
+            # 放到逐行热路径上会让 glob 匹配次数与总行数成正比（实测 702ns/行
+            # vs 缓存后 60ns/行）；这里只在成员切换时算一次。
+            current_member: str | None = None
+            member_matched = False
             for line in scan.lines:
                 processed_lines += 1
-                if self._member_spec.match_file(line.member_path):
+                if line.member_path != current_member:
+                    current_member = line.member_path
+                    member_matched = bool(self._member_spec.match_file(line.member_path))
+                if member_matched:
                     matches = evaluate_line(self._rules, line.text, line.line_no)
                     if matches:
                         raw_line, raw_truncated = _truncate_raw_line(line.text)

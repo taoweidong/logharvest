@@ -1,5 +1,7 @@
 from src.domain.archive.models import ArchiveFormatError, LineRecord, ScanLimitError
 from src.domain.archive.reader import (
+    DEFAULT_ARCHIVE_BUDGET,
+    ArchiveBudget,
     ArchiveMemberError,
     ArchiveScan,
     discover_archives,
@@ -8,6 +10,8 @@ from src.domain.archive.reader import (
 )
 
 __all__ = [
+    "DEFAULT_ARCHIVE_BUDGET",
+    "ArchiveBudget",
     "ArchiveFormatError",
     "ArchiveMemberError",
     "ArchiveScan",

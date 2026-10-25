@@ -308,18 +308,40 @@ def test_run_forever_recovers_stale_periodically(tmp_path):
     assert repo.swept == 2
 
 
-def test_run_forever_marks_worker_offline_when_loop_raises(tmp_path):
+def test_run_forever_survives_a_raising_iteration(tmp_path):
+    """数据库抖动不该杀死 Worker：异常被记下来，循环继续（规格 §7.3 长期驻留）。"""
+    stop = Event()
     repo = FakeRepo([])
-    runtime = make_runtime(repo, FakeWriter(), tmp_path)
+    events = []
+
+    class RecordingLogger:
+        def info(self, event, **kwargs):
+            events.append(event)
+
+        def warning(self, event, **kwargs):
+            events.append(event)
+
+        def error(self, event, **kwargs):
+            events.append(event)
+
+    runtime = make_runtime(
+        repo, FakeWriter(), tmp_path, poll_seconds=0.01, logger=RecordingLogger()
+    )
+    attempts = []
 
     def boom():
+        attempts.append(1)
+        if len(attempts) >= 3:
+            stop.set()
         raise RuntimeError("claim failed")
 
     runtime.run_once = boom  # type: ignore[method-assign]
 
-    with pytest.raises(RuntimeError, match="claim failed"):
-        runtime.run_forever(Event())
+    runtime.run_forever(stop)
 
+    # 一次抖动只损失一个轮询周期，而不是整个进程。
+    assert len(attempts) == 3
+    assert events.count("worker_loop_error") == 3
     assert repo.worker_heartbeats[-1] == ("offline", None, None)
 
 
@@ -471,3 +493,73 @@ def test_run_once_logs_lease_loss_as_warning(tmp_path, monkeypatch):
     assert runtime.run_once() is True
 
     assert ("task_lease_lost", "warning") in events
+
+
+# --- 主循环异常隔离（数据库抖动不得杀死 Worker 进程）------------------------
+
+
+def test_run_once_returns_false_when_the_repository_is_unavailable(tmp_path):
+    """认领阶段（drain 判定 / claim / 心跳）的异常不穿透：记日志并退避。"""
+    repo = FakeRepo([])
+    events = []
+
+    class RecordingLogger:
+        def info(self, event, **kwargs):
+            events.append((event, kwargs))
+
+        def warning(self, event, **kwargs):
+            events.append((event, kwargs))
+
+        def error(self, event, **kwargs):
+            events.append((event, kwargs))
+
+    runtime = make_runtime(repo, FakeWriter(), tmp_path, logger=RecordingLogger())
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("connection reset by peer")
+
+    repo.is_draining = boom  # type: ignore[method-assign]
+
+    assert runtime.run_once() is False
+
+    assert [event for event, _ in events] == ["worker_loop_error"]
+    assert events[0][1]["stage"] == "claim"
+    assert events[0][1]["error"] == "connection reset by peer"
+    assert repo.claims == []
+
+
+def test_worker_heartbeat_failure_does_not_fail_the_task(tmp_path):
+    """workers 表只是管理视图：心跳写不进去不该把跑得好好的任务记成失败。"""
+    repo = FakeRepo([make_task(tmp_path)])
+    original = repo.heartbeat_worker
+    calls = {"n": 0}
+
+    def flaky(worker_id, status, current_task_id=None, stats=None):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("workers table is locked")
+        return original(worker_id, status, current_task_id, stats)
+
+    repo.heartbeat_worker = flaky  # type: ignore[method-assign]
+    runtime = make_runtime(repo, FakeWriter(), tmp_path)
+
+    assert runtime.run_once() is True
+
+    assert repo.completed == [(1, 1, "succeeded", 1, 1, None)]
+    assert repo.worker_heartbeats[-1] == ("online", None, None)
+
+
+def test_run_forever_lets_system_exit_terminate_the_loop(tmp_path):
+    """护栏只拦 Exception：SystemExit / KeyboardInterrupt 必须放行，否则进程停不下来。"""
+    repo = FakeRepo([])
+    runtime = make_runtime(repo, FakeWriter(), tmp_path)
+
+    def bye():
+        raise SystemExit(3)
+
+    runtime.run_once = bye  # type: ignore[method-assign]
+
+    with pytest.raises(SystemExit):
+        runtime.run_forever(Event())
+
+    assert repo.worker_heartbeats[-1] == ("offline", None, None)

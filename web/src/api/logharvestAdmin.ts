@@ -4,7 +4,9 @@
  * - 列表都是裸数组 + `limit`/`offset`，无 `total`
  * - `POST /rule-sets` 同名生成新版本（max+1）；校验失败 422、版本冲突 409，错误体 `{"detail": ...}`
  * - `POST /data-sources` 名称冲突 409；`read_only` 只接受 `true`
- * - `POST /data-sources/{id}/test` 返回 `{exists, is_dir, readable}` 三个布尔
+ * - `POST /data-sources/{id}/test` 返回三个布尔（`exists`/`is_dir`/`readable`）加只读
+ *   三态判定（`writability` / `read_only_confirmed`）；`unknown` + `false` 表示判不出来，
+ *   界面不得把它显示成"已确认只读"
  */
 import { http } from "@/utils/http";
 import type { ListParams } from "./logharvest";

@@ -118,7 +118,12 @@ class FileTaskAttempt(SQLModel, table=True):
 
 class Match(SQLModel, table=True):
     __tablename__ = "matches"
-    __table_args__ = (Index("ix_matches_job_created_id", "job_id", "created_at", "id"),)
+    # 规格只保留三条索引：按作业翻页、按任务追溯、按规则查时间窗口。命中量是千万级，
+    # 每多一条索引就是一份实打实的写放大与存储，所以不按可选筛选项逐个铺索引。
+    __table_args__ = (
+        Index("ix_matches_job_created_id", "job_id", "created_at", "id"),
+        Index("ix_matches_rule_created", "rule_id", "created_at"),
+    )
 
     id: int | None = Field(
         default=None,

@@ -76,6 +76,13 @@ curl -s http://127.0.0.1:8000/api/jobs -H "Authorization: Bearer <accessToken>"
 | `LOGHARVEST_MATCHES_BATCH_SIZE` | `1000` | 命中结果批量写入条数，已接线到 `TaskProcessor.batch_size` |
 | `LOGHARVEST_MAX_CONCURRENT_COPIES` | `4` | 单机并发预算，仅作运维声明与展示；M1b 的并发由启动的 Worker 进程数实现（一个进程一次处理一个任务），进程内并发池未实现 |
 | `LOGHARVEST_MAX_MATCHES_PER_TASK` | `200_000` | 单任务命中上限，尚未强制执行 |
+| `LOGHARVEST_NAS_READ_ONLY_POLICY` | `enforce` | NAS 只读守卫策略：`enforce`（判定为可写就拒绝处理）/ `warn`（只告警）/ `ignore`（完全沉默）。**Windows 上挂载表读不到，判定恒为 `unknown`**，此时 `enforce` 不会拦截（详见"PostgreSQL 依赖与验证边界"） |
+| `LOGHARVEST_ARCHIVE_MAX_MEMBER_BYTES` | `1073741824`（1 GiB） | 解压预算之一：单个成员的解压字节上限；超限只丢弃该成员，其余成员照常产出，任务落 `partial` |
+| `LOGHARVEST_ARCHIVE_MAX_TOTAL_BYTES` | `4294967296`（4 GiB） | 整包累计解压字节上限；超限停止扫描（`failed` 且不重试） |
+| `LOGHARVEST_ARCHIVE_MAX_MEMBERS` | `10000` | 单个归档的成员个数上限；超限停止扫描 |
+| `LOGHARVEST_ARCHIVE_MAX_RATIO` | `500.0` | 膨胀比上限（累计解压量 ÷ 源文件字节）。为避免误伤正常小文件，累计解压量低于 64 MiB 时不参与判定 |
+| `LOGHARVEST_LOGIN_MAX_ATTEMPTS` | `10` | 同一"用户名 + 来源 IP"在一个窗口内允许的**失败**登录次数；超过返回 `429` 与 `Retry-After`。成功登录会清空该来源的计数 |
+| `LOGHARVEST_LOGIN_WINDOW_SECONDS` | `300` | 上述失败计数的滑动窗口（秒）。计数在进程内存中，**多副本部署时实际放行量是阈值 × 副本数** |
 
 ## 数据库迁移
 
@@ -85,18 +92,19 @@ DDL 的所有权已经从 `create_all` 交给 Alembic（`alembic.ini` + `service
 |---|---|
 | `0001_baseline` | 一次建出 M1 的七张业务表（`data_sources`、`rule_sets`、`jobs`、`file_tasks`、`file_task_attempts`、`matches`、`workers`）。生产库尚不存在，这里有意使用 `SQLModel.metadata.create_all(bind, tables=BUSINESS_TABLES)` 捷径 |
 | `0002_auth_tables` | 新增 `users`/`roles`/`user_roles`，写成显式 `op.create_table`/`op.create_index`，不复用捷径，保证可 `downgrade` |
+| `0003_matches_rule_index` | 给 `matches` 补 `(rule_id, created_at)` 索引（规格要求的三条索引之一）。建索引前先 `inspect` 是否已存在：0001 的 `create_all` 捷径已经让新库在基线就带上它，只有 0002 之前升上来的库才真的缺 |
 
 ```bash
 cd service
 uv run --python 3.12 alembic upgrade head   # 幂等：第二次不重复建表
-uv run --python 3.12 alembic current        # 0002 (head)
+uv run --python 3.12 alembic current        # 0003 (head)
 ```
 
 启动接线：`src/infrastructure/migrations.py` 的 `run_migrations()` 由 `src/main.py` 的 lifespan 在 `LOGHARVEST_AUTO_CREATE_TABLES=true`（默认）时调用，置 `false` 则启动不动 schema。
 
-**测试例外**：`tests/conftest.py` 有一个 autouse fixture 把 `auto_create_tables` 强制设为 `False`，每个用例改用 `src/infrastructure/database.py:create_db_and_tables()` 在内存 SQLite 上建表。原因是不让测试碰开发库（也避免每个用例跑一遍迁移）。副作用是 `create_all` 会跟着模型自动同步，新增表时忘了写迁移不会被测试发现；为此 `tests/infrastructure/test_migrations.py` 会把 `alembic upgrade head` 的结果逐表、逐列与 `SQLModel.metadata` 比对，漏写迁移直接失败。
+**测试例外**：`tests/conftest.py` 有一个 autouse fixture 把 `auto_create_tables` 强制设为 `False`，每个用例改用 `src/infrastructure/database.py:create_db_and_tables()` 在内存 SQLite 上建表。原因是不让测试碰开发库（也避免每个用例跑一遍迁移）。副作用是 `create_all` 会跟着模型自动同步，新增表时忘了写迁移不会被测试发现；为此 `tests/infrastructure/test_migrations.py` 会把 `alembic upgrade head` 的结果逐表、逐列、逐索引与 `SQLModel.metadata` 比对，漏写迁移直接失败。
 
-`alembic upgrade head` → `alembic current`（`0002 (head)`）→ `alembic downgrade base`（回到只剩 `alembic_version`）已在临时 SQLite 文件上真实执行确认；**未在 PostgreSQL 上验证过**（见"PostgreSQL 依赖与验证边界"）。
+`alembic upgrade head` → `alembic current`（`0003 (head)`）→ `alembic downgrade base`（回到只剩 `alembic_version`）已在临时 SQLite 文件上真实执行确认；**未在 PostgreSQL 上验证过**（见"PostgreSQL 依赖与验证边界"）。
 
 ## 认证
 
@@ -269,7 +277,8 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 - 队列 SQL（`FOR UPDATE SKIP LOCKED`、`make_interval`、`ON CONFLICT`、CTE `UPDATE ... RETURNING`）只能在 PostgreSQL 上执行。真实执行与 `SKIP LOCKED` 并发行为由 `tests/integration/test_postgres_queue.py` 覆盖（设置 `LOGHARVEST_TEST_PG_URL`，每个用例重建 schema）；SQLite 套件只验证可移植语句。
 - PostgreSQL 连接会强制 `timezone=UTC`（`connect_args_for`）：时间戳列是 `without time zone`，SQL `now()` 写入的是会话时区的墙上时间，而 Python 侧写入 UTC。若会话不是 UTC，`heartbeat_at`、僵死回收阈值与"静默 Worker 降级"的比较会整体偏移，降级可能永远不触发。
 - 作业终态汇总 SQL 使用可移植写法，已在真实建表的 SQLite 上验证聚合与栅栏语义。
-- 表结构 DDL 已交给 Alembic（`0001_baseline`、`0002_auth_tables`），并在启动时按 `LOGHARVEST_AUTO_CREATE_TABLES` 执行 `upgrade head`；`create_db_and_tables()` 仍然存在，用途收缩为测试夹具建表。迁移只在临时 SQLite 文件上真实跑过 `upgrade head` / `current` / `downgrade base`，**没有在 PostgreSQL 上执行过**：`0001` 的 `create_all` 捷径与 `0002` 的显式 op 生成的语句在 PG 方言下的行为（`JSONB`、`BIGSERIAL`、`BIGINT` 列类型）仍待补验。
+- 表结构 DDL 已交给 Alembic（`0001_baseline`、`0002_auth_tables`、`0003_matches_rule_index`），并在启动时按 `LOGHARVEST_AUTO_CREATE_TABLES` 执行 `upgrade head`；`create_db_and_tables()` 仍然存在，用途收缩为测试夹具建表。迁移只在临时 SQLite 文件上真实跑过 `upgrade head` / `current` / `downgrade base`，**没有在 PostgreSQL 上执行过**：`0001` 的 `create_all` 捷径与 `0002` 的显式 op 生成的语句在 PG 方言下的行为（`JSONB`、`BIGSERIAL`、`BIGINT` 列类型）仍待补验。
+- **NAS 只读判定在非 POSIX 平台上恒为 `unknown`**（见 `src/domain/source_guard.py`）：无副作用的证据只有两处——POSIX 挂载表（`/proc/self/mounts`、`/etc/mtab`）与 `st_mode` 的写权限位。Windows / SMB 上读不到挂载表，而 SMB 挂载通常带回可写位，于是判定落到 `unknown`。后果是 `LOGHARVEST_NAS_READ_ONLY_POLICY=enforce` 在 Windows 开发机上**实际不会拦截任何数据源**（只有真的判为 `writable` 才拒绝处理），`warn` 则只打一条 `nas_read_only_not_confirmed` 日志。规格 §7.2 的"拒绝在可写挂载上处理"只能在 Linux + 只读挂载的环境里真正生效，**不要拿 Windows 开发机当作这条保护已生效的证据**；前端同源处理（`DataSourceTestResult.writability`）也把 `unknown` 显示成"只读未确认"而不是绿勾。
 
 ## 测试
 
@@ -330,10 +339,11 @@ uv run --with coverage coverage report --include="src/*"
 - Alembic 迁移与 `alembic upgrade head` 在 PostgreSQL 上的执行验证（含多副本启动的 advisory lock 串行化）；队列 SQL 已有 `tests/integration/test_postgres_queue.py` 的真实 PostgreSQL 覆盖。
 - Docker/PostgreSQL 部署编排；镜像替换由 Jenkins + Docker Compose 执行，Web 不承载部署。
 - 进程内复制并发池与 `LOGHARVEST_MAX_MATCHES_PER_TASK` 强制执行。
+- `data_sources.copy_to_local` 与 `workers.last_error` 的行为：两列都随表建出、API 也返回，但当前没有读取或写入方——Worker 无条件把压缩包复制到本地临时盘（开关不生效），`last_error` 没有任何写入方（恒为 `null`）。列是**有意保留**的，避免 M3 再做一次迁移；在接线前不要把它们当成已生效的能力。
 - 多行堆栈规则；v1 保持单行优先。
 - 动态菜单与按钮级权限、用户/角色管理接口（`roles`/`user_roles` 只是为 RBAC 留的表，当前只有 `admin` 一个角色码参与判断）。
 - Token 黑名单与服务端会话、Redis 缓存、进程内后台定时器：`POST /api/system/maintenance` 只执行一次补偿，周期由外部 cron / compose job 负责。
-- 登录接口的限流与口令策略（长度、复杂度、失败锁定）：口令强度只在种子脚本里检查最短 8 位。
+- 口令策略（长度、复杂度）与**账号级**失败锁定：口令强度只在种子脚本里检查最短 8 位。登录限流已实现（`LOGHARVEST_LOGIN_MAX_ATTEMPTS` / `LOGHARVEST_LOGIN_WINDOW_SECONDS`，按"用户名 + 来源 IP"的失败次数，见配置表），但它只挡住来源维度，不是账号级锁定。
 
 ## 目录
 
@@ -341,12 +351,12 @@ uv run --with coverage coverage report --include="src/*"
 service/
 ├── alembic/
 │   ├── env.py                      # 用 settings.database_url 建同步引擎
-│   └── versions/                   # 0001_baseline、0002_auth_tables
+│   └── versions/                   # 0001_baseline、0002_auth_tables、0003_matches_rule_index
 ├── alembic.ini
 ├── scripts/seed_admin.py           # 幂等创建/补齐管理员账号
 ├── src/
 │   ├── api/
-│   │   ├── dependencies.py         # Session / Engine / JWT 与 admin 角色依赖
+│   │   ├── dependencies.py         # Session / Engine / JWT、admin 角色与登录限流器依赖
 │   │   └── v1/
 │   │       ├── router.py           # /api 路由聚合与健康检查
 │   │       ├── routes_auth.py      # 登录/刷新/登出/菜单占位（响应信封）
@@ -356,7 +366,7 @@ service/
 │   │       ├── routes_matches.py
 │   │       ├── routes_rule_sets.py
 │   │       ├── routes_system.py    # status / overview / maintenance
-│   │       ├── routes_workers.py   # drain / resume / drain-version
+│   │       ├── routes_workers.py   # 列表 / drain / resume / drain-version
 │   │       └── schemas.py          # 请求/响应模型
 │   ├── application/
 │   │   ├── services/               # 数据源、规则集、作业规划、查询、认证与维护
@@ -366,7 +376,7 @@ service/
 │   │   ├── archive/                # 压缩包发现与流式行读取
 │   │   ├── models/                 # entities.py 七张业务表 + auth.py 三张认证表
 │   │   ├── rules/                  # 规则编译与匹配
-│   │   └── services/               # 口令哈希与 TokenService
+│   │   └── services/               # 口令哈希、TokenService 与登录限流
 │   ├── infrastructure/
 │   │   ├── database.py             # 引擎、连接参数与测试建表函数
 │   │   ├── match_writer.py         # matches 批量写入与清理

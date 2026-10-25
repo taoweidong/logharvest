@@ -1,6 +1,12 @@
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.domain.archive.reader import (
+    DEFAULT_MAX_MEMBER_BYTES,
+    DEFAULT_MAX_MEMBERS,
+    DEFAULT_MAX_RATIO,
+    DEFAULT_MAX_TOTAL_BYTES,
+)
 from src.domain.source_guard import POLICY_ENFORCE, READ_ONLY_POLICIES
 
 PROTECTED_ENVIRONMENTS = frozenset({"dev", "test"})
@@ -29,6 +35,16 @@ class Settings(BaseSettings):
     admin_username: str = "admin"
     admin_password: str = ""
     nas_read_only_policy: str = POLICY_ENFORCE
+    # 解压预算（规格 §11 压缩炸弹）：单成员 / 整包累计 / 成员数 / 膨胀比，
+    # 四个维度都按"解压后"的字节算，超限终止扫描而不是让 Worker 被 OOM 杀掉。
+    archive_max_member_bytes: int = Field(default=DEFAULT_MAX_MEMBER_BYTES, gt=0)
+    archive_max_total_bytes: int = Field(default=DEFAULT_MAX_TOTAL_BYTES, gt=0)
+    archive_max_members: int = Field(default=DEFAULT_MAX_MEMBERS, gt=0)
+    archive_max_ratio: float = Field(default=DEFAULT_MAX_RATIO, gt=0)
+    # 登录限流：/api/login 是唯一匿名可达、且每次都要跑一次 bcrypt 的接口，
+    # 按"用户名 + 来源 IP"限制失败次数（语义见 src/domain/services/rate_limit.py）。
+    login_max_attempts: int = Field(default=10, ge=0)
+    login_window_seconds: int = Field(default=300, gt=0)
 
     @model_validator(mode="after")
     def validate_auth_settings(self) -> "Settings":

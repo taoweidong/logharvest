@@ -17,9 +17,10 @@ export type JobStatus =
   | "cancelled";
 
 /**
- * 文件任务状态。与作业同一套取值：后端目前只会写入
- * `pending|running|succeeded|failed|cancelled`，`partial`（单个压缩包内部分成员失败）
- * 仍未实现，但类型保留它，避免后端补齐时前端再改。
+ * 文件任务状态。与作业同一套取值。
+ * `partial` 会真实出现：压缩包内个别成员损坏或超出解压预算（规格 §11）时，健康成员
+ * 照常产出，任务落 `partial`（见 `TaskProcessor._member_outcome`），作业则可能收在
+ * `partial` 上——它不是“失败”，界面要能区分。
  */
 export type TaskStatus = JobStatus;
 
@@ -240,10 +241,19 @@ export type Threshold = {
 };
 
 /** `POST /api/data-sources/{id}/test` */
+/**
+ * `POST /api/data-sources/{id}/test` 的响应体（`service/src/api/v1/schemas.py`）。
+ *
+ * `writability` 是三态判定，`read_only_confirmed` 只在真的拿到只读证据时才为真。
+ * 平台判不出来（Windows / SMB）时后端返回 `unknown` + `false`，前端**不得**因此
+ * 显示一个假的“已确认只读”——宁可如实说“未确认”。
+ */
 export type DataSourceTestResult = {
   exists: boolean;
   is_dir: boolean;
   readable: boolean;
+  writability: "read_only" | "writable" | "unknown";
+  read_only_confirmed: boolean;
 };
 
 /** `DataSourceCreate`：`read_only` 后端是 `Literal[True]`，只接受 `true` */

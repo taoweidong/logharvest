@@ -10,6 +10,9 @@ from src.domain.models.entities import utcnow
 # Atomic claim: lock one eligible row with SKIP LOCKED, then flip it to running
 # in the same transaction. ``attempts`` is incremented here so every attempt
 # (including crash recovery) has a distinct attempt_no.
+# 带上 data_sources.root_path：Worker 执行时要用它复核源文件真实路径仍在
+# 数据源根下（规格 §11 的符号链接逃逸防护，见 TaskProcessor._check_root）。
+# 规划期校验过的是"当时的路径字符串"，执行期必须重新按 realpath 判一次。
 CLAIM_SQL = """
 WITH picked AS (
     SELECT t.id
@@ -29,8 +32,11 @@ SET status = 'running',
     started_at = COALESCE(t.started_at, now()),
     heartbeat_at = now()
 FROM picked p
+JOIN jobs j ON j.id = t.job_id
+LEFT JOIN data_sources d ON d.id = j.data_source_id
 WHERE t.id = p.id
-RETURNING t.id, t.job_id, t.source_path, t.file_name, t.attempts, t.size_bytes, t.mtime;
+RETURNING t.id, t.job_id, t.source_path, t.file_name, t.attempts, t.size_bytes, t.mtime,
+          d.root_path AS root_path;
 """
 
 RULE_SQL = """
@@ -243,7 +249,35 @@ WHERE j.id = :job_id
 GROUP BY j.cancel_requested, t.status
 """
 
-FINISH_JOB_SQL = """
+OPEN_TASK_STATUSES = ("pending", "running")
+# 取消中的作业里，pending 任务永远不会被 CLAIM_SQL 领走（那里的
+# ``j.cancel_requested = false``）；再把它算成"未完成"，作业与它的 SSE 就会永久
+# 滞留。因此取消中只剩 running 算未完成。
+CANCELLING_OPEN_TASK_STATUSES = ("running",)
+FAILED_TASK_STATUSES = ("failed", "partial")
+
+
+def _status_in_clause(statuses: tuple[str, ...]) -> str:
+    return ", ".join(f"'{name}'" for name in statuses)
+
+
+def _open_task_predicate(job_alias: str, task_alias: str = "t") -> str:
+    """“这个任务还没干完”的唯一定义。
+
+    FINISH_JOB_SQL、CANDIDATE_JOBS_SQL 与 Python 侧的 :func:`_derive_job_status`
+    三处必须永远同义。各写一遍时，改一处漏一处会让两条 SQL 静默跑偏（一条提前收
+    尾作业、另一条始终不收尾），而在 SQLite 与 PostgreSQL 上都不会报任何错。
+    这里让它们都从同一组状态常量拼出来。
+    """
+    normal = f"{task_alias}.status IN ({_status_in_clause(OPEN_TASK_STATUSES)})"
+    cancelling = f"{task_alias}.status IN ({_status_in_clause(CANCELLING_OPEN_TASK_STATUSES)})"
+    return (
+        f"(({job_alias}.cancel_requested AND {cancelling})\n"
+        f"            OR (NOT {job_alias}.cancel_requested AND {normal}))"
+    )
+
+
+FINISH_JOB_SQL = f"""
 UPDATE jobs
 SET status = :status,
     finished_at = :finished_at
@@ -253,10 +287,7 @@ WHERE id = :job_id
       SELECT 1
       FROM file_tasks t
       WHERE t.job_id = jobs.id
-        AND (
-            (jobs.cancel_requested AND t.status = 'running')
-            OR (NOT jobs.cancel_requested AND t.status IN ('pending', 'running'))
-        )
+        AND {_open_task_predicate("jobs")}
   )
 """
 
@@ -264,23 +295,14 @@ WHERE id = :job_id
 # Covers work returned to failure by stale recovery, where no completion
 # callback runs. A cancelled job treats ``pending`` as unreachable rather than
 # open, matching _derive_job_status and CLAIM_SQL.
-CANDIDATE_JOBS_SQL = """
+CANDIDATE_JOBS_SQL = f"""
 SELECT j.id AS job_id
 FROM jobs j
 JOIN file_tasks t ON t.job_id = j.id
 WHERE j.status = 'running'
 GROUP BY j.id
-HAVING SUM(
-           CASE
-               WHEN j.cancel_requested AND t.status = 'running' THEN 1
-               WHEN NOT j.cancel_requested AND t.status IN ('pending', 'running') THEN 1
-               ELSE 0
-           END
-       ) = 0
+HAVING SUM(CASE WHEN {_open_task_predicate("j")} THEN 1 ELSE 0 END) = 0
 """
-
-OPEN_TASK_STATUSES = ("pending", "running")
-FAILED_TASK_STATUSES = ("failed", "partial")
 
 
 def _derive_job_status(rows) -> str | None:
@@ -295,7 +317,7 @@ def _derive_job_status(rows) -> str | None:
         return None
     cancel_requested = bool(rows[0]["cancel_requested"])
     counts = {str(row["task_status"]): int(row["task_count"]) for row in rows}
-    open_statuses = ("running",) if cancel_requested else OPEN_TASK_STATUSES
+    open_statuses = CANCELLING_OPEN_TASK_STATUSES if cancel_requested else OPEN_TASK_STATUSES
     if any(counts.get(status, 0) for status in open_statuses):
         return None
 
@@ -421,6 +443,7 @@ class PostgresTaskRepository:
                 rule_config=rule["config"] or {},
                 expected_size_bytes=row["size_bytes"],
                 expected_mtime=row["mtime"],
+                root_path=Path(row["root_path"]) if row.get("root_path") else None,
             )
 
     def heartbeat(

@@ -6,13 +6,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pathspec
 import pytest
 
 import src.application.worker.processor as processor_module
 from src.application.worker.ports import ClaimedTask, MatchRecord
 from src.application.worker.processor import LeaseLost, TaskProcessor
 from src.domain import source_guard
-from src.domain.archive import ArchiveMemberError
+from src.domain.archive import ArchiveBudget, ArchiveMemberError
 from src.domain.rules.evaluator import compile_ruleset
 from src.domain.rules.models import (
     KeywordMatch,
@@ -126,9 +127,7 @@ def write_deflated_zip(path: Path, members: dict[str, str | bytes]) -> Path:
 def corrupt_zip_member(path: Path, member_name: str) -> None:
     with zipfile.ZipFile(path) as archive:
         info = archive.getinfo(member_name)
-        data_start = (
-            info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
-        )
+        data_start = info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
     with path.open("r+b") as stream:
         stream.seek(data_start)
         original = stream.read(1)
@@ -425,9 +424,7 @@ def test_partial_when_some_members_are_corrupt(tmp_path: Path) -> None:
     assert "bad.log" in (result.error or "")
     assert repo.completed == [(10, 1, "partial", 1, 1, result.error)]
     assert repo.retryables == [(10, False)]
-    assert [(match.member_path, match.line_no) for match in writer.written] == [
-        ("app.log", 1)
-    ]
+    assert [(match.member_path, match.line_no) for match in writer.written] == [("app.log", 1)]
 
 
 def test_failed_when_every_member_is_corrupt(tmp_path: Path) -> None:
@@ -488,9 +485,7 @@ def test_corrupt_member_outside_file_glob_does_not_degrade_status(tmp_path: Path
     assert result.error is None
     assert repo.completed == [(10, 1, "succeeded", 1, 1, None)]
     assert repo.retryables == [(10, True)]
-    assert [(match.member_path, match.line_no) for match in writer.written] == [
-        ("app.log", 1)
-    ]
+    assert [(match.member_path, match.line_no) for match in writer.written] == [("app.log", 1)]
 
 
 def test_corrupt_tar_member_outside_glob_cannot_report_success(tmp_path: Path) -> None:
@@ -954,3 +949,112 @@ def test_cancel_check_follows_the_heartbeat_budget(tmp_path: Path) -> None:
     assert result.processed_lines == 50
     # 50 行 / 每 10 行一次心跳 = 5 次取消检查，而不是 50 次。
     assert len(calls) == 5
+
+
+# --- 解压预算（规格 §11 压缩炸弹）-------------------------------------------
+
+
+def test_archive_budget_overrun_is_a_permanent_failure(tmp_path: Path) -> None:
+    """整包超预算说明内容本身就是炸弹/严重损坏：失败且不烧 max_attempts。"""
+    repo = FakeRepo()
+    bomb = {"bomb.log": "x" * 500 + "\n"}
+
+    processor = make_processor(
+        repo,
+        FakeWriter(),
+        tmp_path / "work",
+        budget=ArchiveBudget(max_member_bytes=100),
+    )
+    result = processor.process(make_task(tmp_path, members=bomb))
+
+    assert result.status == "failed"
+    assert "max_member_bytes" in (result.error or "")
+    # 内容型失败：重试同一个归档只会同样失败。
+    assert repo.retryables == [(10, False)]
+
+
+def test_archive_budget_first_member_overrun_is_partial(tmp_path: Path) -> None:
+    """单成员超限只牺牲该成员，健康成员照常产出 → partial。"""
+    repo = FakeRepo()
+    writer = FakeWriter()
+    # big.log 单成员 501 字节（超预算），small.log 全篇 25 字节（在预算内）。
+    members = {"big.log": "x" * 500 + "\n", "small.log": "ERROR one\nelapsed=6000ms\n"}
+
+    processor = make_processor(
+        repo,
+        writer,
+        tmp_path / "work",
+        budget=ArchiveBudget(max_member_bytes=100),
+    )
+    result = processor.process(make_task(tmp_path, members=members))
+
+    assert result.status == "partial", result.error
+    assert result.processed_lines == 2
+    assert [match.rule_id for match in writer.written] == ["error", "slow"]
+    assert repo.retryables == [(10, False)]
+
+
+def test_source_outside_declared_root_fails_permanently(tmp_path: Path) -> None:
+    """规格 §11 符号链接逃逸：realpath 不在数据源根下就必须拒绝处理。"""
+    root = tmp_path / "root"
+    root.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    repo = FakeRepo()
+
+    processor = make_processor(repo, FakeWriter(), tmp_path / "work")
+    result = processor.process(make_task(elsewhere, root_path=root))
+
+    assert result.status == "failed"
+    assert "escapes data source root" in (result.error or "")
+    assert repo.completed[-1][2] == "failed"
+    assert repo.retryables == [(10, False)]
+
+
+def test_source_inside_declared_root_is_accepted(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    repo = FakeRepo()
+
+    processor = make_processor(repo, FakeWriter(), tmp_path / "work")
+    result = processor.process(make_task(root, root_path=root))
+
+    assert result.status == "succeeded"
+    assert result.matched_rows == 2
+    assert repo.retryables == [(10, True)]
+
+
+def test_file_glob_is_matched_once_per_member_not_per_line(tmp_path: Path, monkeypatch) -> None:
+    """``file_glob`` 只取决于成员路径，不能在逐行热路径上重复求值。"""
+    seen: list[str] = []
+    original = pathspec.PathSpec.match_file
+
+    def spy(spec, path, *args, **kwargs):
+        seen.append(str(path))
+        return original(spec, path, *args, **kwargs)
+
+    monkeypatch.setattr(pathspec.PathSpec, "match_file", spy)
+
+    archive = write_zip(
+        tmp_path / "many.zip",
+        {"app.log": "ERROR a\nERROR b\nERROR c\nERROR d\n", "notes.txt": "ERROR e\n"},
+    )
+    task = ClaimedTask(
+        id=41,
+        job_id=20,
+        source_path=archive,
+        file_name="many.zip",
+        attempts=1,
+        rule_set_id=30,
+        rule_version=1,
+    )
+    result = make_processor(
+        FakeRepo(),
+        FakeWriter(),
+        tmp_path / "work",
+        rules=make_rules(file_glob="**/*.log"),
+    ).process(task)
+
+    assert result.processed_lines == 5
+    # 5 行只有 2 个成员 → glob 只应被求值 2 次，而不是 5 次。
+    assert seen == ["app.log", "notes.txt"]

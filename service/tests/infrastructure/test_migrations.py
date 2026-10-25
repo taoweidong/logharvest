@@ -37,6 +37,15 @@ def test_migrations_match_model_metadata(tmp_path) -> None:
         declared = {c.name for c in SQLModel.metadata.tables[table_name].columns}
         actual = {c["name"] for c in migrated.get_columns(table_name)}
         assert declared == actual, (table_name, declared ^ actual)
+        # 索引同样要对齐：千万级命中的表上，少一条索引就是一次全表扫描。
+        declared_indexes = {i.name for i in SQLModel.metadata.tables[table_name].indexes}
+        actual_indexes = {
+            i["name"] for i in migrated.get_indexes(table_name) if i["name"] is not None
+        }
+        assert declared_indexes == actual_indexes, (
+            table_name,
+            declared_indexes ^ actual_indexes,
+        )
 
 
 def test_only_postgres_takes_the_startup_lock() -> None:

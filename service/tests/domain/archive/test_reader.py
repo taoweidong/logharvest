@@ -13,15 +13,20 @@ import pytest
 
 from src.domain.archive import ArchiveFormatError, ScanLimitError
 from src.domain.archive import reader as reader_module
-from src.domain.archive.reader import discover_archives, iter_archive_lines, scan_archive
+from src.domain.archive.reader import (
+    DEFAULT_ARCHIVE_BUDGET,
+    RATIO_MIN_TOTAL_BYTES,
+    ArchiveBudget,
+    discover_archives,
+    iter_archive_lines,
+    scan_archive,
+)
 
 
 def corrupt_zip_member(path: Path, member_name: str) -> None:
     with zipfile.ZipFile(path) as archive:
         info = archive.getinfo(member_name)
-        data_start = (
-            info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
-        )
+        data_start = info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
     with path.open("r+b") as stream:
         stream.seek(data_start)
         original = stream.read(1)
@@ -180,9 +185,7 @@ def test_scan_archive_continues_after_corrupt_zip_member(tmp_path) -> None:
     scan = scan_archive(archive)
     records = list(scan.lines)
 
-    assert [(record.member_path, record.text) for record in records] == [
-        ("good.log", "good line")
-    ]
+    assert [(record.member_path, record.text) for record in records] == [("good.log", "good line")]
     assert scan.succeeded_members == {"good.log"}
     assert [error.member_path for error in scan.member_errors] == ["bad.log"]
     assert "decompress" in scan.member_errors[0].message
@@ -201,9 +204,7 @@ def test_scan_archive_stops_after_corrupt_tar_member(tmp_path) -> None:
     scan = scan_archive(archive)
     records = list(scan.lines)
 
-    assert [(record.member_path, record.text) for record in records] == [
-        ("good.log", "good line")
-    ]
+    assert [(record.member_path, record.text) for record in records] == [("good.log", "good line")]
     assert scan.succeeded_members == {"good.log"}
     assert [error.member_path for error in scan.member_errors] == ["bad.log"]
 
@@ -225,9 +226,7 @@ def test_scan_archive_reports_corrupt_tar_header(tmp_path) -> None:
     scan = scan_archive(archive)
     records = list(scan.lines)
 
-    assert [(record.member_path, record.text) for record in records] == [
-        ("good.log", "good line")
-    ]
+    assert [(record.member_path, record.text) for record in records] == [("good.log", "good line")]
     assert scan.succeeded_members == {"good.log"}
     assert len(scan.member_errors) == 1
     assert scan.member_errors[0].member_path is None
@@ -249,9 +248,7 @@ def test_scan_archive_reports_tar_truncated_at_member_boundary(tmp_path) -> None
     scan = scan_archive(archive)
     records = list(scan.lines)
 
-    assert [(record.member_path, record.text) for record in records] == [
-        ("good.log", "good line")
-    ]
+    assert [(record.member_path, record.text) for record in records] == [("good.log", "good line")]
     assert scan.succeeded_members == {"good.log"}
     assert len(scan.member_errors) == 1
     assert scan.member_errors[0].member_path is None
@@ -559,3 +556,117 @@ def test_discover_archives_rejects_negative_max_files(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="max_files"):
         discover_archives(root, max_files=-1)
+
+
+# --- 解压预算（规格 §11 压缩炸弹）-------------------------------------------
+
+
+def _zip_with(path: Path, members: dict[str, str]) -> Path:
+    # ZIP_DEFLATED：默认的 ZIP_STORED 会连压缩比测试一起废掉（源文件≈解压后大小）。
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, text in members.items():
+            archive.writestr(name, text)
+    return path
+
+
+def test_member_byte_limit_skips_only_the_offending_member(tmp_path) -> None:
+    """单成员超限只丢该成员：zip 有 central directory，其余成员仍应产出。"""
+    archive = _zip_with(
+        tmp_path / "a.zip",
+        {"big.log": "x" * 100 + "\n", "small.log": "ok\n"},
+    )
+    budget = ArchiveBudget(max_member_bytes=50)
+
+    scan = scan_archive(archive, budget=budget)
+    records = list(scan.lines)
+
+    assert [(record.member_path, record.text) for record in records] == [("small.log", "ok")]
+    assert [error.member_path for error in scan.member_errors] == ["big.log"]
+    assert scan.member_errors[0].scan_incomplete is False
+    assert scan.succeeded_members == {"small.log"}
+
+
+def test_total_byte_limit_stops_the_scan(tmp_path) -> None:
+    archive = _zip_with(
+        tmp_path / "a.zip",
+        {"first.log": "x" * 40 + "\n", "second.log": "y" * 40 + "\n"},
+    )
+    budget = ArchiveBudget(max_total_bytes=50)
+
+    scan = scan_archive(archive, budget=budget)
+    records = list(scan.lines)
+
+    # 累计超限是整包级判定：后续成员不再读，扫描就地停止。
+    assert [record.member_path for record in records] == ["first.log"]
+    assert [error.member_path for error in scan.member_errors] == ["second.log"]
+    assert scan.member_errors[0].scan_incomplete is True
+
+
+def test_member_count_limit_stops_the_scan(tmp_path) -> None:
+    archive = _zip_with(
+        tmp_path / "a.zip",
+        {"one.log": "a\n", "two.log": "b\n", "three.log": "c\n"},
+    )
+
+    scan = scan_archive(archive, budget=ArchiveBudget(max_members=2))
+    records = list(scan.lines)
+
+    assert [record.member_path for record in records] == ["one.log", "two.log"]
+    assert len(scan.member_errors) == 1
+    assert scan.member_errors[0].scan_incomplete is True
+
+
+def test_expansion_ratio_limit_stops_the_scan(tmp_path) -> None:
+    """一个 30 字节左右的包解压出 40 倍内容，压缩比超限后不再继续。"""
+    archive = _zip_with(tmp_path / "a.zip", {"bomb.log": "x" * 4000 + "\n"})
+    budget = ArchiveBudget(max_ratio=10.0, ratio_min_total_bytes=0)
+
+    scan = scan_archive(archive, budget=budget)
+    records = list(scan.lines)
+
+    assert records == []
+    assert "max_ratio" in scan.member_errors[0].message
+
+
+def test_ratio_limit_ignores_small_archives(tmp_path) -> None:
+    """小文件天然能压出高比例，不能拿压缩比去误伤它们。"""
+    archive = _zip_with(tmp_path / "a.zip", {"tiny.log": "x" * 400 + "\n"})
+    budget = ArchiveBudget(max_ratio=1.0, ratio_min_total_bytes=RATIO_MIN_TOTAL_BYTES)
+
+    scan = scan_archive(archive, budget=budget)
+
+    assert [record.text for record in scan.lines] == ["x" * 400]
+    assert scan.member_errors == []
+
+
+def test_tar_member_limit_is_reported_as_incomplete(tmp_path) -> None:
+    """流式 tar 无法跳过成员剩余字节，超预算后必须标记 scan_incomplete。"""
+    archive = tmp_path / "a.tar"
+    source = tmp_path / "app.log"
+    source.write_text("x" * 100 + "\n")
+    with tarfile.open(archive, "w") as tar:
+        tar.add(source, arcname="app.log")
+
+    scan = scan_archive(archive, budget=ArchiveBudget(max_member_bytes=10))
+
+    assert list(scan.lines) == []
+    assert scan.member_errors[0].scan_incomplete is True
+
+
+def test_default_budget_does_not_disturb_normal_archives(tmp_path) -> None:
+    """默认预算（GiB 级）不能影响正常小归档：这是回归护栏，不是容量测试。"""
+    archive = _zip_with(tmp_path / "a.zip", {"app.log": "ERROR one\nelapsed=6000ms\n"})
+
+    scan = scan_archive(archive)
+
+    assert [record.text for record in scan.lines] == ["ERROR one", "elapsed=6000ms"]
+    assert scan.member_errors == []
+    assert DEFAULT_ARCHIVE_BUDGET.max_member_bytes == 1 << 30
+
+
+def test_iter_archive_lines_still_fails_on_budget_violation(tmp_path) -> None:
+    """严格视图下预算超限同样算失败，不能静默返回部分结果。"""
+    archive = _zip_with(tmp_path / "a.zip", {"big.log": "x" * 100 + "\n"})
+
+    with pytest.raises(ArchiveFormatError, match="member failed"):
+        list(iter_archive_lines(archive, budget=ArchiveBudget(max_member_bytes=10)))

@@ -171,3 +171,35 @@ def test_finish_statement_accepts_a_cancelled_job_with_pending_tasks(engine: Eng
 
     assert result.rowcount == 1
     assert _reload(engine, job_id).status == "cancelled"
+
+
+def test_candidate_query_agrees_with_the_python_derivation(engine: Engine) -> None:
+    """补偿清扫挑出来的作业，必须和 finalize_job 的 Python 判定是同一批。
+
+    两条 SQL 与 Python 判定共用 `_open_task_predicate` 生成的状态集合（见
+    `task_queue`）；这条用例负责钉住"结果一致"，而不只是"字符串一样"。
+    """
+    from src.infrastructure.task_queue import CANDIDATE_JOBS_SQL
+
+    closed = _seed(engine, ["succeeded", "failed"])
+    still_open = _seed(engine, ["succeeded", "running"])
+    cancelled_with_pending = _seed(engine, ["pending"], cancel_requested=True)
+
+    with engine.connect() as conn:
+        candidates = {row[0] for row in conn.execute(text(CANDIDATE_JOBS_SQL))}
+
+    assert cancelled_with_pending in candidates
+    assert closed in candidates
+    assert still_open not in candidates
+
+
+def test_both_statements_share_one_open_task_predicate() -> None:
+    """同一谓词在两条 SQL 里必须是同一段字符串：各写一遍，改一处漏一处不会报错。"""
+    from src.infrastructure.task_queue import (
+        CANDIDATE_JOBS_SQL,
+        FINISH_JOB_SQL,
+        _open_task_predicate,
+    )
+
+    assert _open_task_predicate("jobs") in FINISH_JOB_SQL
+    assert _open_task_predicate("j") in CANDIDATE_JOBS_SQL
