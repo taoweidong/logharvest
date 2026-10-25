@@ -26,6 +26,11 @@ htmlcov/
 node_modules/
 dist/
 coverage/
+# 前端启动配置必须随仓库发布（platform-config 之外的 vite 变量，不含密钥）
+!web/.env
+!web/.env.development
+!web/.env.production
+!web/.env.staging
 
 # IDE / OS
 .idea/

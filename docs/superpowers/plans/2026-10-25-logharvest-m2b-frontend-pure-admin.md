@@ -40,7 +40,7 @@
 - Consumes: `E:/GitHub/Hello-FastApi/web` 全部框架层
 - Produces: `pnpm dev` 可启动、`pnpm typecheck` 与 `pnpm build` 通过的骨架；后续任务在此之上加页面
 
-- [ ] **Step 1: 复制框架层**
+- [x] **Step 1: 复制框架层**
 
 ```bash
 mkdir -p /e/GitHub/think/web
@@ -54,7 +54,7 @@ Expected: 目录齐全（`src`、`types`、`build`、`public`、`locales`）。�
 
 不要复制：`node_modules`、`dist`、`e2e`、`playwright.config.ts`、`playwright-report`、`test-results`、`docker`、`scripts`、`CHANGELOG*`、`README*.md`、`upstream-pkg.json`、`probe-shot.png`、`vite_out.txt`、`vite_err.txt`、`.eslintcache`、`package-lock.json`、`.husky`、`commitlint.config.js`。
 
-- [ ] **Step 2: 删除演示内容**
+- [x] **Step 2: 删除演示内容**
 
 ```bash
 cd /e/GitHub/think/web
@@ -76,14 +76,14 @@ rm -f src/assets/car.png src/assets/user.jpg
 
 注意：`src/router/utils.ts` 用 `import.meta.glob("/src/views/**/*.{vue,tsx}")` 匹配服务端路由，因此 `src/views` 至少要留一个页面——`login` 与 `error` 已满足。
 
-- [ ] **Step 3: 去掉重型插件**
+- [x] **Step 3: 去掉重型插件**
 
 Modify `web/src/main.ts`：删除 `useEcharts`、`useVxeTable` 的 import 与对应 `.use()` 调用，删除 `version-rocket` 相关注册；保留 `MotionPlugin`、`useElementPlus`、`Table`(@pureadmin/table)、`PureDescriptions`、i18n、directives、`injectResponsiveStorage`、iconfont 与三个样式入口。然后同步删除 `web/src/plugins/echarts.ts`、`web/src/plugins/vxeTable.ts`，并从 `web/package.json` 的 `dependencies` 移除 `echarts`、`vxe-table`、`@vueuse/motion` 之外的 `plus-pro-components`、`cropperjs`、`typeit`、`qrcode`、`intro.js`、`version-rocket`（保留 `@vueuse/motion`，`views/login/utils/motion.ts` 需要它）。
 
 Run: `cd /e/GitHub/think/web && grep -rn "echarts\|vxeTable\|version-rocket\|plus-pro-components" src build 2>/dev/null | head -20`
 Expected: 只剩注释或空结果；若仍有引用（例如 `layout` 里引 echarts 的组件），删除该组件目录并同步删引用，不要留悬空 import。
 
-- [ ] **Step 4: 改名与派生声明**
+- [x] **Step 4: 改名与派生声明**
 
 Modify `web/package.json`：
 
@@ -118,7 +118,7 @@ pnpm build
 后端接口见 `service/README.md`。登录需要先用 `python -m scripts.seed_admin` 建管理员。
 ```
 
-- [ ] **Step 5: 环境与代理**
+- [x] **Step 5: 环境与代理**
 
 Modify `web/vite.config.ts` 代理：`/api` → `http://127.0.0.1:8000`（`changeOrigin: true`），删除 `/media`（LogHarvest 不提供媒体目录）。
 Modify `web/.env`：`VITE_PORT=8848`；`web/.env.development` 保留 `VITE_PUBLIC_PATH=/`、`VITE_ROUTER_HISTORY="hash"`、`VITE_SKIP_CAPTCHA=true`。
@@ -126,7 +126,7 @@ Modify `web/.env`：`VITE_PORT=8848`；`web/.env.development` 保留 `VITE_PUBLI
 Run: `cd /e/GitHub/think/web && pnpm install 2>&1 | tail -15`
 Expected: 安装成功（基座的 `node_modules` 链接是坏的，必须全新安装；registry 可达）。
 
-- [ ] **Step 6: 验证可启动**
+- [x] **Step 6: 验证可启动**
 
 ```bash
 cd /e/GitHub/think/web && pnpm typecheck 2>&1 | tail -20
