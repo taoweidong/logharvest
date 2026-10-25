@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.domain.rules.models import RuleSetConfig
 
@@ -26,6 +26,27 @@ class DataSourceRead(BaseModel):
     enabled: bool
     description: str
     created_at: datetime
+
+
+class DataSourceTestResult(BaseModel):
+    """`POST /data-sources/{id}/test` 的响应体。
+
+    ``writability`` 是无副作用证据得出的三态判定；``read_only_confirmed`` 只有在真的
+    拿到只读证据时才为真。平台判不出来（Windows/SMB）时必须是 ``unknown`` + ``false``，
+    前端不能因此显示一个假的"已确认只读"绿勾。
+    """
+
+    exists: bool
+    is_dir: bool
+    readable: bool
+    writability: Literal["read_only", "writable", "unknown"]
+    read_only_confirmed: bool
+
+    @model_validator(mode="after")
+    def reject_unconfirmed_read_only(self) -> "DataSourceTestResult":
+        if self.read_only_confirmed and self.writability != "read_only":
+            raise ValueError("read_only_confirmed requires a read_only writability verdict")
+        return self
 
 
 class RuleSetCreate(BaseModel):

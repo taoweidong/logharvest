@@ -16,12 +16,24 @@ from sqlmodel import Session, create_engine
 from src.api.dependencies import get_engine, get_session
 from src.application.services.auth import ensure_admin
 from src.config.settings import settings
+from src.domain import source_guard
 from src.domain.models.auth import User
 from src.domain.services.tokens import TokenService
 from src.infrastructure.database import create_db_and_tables
 from src.main import create_app
 
 UNIT_SECRET = settings.jwt_secret_key
+
+# 容器/开发机上的 /tmp 一律是 rw 挂载，enforce 会把每个基于 tmp_path 的作业用例
+# 变成 409 —— 那与用例要测的东西毫无关系。这里只把"挂载表读不到"设为默认前提
+# （判定降级为 st_mode 弱证据 -> unknown），POSIX 挂载表的匹配与三条策略由
+# tests/domain/test_source_guard.py 用显式挂载表逐条覆盖。
+UNREADABLE_MOUNT_TABLES = ("/proc/self/mounts-does-not-exist-in-tests",)
+
+
+@pytest.fixture(autouse=True)
+def _no_host_mount_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(source_guard, "MOUNT_TABLE_CANDIDATES", UNREADABLE_MOUNT_TABLES)
 
 
 @pytest.fixture(autouse=True)
