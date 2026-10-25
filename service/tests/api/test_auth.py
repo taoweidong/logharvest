@@ -68,12 +68,19 @@ def test_admin_token_settings_validation() -> None:
         Settings(_env_file=None, environment="prod", admin_token="dev-admin-token")
     with pytest.raises(pydantic.ValidationError):
         Settings(_env_file=None, admin_token="   ")
+    # 非 dev/test 必须提供 JWT secret 与管理员口令。
+    with pytest.raises(pydantic.ValidationError):
+        Settings(_env_file=None, environment="prod", admin_token="real-secret")
 
     assert Settings(_env_file=None, environment="test").admin_token == "dev-admin-token"
-    assert (
-        Settings(_env_file=None, environment="prod", admin_token="real-secret").admin_token
-        == "real-secret"
+    prod = Settings(
+        _env_file=None,
+        environment="prod",
+        admin_token="real-secret",
+        jwt_secret_key="prod-secret-key-0123456789-abcdefgh",
+        admin_password="Sup3r-Secret",
     )
+    assert prod.admin_token == "real-secret"
 
 
 def test_health_does_not_require_auth(client) -> None:

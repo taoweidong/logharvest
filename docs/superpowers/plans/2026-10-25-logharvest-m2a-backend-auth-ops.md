@@ -52,7 +52,7 @@
   - `ADMIN_ROLE_CODE = "admin"`
   - settings 新字段：`jwt_secret_key: str`、`access_token_expire_minutes: int = 30`、`refresh_token_expire_days: int = 7`、`admin_username: str = "admin"`、`admin_password: str = ""`
 
-- [ ] **Step 1: 加依赖**
+- [x] **Step 1: 加依赖**
 
 在 `service/pyproject.toml` 的 `dependencies` 列表末尾追加（保持既有缩进两空格）：
 
@@ -65,7 +65,7 @@
 Run: `cd service && uv sync --python 3.12`
 Expected: 解析成功，`uv.lock` 更新。
 
-- [ ] **Step 2: 写失败测试（口令哈希）**
+- [x] **Step 2: 写失败测试（口令哈希）**
 
 `service/tests/domain/services/test_passwords.py`:
 
@@ -103,7 +103,7 @@ def test_empty_password_rejected() -> None:
 Run: `cd service && uv run --python 3.12 pytest tests/domain/services/test_passwords.py -v`
 Expected: FAIL，`ModuleNotFoundError: No module named 'src.domain.services'`
 
-- [ ] **Step 3: 实现口令服务**
+- [x] **Step 3: 实现口令服务**
 
 Create `service/src/domain/services/__init__.py`（空文件）。
 
@@ -143,7 +143,7 @@ def verify_password(password: str, hashed: str) -> bool:
 Run: `cd service && uv run --python 3.12 pytest tests/domain/services/test_passwords.py -v`
 Expected: 3 passed
 
-- [ ] **Step 4: 写失败测试（JWT）**
+- [x] **Step 4: 写失败测试（JWT）**
 
 `service/tests/domain/services/test_tokens.py`:
 
@@ -219,7 +219,7 @@ def test_secret_key_shorter_than_32_chars_is_rejected() -> None:
 Run: `cd service && uv run --python 3.12 pytest tests/domain/services/test_tokens.py -v`
 Expected: FAIL，`ModuleNotFoundError: ... tokens`
 
-- [ ] **Step 5: 实现 TokenService**
+- [x] **Step 5: 实现 TokenService**
 
 Create `service/src/domain/services/tokens.py`:
 
@@ -277,7 +277,7 @@ class TokenService:
 Run: `cd service && uv run --python 3.12 pytest tests/domain/services/test_tokens.py -v`
 Expected: 7 passed
 
-- [ ] **Step 6: 写认证模型测试并实现模型**
+- [x] **Step 6: 写认证模型测试并实现模型**
 
 `service/tests/domain/models/test_auth_models.py`:
 
@@ -369,7 +369,7 @@ from src.domain.models import auth, entities  # noqa: F401  (register tables on 
 Run: `cd service && uv run --python 3.12 pytest tests/domain/models/test_auth_models.py -v`
 Expected: 2 passed
 
-- [ ] **Step 7: settings 新增 JWT/管理员配置**
+- [x] **Step 7: settings 新增 JWT/管理员配置**
 
 Modify `service/src/config/settings.py`：在 `max_matches_per_task` 之后追加字段，并把校验器改名扩展：
 
@@ -410,7 +410,7 @@ Modify `service/src/config/settings.py`：在 `max_matches_per_task` 之后追�
 Run: `cd service && uv run --python 3.12 pytest -q`
 Expected: 全量仍绿（216 passed, 1 skipped）
 
-- [ ] **Step 8: Lint 与提交**
+- [x] **Step 8: Lint 与提交**
 
 ```bash
 cd service && uv run --python 3.12 ruff check src tests && uv run --python 3.12 ruff format src/domain src/config tests/domain
