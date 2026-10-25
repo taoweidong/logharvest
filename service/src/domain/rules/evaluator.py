@@ -62,9 +62,7 @@ def compile_ruleset(config: RuleSetConfig) -> CompiledRuleSet:
     for rule in config.rules:
         if isinstance(rule.match, RegexMatch):
             try:
-                pattern = regex.compile(
-                    rule.match.pattern, _regex_flags(rule.match.flags, rule.id)
-                )
+                pattern = regex.compile(rule.match.pattern, _regex_flags(rule.match.flags, rule.id))
             except regex.error as exc:
                 raise ValueError(f"rule {rule.id!r}: invalid regex pattern: {exc}") from exc
             if rule.threshold is not None and rule.threshold.field not in pattern.groupindex:

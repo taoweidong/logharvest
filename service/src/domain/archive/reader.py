@@ -14,9 +14,7 @@ from src.domain.archive.models import ArchiveFormatError, LineRecord, ScanLimitE
 
 logger = logging.getLogger(__name__)
 
-TAR_SUFFIXES = frozenset(
-    {".tar", ".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz"}
-)
+TAR_SUFFIXES = frozenset({".tar", ".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz"})
 SINGLE_COMPRESSED_SUFFIXES = frozenset({".gz", ".bz2", ".xz"})
 RAW_SUFFIXES = frozenset({".log", ".txt"})
 ARCHIVE_SUFFIXES = frozenset({".zip"}) | TAR_SUFFIXES | SINGLE_COMPRESSED_SUFFIXES

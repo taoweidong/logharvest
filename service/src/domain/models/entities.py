@@ -118,9 +118,7 @@ class FileTaskAttempt(SQLModel, table=True):
 
 class Match(SQLModel, table=True):
     __tablename__ = "matches"
-    __table_args__ = (
-        Index("ix_matches_job_created_id", "job_id", "created_at", "id"),
-    )
+    __table_args__ = (Index("ix_matches_job_created_id", "job_id", "created_at", "id"),)
 
     id: int | None = Field(
         default=None,

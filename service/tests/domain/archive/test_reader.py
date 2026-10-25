@@ -251,10 +251,9 @@ def test_discover_archives_non_recursive(tmp_path) -> None:
     (root / "c.log").write_text("x")
 
     assert [path.name for path in discover_archives(root, recursive=False)] == ["b.zip"]
-    assert [
-        path.name
-        for path in discover_archives(root, recursive=False, suffixes={".log"})
-    ] == ["c.log"]
+    assert [path.name for path in discover_archives(root, recursive=False, suffixes={".log"})] == [
+        "c.log"
+    ]
 
 
 def test_discover_archives_unreadable_root_raises(tmp_path, monkeypatch) -> None:

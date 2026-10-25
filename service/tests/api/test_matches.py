@@ -73,17 +73,14 @@ def test_matches_require_job_or_time_range(client, auth_headers) -> None:
     )
     assert (
         client.get(
-            "/api/matches?created_from=2026-01-02T00:00:00Z"
-            "&created_to=2026-01-01T00:00:00Z",
+            "/api/matches?created_from=2026-01-02T00:00:00Z&created_to=2026-01-01T00:00:00Z",
             headers=auth_headers,
         ).status_code
         == 422
     )
 
 
-def test_matches_filter_by_time_range_and_severity(
-    client, auth_headers, session
-) -> None:
+def test_matches_filter_by_time_range_and_severity(client, auth_headers, session) -> None:
     _add_match(session, 1, created_at=datetime(2025, 12, 31, tzinfo=UTC))
     _add_match(session, 2, created_at=datetime(2026, 1, 1, tzinfo=UTC))
     _add_match(
@@ -95,8 +92,7 @@ def test_matches_filter_by_time_range_and_severity(
     session.commit()
 
     ranged = client.get(
-        "/api/matches?created_from=2026-01-01T00:00:00Z"
-        "&created_to=2026-01-02T23:59:59Z",
+        "/api/matches?created_from=2026-01-01T00:00:00Z&created_to=2026-01-02T23:59:59Z",
         headers=auth_headers,
     )
     assert ranged.status_code == 200

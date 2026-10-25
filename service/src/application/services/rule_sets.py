@@ -25,9 +25,7 @@ def validate_rule_set_config(config: RuleSetConfig) -> None:
         try:
             codecs.lookup(getattr(config, field_name))
         except LookupError as exc:
-            raise LookupError(
-                f"unknown {field_name} {getattr(config, field_name)!r}"
-            ) from exc
+            raise LookupError(f"unknown {field_name} {getattr(config, field_name)!r}") from exc
 
 
 def create_rule_set_version(
@@ -52,10 +50,5 @@ def create_rule_set_version(
 
 
 def list_rule_sets(session: Session, limit: int = 50, offset: int = 0) -> list[RuleSet]:
-    statement = (
-        select(RuleSet)
-        .order_by(RuleSet.name, RuleSet.version)
-        .offset(offset)
-        .limit(limit)
-    )
+    statement = select(RuleSet).order_by(RuleSet.name, RuleSet.version).offset(offset).limit(limit)
     return list(session.exec(statement).all())
