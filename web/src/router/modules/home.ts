@@ -4,10 +4,11 @@ const { VITE_HIDE_HOME } = import.meta.env;
 const Layout = () => import("@/layout/index.vue");
 
 /**
- * 骨架阶段的首页。
- * 说明：基座的 `views/welcome` 演示看板已随 Task 1 的瘦身删除，此处先指向一个
- * 只展示前端骨架自身信息的落地页；M2b Task 7 会把 `component` 换成
- * `@/views/logharvest/overview/index.vue`（对接 `GET /api/system/status`）。
+ * 首页即运行概览（M2b Task 7）。
+ * 说明：基座的 `views/welcome` 演示看板已随 Task 1 的瘦身删除，这里直接复用业务概览页
+ * `@/views/logharvest/overview/index.vue`（主数据源 `GET /api/system/overview`，
+ * 不可用时退回 `GET /api/system/status`）。路由 `name` 保持 `Welcome`，
+ * 与 `src/layout/types.ts` 里固定的首页标签对应。
  */
 export default {
   path: "/",
@@ -23,9 +24,9 @@ export default {
     {
       path: "/home",
       name: "Welcome",
-      component: () => import("@/views/home/index.vue"),
+      component: () => import("@/views/logharvest/overview/index.vue"),
       meta: {
-        title: $t("menus.pureHome"),
+        title: "概览",
         showLink: VITE_HIDE_HOME === "true" ? false : true
       }
     }

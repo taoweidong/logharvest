@@ -55,6 +55,21 @@ export const SEVERITY_TAG: Record<string, TagType> = {
   error: "danger"
 };
 
+/**
+ * Worker 状态配色：`online|busy|draining|offline`（与后端 `Worker.status` 同一套取值，
+ * 见 `service/src/domain/models/entities.py` 与 `src/infrastructure/task_queue.py`）。
+ */
+const WORKER_STATUS_TAG: Record<string, TagType> = {
+  online: "success",
+  busy: "primary",
+  draining: "warning",
+  offline: "info"
+};
+
+export function workerStatusTagType(status: string): TagType {
+  return WORKER_STATUS_TAG[status] ?? "info";
+}
+
 export function severityTagType(severity: string): TagType {
   return SEVERITY_TAG[severity] ?? "info";
 }

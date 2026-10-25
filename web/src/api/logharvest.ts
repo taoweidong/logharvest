@@ -4,7 +4,9 @@ import type {
   FileTask,
   Job,
   JobCreatePayload,
+  MaintenanceResult,
   Match,
+  Overview,
   SystemStatus,
   WorkerActionRecord,
   WorkerInfo
@@ -88,6 +90,24 @@ export const listMatches = (params: MatchQuery) =>
 /** 系统状态（文件任务计数、最老 pending 等待秒数、在线 Worker 数） */
 export const systemStatus = () =>
   http.request<SystemStatus>("get", "/system/status");
+
+/**
+ * 概览看板数据源。
+ * 契约：`GET /api/system/overview` → `{jobs, file_tasks, matches_24h,
+ * workers:{online, by_version}, oldest_pending_seconds}`。
+ * 该端点由后端 M2a Task 5 并行轨道补充，本工作树的 `service/` 还没有它，
+ * 前端按约定先行对接（**合流后需复核**）；不可用时界面退回 `systemStatus()`。
+ */
+export const overview = () =>
+  http.request<Overview>("get", "/system/overview");
+
+/**
+ * 手动触发一次维护（回收悬挂任务、降级失联 Worker、收尾停滞作业）。
+ * 契约：`POST /api/system/maintenance` → `{recovered, workers_demoted, jobs_finalized}`；
+ * 同样来自 M2a Task 5，**合流后需复核**。
+ */
+export const runMaintenance = () =>
+  http.request<MaintenanceResult>("post", "/system/maintenance");
 
 /**
  * 数据源/规则集的列表与维护接口在 `logharvestAdmin.ts`（Task 5），

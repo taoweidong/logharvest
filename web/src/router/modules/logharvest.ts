@@ -59,6 +59,25 @@ const LogHarvest = {
       meta: {
         title: "命中结果"
       }
+    },
+    {
+      path: "/logharvest/workers",
+      name: "Workers",
+      component: () => import("@/views/logharvest/workers/index.vue"),
+      meta: {
+        title: "Worker 管理"
+      }
+    },
+    {
+      // 概览组件同时是首页（见 router/modules/home.ts）；这里再暴露一个业务路径
+      // 便于深链与「日志分析」菜单内部跳转，菜单里不重复展示。
+      path: "/logharvest/overview",
+      name: "Overview",
+      component: () => import("@/views/logharvest/overview/index.vue"),
+      meta: {
+        title: "运行概览",
+        showLink: false
+      }
     }
   ]
 } satisfies RouteConfigsTable;

@@ -116,6 +116,31 @@ export type SystemStatus = {
   workers_online: number;
 };
 
+/**
+ * `GET /api/system/overview`。
+ * 契约来源：后端 M2a Task 5 并行轨道新增的概览接口（作业状态分布、文件任务状态分布、
+ * 24 小时命中数、Worker 在线数与版本分布、最老 pending 等待秒数）。
+ * 本工作树的 `service/` 还没有该端点，字段按约定先行对接，**合流后需复核**。
+ */
+export type Overview = {
+  jobs: Partial<Record<JobStatus, number>>;
+  file_tasks: Partial<Record<TaskStatus, number>>;
+  matches_24h: number;
+  workers: { online: number; by_version: Record<string, number> };
+  oldest_pending_seconds: number | null;
+};
+
+/**
+ * `POST /api/system/maintenance`（同样由 M2a Task 5 补充，**合流后需复核**）：
+ * `recovered` 回收的悬挂文件任务数、`workers_demoted` 降级为离线的 Worker 数、
+ * `jobs_finalized` 被收尾的作业数。
+ */
+export type MaintenanceResult = {
+  recovered: number;
+  workers_demoted: number;
+  jobs_finalized: number;
+};
+
 /** `DataSourceRead`（service/src/api/v1/schemas.py） */
 export type DataSource = {
   id: number;

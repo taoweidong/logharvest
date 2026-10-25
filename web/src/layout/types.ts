@@ -8,7 +8,8 @@ export const routerArrays: Array<RouteConfigs> =
           path: "/home",
           name: "Welcome",
           meta: {
-            title: "menus.pureHome",
+            // 首页即运行概览（见 router/modules/home.ts），标题与之保持一致
+            title: "概览",
             icon: "ep/home-filled"
           }
         }

@@ -622,25 +622,25 @@ git commit -m "feat: 添加命中结果游标浏览界面"
 - Consumes: `GET /api/workers`、`POST /api/workers/{id}/drain|resume`、`POST /api/workers/drain-version?version=`（返回 `{drained, flagged}`）、`GET /api/system/overview`、`POST /api/system/maintenance`
 - Produces: 路由 `/logharvest/overview`、`/logharvest/workers`
 
-- [ ] **Step 1: Worker 页**
+- [x] **Step 1: Worker 页**
 
-列 = `id`、`hostname`、`version`、`status`（`online/busy/draining/offline` 四色）、`current_task_id`、`max_concurrent_copies`、`last_heartbeat`（相对时间）、`drain_requested`。操作：单台 drain/resume（离线时 resume 按钮禁用，因为后端返回 `409`）；顶部"按版本排空"输入版本号，提交后把返回的 `{drained, flagged}` 原样提示为"已排空 N 台，标记 M 台离线（重启后生效）"。页面文案要显式说明：**这里不执行部署，镜像替换由 Jenkins + Docker Compose 完成**（与主设计 §10 一致）。
+列 = `id`、`hostname`、`version`、`status`（`online/busy/draining/offline` 四色）、`current_task_id`、`max_concurrent_copies`、`last_heartbeat`（相对时间）、`drain_requested`。操作：单台 drain/resume（离线时 resume 按钮禁用，因为后端返回 `409`）；顶部"按版本排空"输入版本号，提交后把返回的 `{drained, flagged}` 原样提示为"已排空 N 台，标记 M 台离线（重启后生效）"。页面文案要显式说明：**这里不执行部署，镜像替换由 Jenkins + Docker Compose 完成**（与主设计 §10 一致）。Worker 列表同样是裸数组 + `limit`（上限 200）/`offset` 窗口翻页，没有总数。
 
-- [ ] **2: 概览看板**
+- [x] **2: 概览看板**
 
-`overview/index.vue` 展示 `GET /api/system/overview`：作业状态分布、文件任务状态分布、`matches_24h`、在线 Worker 数与版本分布、`oldest_pending_seconds`（超过 300 秒高亮）。附"执行维护"按钮调 `POST /api/system/maintenance`，把 `{recovered, workers_demoted, jobs_finalized}` 显示为结果提示。图表不引入 echarts（Step 3 of Task 1 已移除该插件），用 Element Plus 的进度条 + 数字卡片即可。
+`overview/index.vue` 展示 `GET /api/system/overview`：作业状态分布、文件任务状态分布、`matches_24h`、在线 Worker 数与版本分布、`oldest_pending_seconds`（超过 300 秒高亮）。附"执行维护"按钮调 `POST /api/system/maintenance`，把 `{recovered, workers_demoted, jobs_finalized}` 显示为结果提示。图表不引入 echarts（Step 3 of Task 1 已移除该插件），用 Element Plus 的进度条 + 数字卡片即可。**两个端点都由 M2a Task 5 并行补充，本工作树 `service/` 里还没有 → 按约定契约实现，标记为「合流后需复核」；概览失败时退回 `GET /api/system/status`（`{file_tasks, pending_oldest_seconds, workers_online}`）渲染可得字段，不留空。**
 
-- [ ] **Step 3: 首页指向概览**
+- [x] **Step 3: 首页指向概览**
 
-Modify `web/src/router/modules/home.ts`：把默认子路由 `component` 从 `@/views/welcome/index.vue` 改为 `@/views/logharvest/overview/index.vue`，`meta.title` 改为"概览"。（`views/welcome` 目录已在 Task 1 删除，这里必须改掉，否则 typecheck 失败。）
+Modify `web/src/router/modules/home.ts`：把默认子路由 `component` 从 `@/views/welcome/index.vue` 改为 `@/views/logharvest/overview/index.vue`，`meta.title` 改为"概览"。（`views/welcome` 目录已在 Task 1 删除，这里必须改掉，否则 typecheck 失败。）骨架阶段的 `views/home/index.vue` 随之下线，`layout/types.ts` 的固定首页标签标题同步为"概览"。
 
-- [ ] **Step 4: 验证与提交**
+- [x] **Step 4: 验证与提交**
 
 ```bash
 cd /e/GitHub/think/web && pnpm typecheck 2>&1 | tail -10
 cd /e/GitHub/think/web && pnpm build 2>&1 | tail -12
 ```
-Expected: typecheck 无错误；build 成功产出 `dist/`。把 `dist/` 加进根 `.gitignore`（若尚未忽略）。
+Expected: typecheck 无错误；build 成功产出 `dist/`。把 `dist/` 加进根 `.gitignore`（已确认 `dist/`、`node_modules/` 两条模式覆盖 `web/dist`、`web/node_modules`，`git check-ignore` 通过，无需改动）。
 
 ```bash
 git add web .gitignore
