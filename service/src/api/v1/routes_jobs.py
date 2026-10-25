@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Header, HTTPException, Query, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Response, status
 from sqlmodel import Session
 
 from src.api.dependencies import AdminDep, SessionDep
 from src.api.v1.schemas import FileTaskRead, FileTaskStatus, JobCreate, JobRead
 from src.application.services.jobs import (
-    TERMINAL_JOB_STATUSES,
+    RetryNotPermitted,
     cancel_job,
     create_job,
     retry_failed_tasks,
@@ -82,11 +82,13 @@ def post_job_cancel(job_id: int, session: SessionDep, _: AdminDep):
     return cancel_job(session, get_job_or_404(session, job_id))
 
 
-@router.post("/{job_id}/files/retry-failed")
+@router.post(
+    "/{job_id}/files/retry-failed",
+    responses={409: {"description": "作业已取消，重试只会让任务永久滞留"}},
+)
 def retry_failed(job_id: int, session: SessionDep, _: AdminDep):
-    job = session.get(Job, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-    if job.status in TERMINAL_JOB_STATUSES and job.status != "cancelled":
-        raise HTTPException(status_code=409, detail="job is not retryable")
-    return {"retried": retry_failed_tasks(session, job_id)}
+    job = get_job_or_404(session, job_id)
+    try:
+        return retry_failed_tasks(session, job)
+    except RetryNotPermitted as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

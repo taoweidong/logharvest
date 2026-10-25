@@ -534,9 +534,16 @@ def test_job_scan_releases_transaction_and_passes_limits(
     assert job.idempotency_key == "scan-key"
 
 
-def _seed_job_with_tasks(session, specs) -> int:
+def _seed_job_with_tasks(session, specs, *, job_status="running", cancel_requested=False) -> int:
     """Create a job with one FileTask per (status, name) tuple, returned as its id."""
-    job = Job(name="seeded", data_source_id=1, source_path="/nas", rule_set_id=1, status="running")
+    job = Job(
+        name="seeded",
+        data_source_id=1,
+        source_path="/nas",
+        rule_set_id=1,
+        status=job_status,
+        cancel_requested=cancel_requested,
+    )
     session.add(job)
     session.commit()
     session.refresh(job)
@@ -560,7 +567,7 @@ def test_retry_failed_returns_terminal_tasks_to_queue(client, auth_headers, sess
     response = client.post(f"/api/jobs/{job_id}/files/retry-failed", headers=auth_headers)
 
     assert response.status_code == 200
-    assert response.json() == {"retried": 1}
+    assert response.json() == {"retried": 1, "remaining_failed": 0}
     session.expire_all()
     statuses = [
         t.status for t in session.exec(select(FileTask).where(FileTask.job_id == job_id)).all()
@@ -611,3 +618,48 @@ def test_job_files_rejects_unknown_status_filter(client, auth_headers, session) 
 
     assert unknown.status_code == 422
     assert missing_job.status_code == 404
+
+
+def test_retry_failed_reopens_a_failed_job(client, auth_headers, session) -> None:
+    """规格 §7.3 的"重试失败文件"正是面向 failed 作业；作业必须重新变为 running，
+    否则回收与终态汇总都看不到它。"""
+    job_id = _seed_job_with_tasks(
+        session,
+        [("failed", "e1"), ("failed", "e2"), ("succeeded", "ok")],
+        job_status="failed",
+    )
+
+    response = client.post(f"/api/jobs/{job_id}/files/retry-failed", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"retried": 2, "remaining_failed": 0}
+    session.expire_all()
+    job = session.get(Job, job_id)
+    assert job is not None and job.status == "running" and job.finished_at is None
+
+
+def test_retry_failed_rejects_cancelled_jobs(client, auth_headers, session) -> None:
+    """取消作业的任务由 CLAIM_SQL 排除，重新置 pending 只会永远卡在队列里。"""
+    flagged = _seed_job_with_tasks(session, [("failed", "e1")], cancel_requested=True)
+    done = _seed_job_with_tasks(session, [("failed", "e2")], job_status="cancelled")
+
+    assert (
+        client.post(f"/api/jobs/{flagged}/files/retry-failed", headers=auth_headers).status_code
+        == 409
+    )
+    assert (
+        client.post(f"/api/jobs/{done}/files/retry-failed", headers=auth_headers).status_code == 409
+    )
+
+    session.expire_all()
+    statuses = [t.status for t in session.exec(select(FileTask)).all()]
+    assert statuses == ["failed", "failed"]
+
+
+def test_retry_failed_reports_tasks_left_beyond_the_batch(client, auth_headers, session) -> None:
+    """limit 会截断单次重试，剩余数量必须可见，不能静默丢人。"""
+    job_id = _seed_job_with_tasks(session, [("failed", f"e{i}") for i in range(201)])
+
+    response = client.post(f"/api/jobs/{job_id}/files/retry-failed", headers=auth_headers)
+
+    assert response.json() == {"retried": 200, "remaining_failed": 1}

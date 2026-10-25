@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import HTTPException
-from sqlalchemy import update
+from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -16,6 +16,12 @@ from src.domain.archive.reader import (
 from src.domain.models.entities import DataSource, FileTask, Job, RuleSet, utcnow
 
 TERMINAL_JOB_STATUSES = frozenset({"succeeded", "partial", "failed", "cancelled"})
+
+
+class RetryNotPermitted(RuntimeError):
+    """作业已取消：重新入队的任务永远不会再被领取，只会永久滞留。"""
+
+
 SCAN_DEADLINE_SECONDS = 10.0
 
 
@@ -198,14 +204,35 @@ def cancel_job(session: Session, job: Job) -> Job:
     return job
 
 
-def retry_failed_tasks(session: Session, job_id: int, *, limit: int = 200) -> int:
+def retry_failed_tasks(session: Session, job: Job, *, limit: int = 200) -> dict[str, int]:
     """Return terminal failed tasks of a job to the queue, keeping attempt history.
 
     attempts 不重置：手动重试是一次新尝试，仍受 max_attempts 约束，避免死循环刷库。
+    重新入队后作业必须回到 ``running`` 并清掉 ``finished_at``，否则终态汇总与取消
+    逻辑都看不到它；``remaining_failed`` 让 ``limit`` 的截断对操作者可见。
+
+    已取消的作业直接拒绝：``CLAIM_SQL`` 永远不会再领取它的任务，把它们置回
+    ``pending`` 只会让作业与队列永久滞留，并让概览的积压指标一直报警。
     """
-    tasks = session.exec(
-        select(FileTask).where(FileTask.job_id == job_id, FileTask.status == "failed").limit(limit)
-    ).all()
+    if job.cancel_requested or job.status == "cancelled":
+        raise RetryNotPermitted("cancelled jobs cannot be retried")
+
+    failed_total = int(
+        session.exec(
+            select(func.count(FileTask.id)).where(
+                FileTask.job_id == job.id, FileTask.status == "failed"
+            )
+        ).one()
+        or 0
+    )
+    tasks = list(
+        session.exec(
+            select(FileTask)
+            .where(FileTask.job_id == job.id, FileTask.status == "failed")
+            .order_by(FileTask.id)
+            .limit(limit)
+        ).all()
+    )
     for task in tasks:
         task.status = "pending"
         task.error = None
@@ -213,5 +240,9 @@ def retry_failed_tasks(session: Session, job_id: int, *, limit: int = 200) -> in
         task.worker_id = None
         task.scheduled_at = utcnow()
         session.add(task)
+    if tasks and job.status in TERMINAL_JOB_STATUSES:
+        job.status = "running"
+        job.finished_at = None
+        session.add(job)
     session.commit()
-    return len(tasks)
+    return {"retried": len(tasks), "remaining_failed": max(0, failed_total - len(tasks))}

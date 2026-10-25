@@ -695,3 +695,32 @@ def test_real_mtime_change_is_still_a_permanent_failure(tmp_path: Path) -> None:
     assert result.status == "failed"
     assert "mtime" in (result.error or "").lower()
     assert repo.retryables == [(10, False)]
+
+
+def test_cancel_check_follows_the_heartbeat_budget(tmp_path: Path) -> None:
+    """规格 §7.3 是"每 2 万行查一次取消"，不是每行一次 SELECT。"""
+    repo = FakeRepo()
+    calls: list[int] = []
+
+    def cancel_check() -> bool:
+        calls.append(1)
+        return False
+
+    processor = make_processor(
+        repo,
+        FakeWriter(),
+        tmp_path / "work",
+        batch_size=10_000,
+        heartbeat_every_lines=10,
+        heartbeat_every_seconds=3_600,
+        copy_heartbeat_seconds=3_600,
+        cancel_check=cancel_check,
+    )
+    body = "".join(f"line {index}\n" for index in range(50))
+
+    result = processor.process(make_task(tmp_path, members={"app.log": body}))
+
+    assert result.status == "succeeded"
+    assert result.processed_lines == 50
+    # 50 行 / 每 10 行一次心跳 = 5 次取消检查，而不是 50 次。
+    assert len(calls) == 5

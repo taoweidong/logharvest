@@ -175,9 +175,6 @@ class TaskProcessor:
                         self._writer.write_batch(tuple(buffer))
                         buffer.clear()
 
-                if self._cancel_check is not None and self._cancel_check():
-                    raise JobCancelled(f"job {task.job_id} cancelled")
-
                 now = self._clock()
                 if (
                     processed_lines % self._heartbeat_every_lines == 0
@@ -187,6 +184,10 @@ class TaskProcessor:
                         task.id, task.attempts, processed_lines, matched_rows
                     ):
                         raise LeaseLost(f"lease lost for task {task.id}")
+                    # 规格 §7.3 要求每 2 万行查一次取消；放在心跳预算里既满足这个频率，
+                    # 又让慢行（不足 2 万行）最迟 5 秒也能停下来。逐行查会变成逐行 SELECT。
+                    if self._cancel_check is not None and self._cancel_check():
+                        raise JobCancelled(f"job {task.job_id} cancelled")
                     if self._on_lease_refresh is not None:
                         self._on_lease_refresh()
                     last_heartbeat = now
