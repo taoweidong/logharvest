@@ -121,7 +121,8 @@ async function loadJobs() {
 }
 
 const columns: TableColumnList = [
-  { label: "时间", prop: "created_at", width: 190 },
+  // @pureadmin/table 3.3.0 只解析 column.slot，不声明则 <template #prop> 静默不渲染。
+  { label: "时间", prop: "created_at", slot: "created_at", width: 190 },
   { label: "作业", prop: "job_id", width: 90 },
   { label: "文件", prop: "file_name", minWidth: 180, showOverflowTooltip: true },
   {
@@ -132,9 +133,9 @@ const columns: TableColumnList = [
   },
   { label: "行号", prop: "line_no", width: 90 },
   { label: "规则", prop: "rule_id", minWidth: 150, showOverflowTooltip: true },
-  { label: "级别", prop: "severity", width: 100 },
-  { label: "数值", prop: "numeric_value", width: 120 },
-  { label: "原始行", prop: "raw_line", minWidth: 320 }
+  { label: "级别", prop: "severity", slot: "severity", width: 100 },
+  { label: "数值", prop: "numeric_value", slot: "numeric_value", width: 120 },
+  { label: "原始行", prop: "raw_line", slot: "raw_line", minWidth: 320 }
 ];
 
 onMounted(() => {

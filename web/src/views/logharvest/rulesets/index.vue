@@ -58,9 +58,9 @@ const columns: TableColumnList = [
   { label: "ID", prop: "id", width: 90 },
   { label: "名称", prop: "name", minWidth: 200, showOverflowTooltip: true },
   { label: "版本", prop: "version", width: 90 },
-  { label: "规则数", prop: "rule_count", width: 100 },
-  { label: "创建时间", prop: "created_at", width: 190 },
-  { label: "操作", prop: "operation", width: 180, fixed: "right" }
+  { label: "规则数", prop: "rule_count", slot: "rule_count", width: 100 },
+  { label: "创建时间", prop: "created_at", slot: "created_at", width: 190 },
+  { label: "操作", prop: "operation", slot: "operation", width: 180, fixed: "right" }
 ];
 
 onMounted(load);

@@ -85,11 +85,11 @@ const columns: TableColumnList = [
   { label: "ID", prop: "id", width: 80 },
   { label: "名称", prop: "name", minWidth: 160, showOverflowTooltip: true },
   { label: "根路径", prop: "root_path", minWidth: 240, showOverflowTooltip: true },
-  { label: "只读", prop: "read_only", width: 90 },
-  { label: "启用", prop: "enabled", width: 90 },
-  { label: "创建时间", prop: "created_at", width: 190 },
-  { label: "路径测试", prop: "test", minWidth: 260 },
-  { label: "操作", prop: "operation", width: 120, fixed: "right" }
+  { label: "只读", prop: "read_only", slot: "read_only", width: 90 },
+  { label: "启用", prop: "enabled", slot: "enabled", width: 90 },
+  { label: "创建时间", prop: "created_at", slot: "created_at", width: 190 },
+  { label: "路径测试", prop: "test", slot: "test", minWidth: 260 },
+  { label: "操作", prop: "operation", slot: "operation", width: 120, fixed: "right" }
 ];
 
 onMounted(load);

@@ -81,11 +81,11 @@ const isTerminal = (job: Job) =>
 const columns: TableColumnList = [
   { label: "ID", prop: "id", width: 90 },
   { label: "名称", prop: "name", minWidth: 180, showOverflowTooltip: true },
-  { label: "状态", prop: "status", width: 110 },
+  { label: "状态", prop: "status", slot: "status", width: 110 },
   { label: "文件数", prop: "total_files", width: 100 },
-  { label: "总字节", prop: "total_bytes", width: 130 },
-  { label: "创建时间", prop: "created_at", width: 190 },
-  { label: "操作", prop: "operation", width: 180, fixed: "right" }
+  { label: "总字节", prop: "total_bytes", slot: "total_bytes", width: 130 },
+  { label: "创建时间", prop: "created_at", slot: "created_at", width: 190 },
+  { label: "操作", prop: "operation", slot: "operation", width: 180, fixed: "right" }
 ];
 
 onMounted(load);
