@@ -160,7 +160,7 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` 已从认证路径与
 | `GET` | `/api/jobs/{id}/events` | SSE 作业进度，`text/event-stream`；见下文 |
 | `GET` | `/api/system/status` | 文件任务状态计数、最老 pending 等待秒数、在线 Worker 数 |
 | `GET` | `/api/system/overview` | 概览统计：`{jobs: {status: 数量}, file_tasks: {status: 数量}, matches_24h, workers: {online, by_version: {version: 数量}}, oldest_pending_seconds}`；`workers.online` 统计 `online`/`busy`/`draining`，`by_version` 包含 `offline` 行（升级时用来确认旧版本清零）；`oldest_pending_seconds` 是最老 `pending` 文件任务的等待秒数（整数），没有 pending 时为 `null` |
-| `POST` | `/api/system/maintenance` | 立即执行一次服务端补偿：`{recovered, workers_demoted, jobs_finalized}`（回收僵死任务 / 把心跳超时的 Worker 置 `offline` / 收尾全部文件任务已终态的作业）；可重复执行，无待处理项时三项均为 `0`；见"服务端维护入口" |
+| `POST` | `/api/system/maintenance` | 立即执行一次服务端补偿：`{recovered, workers_demoted, jobs_finalized}`（回收僵死任务 / 把心跳超时的 Worker 置 `offline` / 收尾全部文件任务已终态的作业）；可重复执行，无待处理项时三项均为 `0`。**队列不是 PostgreSQL 时返回 `503`** 并说明原因（回收语句是 PostgreSQL 专有语法），而不是抛未处理异常；见"服务端维护入口" |
 
 所有列表接口都分页：`limit` 默认 `50`、`offset` 默认 `0`；数据源、规则集、作业、文件任务与命中结果的 `limit` 最大 `500`，Worker 最大 `200`；`limit` 超出上限或 `offset` 为负数返回 `422`。`GET /api/matches` 使用 `(created_at, id)` 游标而不是 `offset`：查询参数为 `created_before` + `id_before`（必须成对提供，取上一页最后一条的 `created_at` 与 `id`），按 `created_at DESC, id DESC` 排序，`limit` 默认 `50`、最大 `500`。
 
@@ -273,7 +273,7 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 
 - API 测试（`tests/api/`、`tests/test_health.py`）使用内存 SQLite（`StaticPool`）与 FastAPI `dependency_overrides`，不需要 PostgreSQL；每个 API 用例通过 `create_db_and_tables()` 建表。`tests/conftest.py` 的 autouse fixture 会把 `settings.auto_create_tables` 置为 `False`，因此测试进程从不执行 Alembic，也不会碰开发库；`tests/conftest.py` 在任何 `src` 导入之前用 `os.environ.setdefault` 注入 `LOGHARVEST_ENVIRONMENT=test` 与测试签名密钥（`Settings` 在模块导入时即完成校验），`auth_headers` 夹具再用 `settings.jwt_secret_key` 签发真实 access token。`tests/domain/` 与 `tests/application/` 为领域/应用单元测试，不经过 API 与依赖覆盖（模型测试自行使用内存 SQLite 验证建表）。
 - `tests/api/` 覆盖 JWT 登录/刷新/登出/停用账号、数据源、规则集、作业规划/幂等/路径校验/取消/失败重试、结果查询、Worker 管理、SSE、系统状态与概览/维护接口；`tests/domain/services/` 覆盖 bcrypt 与 `TokenService`（含过期、错密钥、access/refresh 不可互换）；`tests/scripts/test_seed_admin.py` 覆盖管理员种子的幂等与弱口令拒绝；`tests/application/` 覆盖 Worker 处理器的复制续租、时间心跳、租约丢失、取消检查与永久失败；`tests/worker/` 用 fake 仓库覆盖领取循环、drain、注册、僵死回收、周期补偿、取消检查接线与信号退出；`tests/infrastructure/` 覆盖队列 SQL 形状、批量写入、作业终态汇总（后两者在真实建表的 SQLite 上执行）以及迁移结果与 `SQLModel.metadata` 的逐表逐列比对。
-- 作业唯一约束、幂等并发回退、作业终态栅栏等并发语义仅在 SQLite 上验证；`SKIP LOCKED` 领取、`make_interval` 退避、`ON CONFLICT` 注册、`RECOVER_STALE_SQL` 回收等 PostgreSQL 行为留待真实环境验证。概览与维护接口的 `recover_stale` 一步在测试里被替换为计数桩（该语句在 SQLite 上是语法错误），其余两步真实执行。
+- 作业唯一约束、幂等并发回退、作业终态栅栏等并发语义仅在 SQLite 上验证；`SKIP LOCKED` 领取、`make_interval` 退避、`ON CONFLICT` 注册、`RECOVER_STALE_SQL` 回收等 PostgreSQL 行为留待真实环境验证。维护入口在测试里分两层：`tests/application/test_maintenance.py` 直接真实执行两步可移植清扫（降级静默 Worker、收尾作业）并断言 `run_maintenance` 在非 PostgreSQL 上拒绝；`tests/api/test_system.py` 只断言该场景返回 `503`。
 
 ## 范围
 
