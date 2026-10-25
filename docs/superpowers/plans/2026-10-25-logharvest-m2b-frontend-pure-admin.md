@@ -661,23 +661,26 @@ git commit -m "feat: 添加 Worker 管理与概览看板界面"
 - Consumes: Task 1-7 全部
 - Produces: 可照做的开发/联调步骤，与代码一致的接口清单
 
-- [ ] **Step 1: 写联调文档**
+- [x] **Step 1: 写联调文档**
 
-`web/README.md` 追加"与后端联调"小节：后端用 SQLite 起服务（`LOGHARVEST_DATABASE_URL=sqlite:///./web-dev.db`）→ `python -m scripts.seed_admin` → `uvicorn src.main:app --port 8000` → `pnpm dev`（8848，`/api` 代理）。写明队列/Worker 需要 PostgreSQL，但纯 API 联调不需要；以及 SSE 用 `fetch` 读取的原因（`EventSource` 不能带 `Authorization`）。
+`web/README.md` 追加"与后端联调"小节：后端用 SQLite 起服务（`LOGHARVEST_DATABASE_URL=sqlite:///./web-dev.db`）→ `python -m scripts.seed_admin` → `uvicorn src.main:app --port 8000` → `pnpm dev`（8848，`/api` 代理）。写明队列/Worker 需要 PostgreSQL，但纯 API 联调不需要；以及 SSE 用 `fetch` 读取的原因（`EventSource` 不能带 `Authorization`）。另加界面↔接口对照表与「已实测核对 / 待合流复核」清单。
 
-`README.md`（根）：三服务架构的前端从"待做"改为"已落地"，列出五屏与登录，并如实写明：菜单是前端静态定义（无服务端动态菜单）、未做人工视觉确认（本环境内置浏览器为隐藏页）。
+`README.md`（根）与 `service/README.md`：**本轨不改动**（并行轨道正在改这两个文件与 `.env.example`，改同一段必然冲突）。要写进去的段落以文本形式交付，由控制器在合流时落到对应文件。
 
-`.env.example`：如新增了前端相关变量则补上；否则不动。
+- [x] **Step 2: 端到端冒烟**
 
-- [ ] **Step 2: 端到端冒烟**
+原计划是 `cd service && uv run --python 3.12 pytest -q` + `pnpm typecheck && pnpm build`。
+本轨实际执行：
+- `pnpm typecheck`、`pnpm build` 全绿（见提交说明）。
+- `pnpm dev` 起 8848，逐个请求新界面的模块（`/src/views/logharvest/{matches,workers,overview}/index.vue`
+  与 `/src/router/modules/home.ts`）均 200 且能转换，代理 `/api/health` 命中真实后端。
+- 对本机 8000 端口的 dev 后端只发 GET 请求，核对 `/api/matches` 的 422 文案与游标配对、
+  `/api/workers` 与 `/api/system/status` 的返回形状（结论写进 `web/README.md`）。
+- **没有**跑后端测试套件（`service/` 属并行轨道、本工作树的副本早于 M2a），
+  **没有**任何人工视觉确认（内置浏览器是隐藏页：截图失败、`innerWidth` 为 0、
+  `requestAnimationFrame` 冻结），因此不声称任何界面"渲染正确"。
 
-```bash
-cd /e/GitHub/think/service && LOGHARVEST_DATABASE_URL="sqlite:///./web-dev.db" uv run --python 3.12 pytest -q
-cd /e/GitHub/think/web && pnpm typecheck && pnpm build
-```
-Expected: 后端全量绿；前端 typecheck/build 绿。清理临时库 `rm -f /e/GitHub/think/service/web-dev.db`。
-
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 git add web/README.md service/README.md README.md .env.example
