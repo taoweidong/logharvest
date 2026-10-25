@@ -1814,14 +1814,21 @@ Modify `service/src/api/v1/routes_jobs.py` 的 `GET /{job_id}/files`：新增查
 
 服务层的列表函数追加同名参数，并在查询里 `where(FileTask.status == status)`（`None` 时不加条件）。响应条目增加 `"status"` 与 `"attempts"`，供前端展示。
 
-- [ ] **Step 4: 全量验证与提交**
+- [x] **Step 4: 全量验证与提交**
 
 ```bash
 cd service && uv run --python 3.12 pytest -q
-cd service && uv run --python 3.12 ruff check src tests && uv run --python 3.12 ruff format src tests
+cd service && uv run --python 3.12 ruff check src tests scripts
 git add service/src/application/services/maintenance.py service/src/api service/tests
 git commit -m "feat: 新增服务端维护入口、概览统计与文件任务状态筛选"
 ```
+
+落地实测：`pytest -p no:warnings` → `249 passed, 1 skipped`（Task 5 前为 241 passed, 1 skipped）；
+`ruff check src tests scripts` → All checks passed。
+`ruff format` 只在本次改动的文件上跑：整树格式化会顺带重排 M0/M1 已提交的 `rule_sets.py`、
+`archive/reader.py`、`entities.py`、`evaluator.py` 等文件（历史上它们是在更窄的行宽下格式化的），
+这些无关重排已回退，避免混进功能提交。
+
 
 ---
 
@@ -1836,7 +1843,7 @@ git commit -m "feat: 新增服务端维护入口、概览统计与文件任务�
 - Consumes: Task 1-5 的实际接口
 - Produces: 与代码一致的文档（无未实现声明）
 
-- [ ] **Step 1: 更新 `service/README.md`**
+- [x] **Step 1: 更新 `service/README.md`**
 
 新增/修改要点，逐条落实：
 - 认证节：静态 `LOGHARVEST_ADMIN_TOKEN` 已移除；改为 `POST /api/login` 拿 `accessToken`，受保护接口带 `Authorization: Bearer <accessToken>`；`401` 含义（缺失/无效/过期）与 `403`（非 admin 角色）。
@@ -1847,12 +1854,26 @@ git commit -m "feat: 新增服务端维护入口、概览统计与文件任务�
 - Worker 节：新增取消检查（每行检查一次，作业取消即停并置 `cancelled`）、源文件 size/mtime 不符即永久失败不重试、`retryable` 栅栏；说明 `EventSource` 不能带 `Authorization` 头，前端用 `fetch` 流式读取。
 - 明确不包含：前端（M2b）、真实 PostgreSQL 集成验证、按钮级权限与动态菜单、进程内并发池、`max_matches_per_task` 强制。
 
-- [ ] **Step 2: 更新 `.env.example` 与 `README.md`**
+- [x] **Step 2: 更新 `.env.example` 与 `README.md`**
 
 `.env.example`：删掉 `LOGHARVEST_ADMIN_TOKEN`（若保留需注明仅供回滚测试），加入 JWT 与管理员账号变量，标注生产必填。
 `README.md`（仓库根）：状态推进到 M2a，说明后端已带登录与迁移；下一步 M2b 前端。
 
-- [ ] **Step 3: 全量验证与提交**
+**落地说明与偏差：**
+- `LOGHARVEST_ADMIN_TOKEN` 采取"保留但注释掉"而不是直接删除：`Settings.admin_token` 字段与
+  "非 dev/test 不得使用默认值"的校验仍在（Task 1 未删），删掉示例行会让生产部署撞上一条与鉴权无关的
+  启动报错。注释里写的是"已不参与任何鉴权、带它的 Bearer 一律 401、字段留待后续清理"，
+  没有写成"仅供回滚测试"——回滚需要改代码，这个措辞会误导。
+- `.env.example` 同时修正了 M1b 遗留的过时描述（"该开关仍未接入应用启动"），与 Task 3 的接线一致。
+- `service/README.md` 显式写明业务列表返回**纯 JSON 数组**、没有 `{items,total}` 包装，
+  与 Task 5 的实现决定一致；M2b 若按 `Page<T>` 消费 `GET /api/jobs/{id}/files`，需要在该里程碑统一引入分页信封。
+- 迁移章节里 "`upgrade head` / `current` / `downgrade base`" 是在临时 SQLite 文件上真实执行过的结果
+  （`0002 (head)`；downgrade 后只剩 `alembic_version`）；同节与"PostgreSQL 依赖与验证边界"都明确
+  **未在 PostgreSQL 上验证过**。
+- 维护入口一节按设计方案 §7.2/§7.4 解释了服务端补偿为何必要（零存活 Worker 时 Worker 循环里的同类清扫不会执行），
+  并写清周期调度属于外部 cron/compose，本里程碑不内置定时器、不引入 Redis。
+
+- [x] **Step 3: 全量验证与提交**
 
 ```bash
 cd service && uv run --python 3.12 pytest -q
