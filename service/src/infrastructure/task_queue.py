@@ -42,8 +42,9 @@ WHERE j.id = :job_id
 
 START_ATTEMPT_SQL = """
 INSERT INTO file_task_attempts
-    (file_task_id, attempt_no, worker_id, worker_version, status, started_at)
-VALUES (:task_id, :attempt_no, :worker_id, :worker_version, 'running', now())
+    (file_task_id, attempt_no, worker_id, worker_version, status, started_at,
+     processed_lines, matched_rows)
+VALUES (:task_id, :attempt_no, :worker_id, :worker_version, 'running', now(), 0, 0)
 """
 
 # Heartbeat is fenced by both attempts (lease generation) and status, so a
@@ -182,9 +183,13 @@ WITH stale AS (
 SELECT count(*) FROM updated
 """
 
+# 显式列出 drain_requested / processed_lines / matched_rows 这些"模型里有 Python
+# 默认值、但数据库里没有 server default"的列：手写 SQL 不会经过 ORM，PostgreSQL 会
+# 直接 NOT NULL 违约，而 SQLite 测试根本执行不到这些语句（见 tests/integration）。
 REGISTER_WORKER_SQL = """
-INSERT INTO workers (id, hostname, version, status, max_concurrent_copies, started_at, last_heartbeat)
-VALUES (:id, :hostname, :version, 'online', :max_concurrent_copies, now(), now())
+INSERT INTO workers (id, hostname, version, status, drain_requested, max_concurrent_copies,
+                     started_at, last_heartbeat)
+VALUES (:id, :hostname, :version, 'online', false, :max_concurrent_copies, now(), now())
 ON CONFLICT (id) DO UPDATE
 SET hostname = EXCLUDED.hostname,
     version = EXCLUDED.version,

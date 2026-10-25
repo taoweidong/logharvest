@@ -1,9 +1,11 @@
 import os
 
 # Settings 在模块导入时就完成校验，而 jwt_secret_key 现在任何环境都必填，
-# 所以测试密钥必须先落到环境里，再导入任何 src 模块。
-os.environ.setdefault("LOGHARVEST_ENVIRONMENT", "test")
-os.environ.setdefault("LOGHARVEST_JWT_SECRET_KEY", "unit-secret-key-0123456789-abcdef")
+# 所以测试密钥必须先落进环境，再导入任何 src 模块。
+# 这里刻意用赋值而不是 setdefault：开发者 shell 里残留的 LOGHARVEST_* 会静默
+# 改变（甚至打断）测试结果——签名密钥不一致会让鉴权用例成片 401。
+os.environ["LOGHARVEST_ENVIRONMENT"] = "test"
+os.environ["LOGHARVEST_JWT_SECRET_KEY"] = "unit-secret-key-0123456789-abcdef"
 
 from collections.abc import Iterator
 
