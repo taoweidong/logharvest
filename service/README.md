@@ -126,7 +126,7 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` **已退出认证路�
 | `403` | 口令正确但账号被停用 | `user is disabled` |
 | `403` | 已认证但没有 `admin` 角色 | `admin role required` |
 
-`401` 响应带 `WWW-Authenticate: Bearer` 头。
+受保护接口返回的 `401`（认证依赖发出）带 `WWW-Authenticate: Bearer` 头；`POST /api/login` 的 `401` 是普通 `HTTPException`，只有 `{"detail": "invalid credentials"}`，不带该头。
 
 **响应信封**：只有 `POST /api/login`、`POST /api/refresh-token`、`GET /api/auth/routes`、`POST /api/logout` 返回 `{"code": 0, "message": "ok", "data": ...}`（前端基座按 `data.code === 0` 判定）；其余业务接口保持纯 REST 对象与 `{"detail": ...}` 错误体，不包信封。
 
