@@ -51,6 +51,14 @@ const LogHarvest = {
       meta: {
         title: "数据源"
       }
+    },
+    {
+      path: "/logharvest/matches",
+      name: "Matches",
+      component: () => import("@/views/logharvest/matches/index.vue"),
+      meta: {
+        title: "命中结果"
+      }
     }
   ]
 } satisfies RouteConfigsTable;

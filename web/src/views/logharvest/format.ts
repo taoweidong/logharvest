@@ -59,6 +59,21 @@ export function severityTagType(severity: string): TagType {
   return SEVERITY_TAG[severity] ?? "info";
 }
 
+/**
+ * 把日期选择器给出的本地时间转成后端可正确理解的 UTC 时间串（带 `Z`）。
+ * 后端 `created_at` 存的是不带时区的 UTC 墙上时间，`routes_matches.py` 的 `_as_utc`
+ * 会把「不带偏移」的入参当作 UTC——所以这里必须显式带上 `Z`，否则时间范围会按
+ * 浏览器时区偏移（东八区会整整差 8 小时）。
+ */
+export function toApiDateTime(
+  value: Date | string | number | null | undefined
+): string | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
+}
+
 /** 秒数转可读等待时长 */
 export function formatDuration(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined) return "-";

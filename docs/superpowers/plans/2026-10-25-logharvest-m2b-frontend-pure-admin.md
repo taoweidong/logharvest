@@ -578,6 +578,9 @@ git commit -m "feat: 添加规则集与数据源维护界面"
 
 ### Task 6: 命中结果浏览屏
 
+> 实现依据 `main` 上的补记「实现期核实到的计划错误」：列表接口返回裸数组、
+> `/api/matches` 无 `next_cursor` 且缺作用域返回 **422**（不是 400）。以那一节为准。
+
 **Files:**
 - Create: `web/src/views/logharvest/matches/index.vue`
 - Modify: `web/src/api/logharvest.ts`（如需补参数）
@@ -587,15 +590,15 @@ git commit -m "feat: 添加规则集与数据源维护界面"
 - Consumes: `GET /api/matches`（强制 `job_id` 或 `created_from`+`created_to`；游标为 `created_before` + `id_before`，成对提供；`severity` 过滤；`limit` ≤ 500）
 - Produces: 路由 `/logharvest/matches`
 
-- [ ] **Step 1: 查询表单与约束**
+- [x] **Step 1: 查询表单与约束**
 
-必填校验按后端规则实现：要么选 `job_id`（下拉 + 从作业列表取），要么给时间范围 `created_from`/`created_to`（成对）；两者都空时禁用查询按钮并提示后端会返回 `400` 的原因。`severity` 多选 `info|warning|error`。
+必填校验按后端规则实现：要么选 `job_id`（下拉 + 从作业列表取），要么给时间范围 `created_from`/`created_to`（成对）；两者都空时禁用查询按钮并提示后端会返回 `422` 的原因（detail 原文：`either job_id or both created_from and created_to are required`）。`severity` 按后端实际契约做成**单值**下拉 `info|warning|error`（`routes_matches.py` 的 `severity: str | None` 是等值过滤，不支持多选）。
 
-- [ ] **Step 2: 游标翻页表格**
+- [x] **Step 2: 游标翻页表格**
 
-列 = `created_at`、`job_id`、`file_name`、`member_path`、`line_no`、`rule_id`、`severity`、`numeric_value`、`raw_line`（超长行显示 `raw_truncated` 标记）。翻页只支持"下一页"（游标语义是 `created_at DESC, id DESC`），顶部按钮"回到第一页"清空游标；不要提供页码跳转，后端没有 offset。把当前游标保存在组件状态里，取自后端返回的最后一行 `{created_at, id}`。
+列 = `created_at`、`job_id`、`file_name`、`member_path`、`line_no`、`rule_id`、`severity`、`numeric_value`、`raw_line`（超长行显示 `raw_truncated` 标记）。翻页只支持"下一页"（游标语义是 `created_at DESC, id DESC`），顶部按钮"回到第一页"清空游标；不要提供页码跳转，后端没有 offset。把当前游标保存在组件状态里，取自后端返回的最后一行 `{created_at, id}`（后端不返回 `next_cursor`，游标必须前端自己拼）。
 
-- [ ] **Step 3: 验证与提交**
+- [x] **Step 3: 验证与提交**
 
 Run: `cd /e/GitHub/think/web && pnpm typecheck 2>&1 | tail -10`
 Expected: 无错误
