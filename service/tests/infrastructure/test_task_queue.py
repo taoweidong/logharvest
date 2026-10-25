@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlmodel import Session
 
 from src.application.worker.ports import ClaimedTask
-from src.domain.models.entities import Worker, utcnow
+from src.domain.models.entities import Job, Worker, utcnow
 from src.infrastructure.task_queue import (
     CLAIM_SQL,
     COMPLETE_SQL,
@@ -184,3 +184,22 @@ def test_mark_dead_workers_demotes_only_silent_live_workers(engine) -> None:
         silent = session.get(Worker, "silent")
         assert alive is not None and alive.status == "busy" and alive.current_task_id == 3
         assert silent is not None and silent.status == "offline" and silent.current_task_id is None
+
+
+def test_complete_sql_requires_retryable_flag_for_reschedule() -> None:
+    normalized = _normalized(COMPLETE_SQL)
+    assert ":RETRYABLE" in normalized
+
+
+def test_is_job_cancelled_reads_flag(engine) -> None:
+    with Session(engine) as session:
+        job = Job(
+            name="j", data_source_id=1, source_path="/nas", rule_set_id=1, cancel_requested=True
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+
+    repo = PostgresTaskRepository(engine)
+    assert repo.is_job_cancelled(job_id) is True
+    assert repo.is_job_cancelled(9999) is False

@@ -1,5 +1,6 @@
 import shutil
 from collections.abc import Callable
+from datetime import UTC
 from pathlib import Path
 from time import monotonic
 from typing import BinaryIO
@@ -24,6 +25,14 @@ class LeaseLost(RuntimeError):
     pass
 
 
+class JobCancelled(RuntimeError):
+    """The owning job asked to be cancelled; stop and record a cancelled task."""
+
+
+class PermanentTaskFailure(RuntimeError):
+    """Source changed or vanished; retrying would fail the same way, so do not retry."""
+
+
 def _truncate_raw_line(text: str) -> tuple[str, bool]:
     encoded = text.encode("utf-8")
     if len(encoded) <= RAW_LINE_LIMIT:
@@ -45,6 +54,7 @@ class TaskProcessor:
         copy_heartbeat_seconds: float = 5.0,
         clock: Callable[[], float] = monotonic,
         on_lease_refresh: Callable[[], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -64,6 +74,7 @@ class TaskProcessor:
         self._copy_heartbeat_seconds = copy_heartbeat_seconds
         self._clock = clock
         self._on_lease_refresh = on_lease_refresh
+        self._cancel_check = cancel_check
         self._member_spec = pathspec.PathSpec.from_lines("gitwildmatch", [rules.config.file_glob])
 
     def _verify_lease(self, task: ClaimedTask) -> None:
@@ -78,6 +89,31 @@ class TaskProcessor:
         if self._on_lease_refresh is not None:
             self._on_lease_refresh()
 
+    def _check_source(self, task: ClaimedTask) -> None:
+        """Fail permanently when the archive no longer matches the plan.
+
+        规划时记录的 size/mtime 是用户当时的意图快照；对不上的重试只会同样失败，
+        还会烧光 max_attempts，所以直接判永久失败，等人工确认后手动重试。
+        """
+        source = task.source_path
+        try:
+            stat = source.stat()
+        except OSError as exc:
+            raise PermanentTaskFailure(f"source unavailable: {exc}") from exc
+        if task.expected_size_bytes is not None and stat.st_size != task.expected_size_bytes:
+            raise PermanentTaskFailure(
+                f"source size changed: expected {task.expected_size_bytes}, found {stat.st_size}"
+            )
+        if task.expected_mtime is not None:
+            expected = task.expected_mtime
+            if expected.tzinfo is None:
+                # The column is `timestamp without time zone`: PostgreSQL hands back
+                # UTC wall time as a naive datetime, and naive.timestamp() would read it
+                # as local time, so every task would look permanently stale off UTC.
+                expected = expected.replace(tzinfo=UTC)
+            if int(stat.st_mtime) != int(expected.timestamp()):
+                raise PermanentTaskFailure("source mtime changed since planning")
+
     def process(self, task: ClaimedTask) -> TaskResult:
         processed_lines = 0
         matched_rows = 0
@@ -89,6 +125,9 @@ class TaskProcessor:
 
         result: TaskResult
         try:
+            # A source that vanished or changed since planning must not be
+            # retried; fail it permanently before spending a lease fence or copy.
+            self._check_source(task)
             # Fence before the retry cleanup too: deleting another attempt's
             # rows is a write as well.
             self._verify_lease(task)
@@ -136,6 +175,9 @@ class TaskProcessor:
                         self._writer.write_batch(tuple(buffer))
                         buffer.clear()
 
+                if self._cancel_check is not None and self._cancel_check():
+                    raise JobCancelled(f"job {task.job_id} cancelled")
+
                 now = self._clock()
                 if (
                     processed_lines % self._heartbeat_every_lines == 0
@@ -155,6 +197,20 @@ class TaskProcessor:
             result = TaskResult("succeeded", processed_lines, matched_rows)
         except LeaseLost:
             raise
+        except JobCancelled:
+            self._repo.complete(task.id, task.attempts, "cancelled", processed_lines, matched_rows)
+            return TaskResult("cancelled", processed_lines, matched_rows, "job cancelled")
+        except PermanentTaskFailure as exc:
+            self._repo.complete(
+                task.id,
+                task.attempts,
+                "failed",
+                processed_lines,
+                matched_rows,
+                str(exc),
+                retryable=False,
+            )
+            return TaskResult("failed", processed_lines, matched_rows, str(exc))
         # Boundary of the worker loop: any ordinary failure must be recorded on
         # the task instead of aborting the process. Successful completion stays
         # outside this handler so its own failure cannot trigger a failed

@@ -1,5 +1,7 @@
 import zipfile
 
+from sqlmodel import select
+
 from src.api.v1.schemas import JobCreate
 from src.application.services import jobs as jobs_service
 from src.domain.archive.models import ScanLimitError
@@ -532,3 +534,43 @@ def test_job_scan_releases_transaction_and_passes_limits(
     assert seen["deadline_seconds"] == 10.0
     assert seen["suffixes"] is None
     assert job.idempotency_key == "scan-key"
+
+
+def _seed_job_with_tasks(session, specs) -> int:
+    """Create a job with one FileTask per (status, name) tuple, returned as its id."""
+    job = Job(name="seeded", data_source_id=1, source_path="/nas", rule_set_id=1, status="running")
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+    for status, name in specs:
+        session.add(
+            FileTask(
+                job_id=job.id,
+                source_path=f"/nas/{name}",
+                file_name=name,
+                size_bytes=1,
+                status=status,
+            )
+        )
+    session.commit()
+    return job.id
+
+
+def test_retry_failed_returns_terminal_tasks_to_queue(client, auth_headers, session) -> None:
+    job_id = _seed_job_with_tasks(session, [("failed", "ERROR"), ("succeeded", "OK")])
+
+    response = client.post(f"/api/jobs/{job_id}/files/retry-failed", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"retried": 1}
+    session.expire_all()
+    statuses = [
+        t.status for t in session.exec(select(FileTask).where(FileTask.job_id == job_id)).all()
+    ]
+    assert sorted(statuses) == ["pending", "succeeded"]
+
+
+def test_retry_failed_requires_admin(client, session) -> None:
+    job_id = _seed_job_with_tasks(session, [("failed", "ERROR")])
+
+    assert client.post(f"/api/jobs/{job_id}/files/retry-failed").status_code == 401

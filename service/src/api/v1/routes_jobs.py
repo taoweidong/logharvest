@@ -3,7 +3,12 @@ from sqlmodel import Session
 
 from src.api.dependencies import AdminDep, SessionDep
 from src.api.v1.schemas import FileTaskRead, JobCreate, JobRead
-from src.application.services.jobs import cancel_job, create_job
+from src.application.services.jobs import (
+    TERMINAL_JOB_STATUSES,
+    cancel_job,
+    create_job,
+    retry_failed_tasks,
+)
 from src.application.services.queries import list_file_tasks, list_jobs
 from src.domain.models.entities import Job
 
@@ -74,3 +79,13 @@ def get_job_files(
 @router.post("/{job_id}/cancel", response_model=JobRead)
 def post_job_cancel(job_id: int, session: SessionDep, _: AdminDep):
     return cancel_job(session, get_job_or_404(session, job_id))
+
+
+@router.post("/{job_id}/files/retry-failed")
+def retry_failed(job_id: int, session: SessionDep, _: AdminDep):
+    job = session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status in TERMINAL_JOB_STATUSES and job.status != "cancelled":
+        raise HTTPException(status_code=409, detail="job is not retryable")
+    return {"retried": retry_failed_tasks(session, job_id)}

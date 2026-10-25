@@ -54,6 +54,9 @@ class FakeRepo:
     def complete(self, task_id, attempts, status, processed_lines, matched_rows, error=None):
         self.completed.append((task_id, attempts, status, processed_lines, matched_rows, error))
 
+    def is_job_cancelled(self, job_id):
+        return False
+
     def register_worker(self, worker_id, hostname, version):
         self.registered.append((worker_id, hostname, version))
 
@@ -213,6 +216,26 @@ def test_run_once_continues_after_lease_is_lost(tmp_path, monkeypatch):
     # A worker that lost the lease no longer owns the task, so it must not
     # decide the job's outcome.
     assert repo.finalized == []
+
+
+def test_run_once_passes_cancel_check_and_finalizes_after_cancelled_task(tmp_path, monkeypatch):
+    captured = {}
+
+    class CancelledProcessor:
+        def __init__(self, **kwargs):
+            captured["cancel_check"] = kwargs["cancel_check"]
+
+        def process(self, task):
+            return TaskResult("cancelled", 1, 0, "job cancelled")
+
+    monkeypatch.setattr(worker_main, "TaskProcessor", CancelledProcessor)
+    repo = FakeRepo([make_task(tmp_path)])
+    runtime = make_runtime(repo, FakeWriter(), tmp_path)
+
+    assert runtime.run_once() is True
+    # 取消检查由仓库的 is_job_cancelled 驱动；fake 返回 False，运行期照常收尾作业。
+    assert captured["cancel_check"]() is False
+    assert repo.finalized == [2]
 
 
 def test_run_forever_registers_recovers_and_stops(tmp_path):
