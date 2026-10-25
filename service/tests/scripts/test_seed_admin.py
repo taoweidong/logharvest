@@ -1,4 +1,4 @@
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from src.application.services.auth import ensure_admin, role_codes
 from src.domain.models.auth import ADMIN_ROLE_CODE, User
@@ -15,7 +15,7 @@ def test_ensure_admin_is_idempotent(engine) -> None:
         assert verify_password("Second-Pass-2", second.password_hash) is False
         assert verify_password("First-Pass-1", second.password_hash) is True
         assert role_codes(session, second) == [ADMIN_ROLE_CODE]
-        assert session.query(User).count() == 1
+        assert len(session.exec(select(User)).all()) == 1
 
 
 def test_seed_cli_refuses_weak_password(engine, monkeypatch) -> None:
@@ -33,5 +33,5 @@ def test_seed_cli_creates_admin(engine, monkeypatch) -> None:
 
     assert main() == 0
     with Session(engine) as session:
-        user = session.query(User).one()
+        user = session.exec(select(User)).one()
         assert role_codes(session, user) == [ADMIN_ROLE_CODE]

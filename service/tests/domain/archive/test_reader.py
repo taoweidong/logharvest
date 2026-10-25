@@ -36,6 +36,23 @@ def truncate_tar_member(path: Path, member_name: str) -> None:
     path.write_bytes(path.read_bytes()[:cut])
 
 
+def test_discover_archives_rejects_non_directory(tmp_path) -> None:
+    path = tmp_path / "a.zip"
+    path.write_bytes(b"x")
+
+    with pytest.raises(NotADirectoryError):
+        discover_archives(path)
+
+
+def test_decode_replaces_undecodable_bytes_when_all_encodings_fail(tmp_path) -> None:
+    path = tmp_path / "bad.log"
+    path.write_bytes(b"\xff\n")
+
+    records = list(iter_archive_lines(path))
+
+    assert records[0].text == "\ufffd"
+
+
 def test_discover_archives_is_recursive_and_skips_hidden(tmp_path) -> None:
     root = tmp_path / "logs"
     nested = root / "2026" / "10"
@@ -191,6 +208,65 @@ def test_scan_archive_stops_after_corrupt_tar_member(tmp_path) -> None:
     assert [error.member_path for error in scan.member_errors] == ["bad.log"]
 
 
+def test_scan_archive_reports_corrupt_tar_header(tmp_path) -> None:
+    archive = tmp_path / "corrupt-header.tar"
+    with tarfile.open(archive, "w") as tf:
+        for name, text in (("good.log", "good line\n"), ("bad.log", "bad line\n")):
+            payload = text.encode("utf-8")
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            tf.addfile(info, io.BytesIO(payload))
+    with tarfile.open(archive) as tf:
+        second_header = tf.getmember("bad.log").offset
+    payload = bytearray(archive.read_bytes())
+    payload[second_header + 10] ^= 0xFF
+    archive.write_bytes(payload)
+
+    scan = scan_archive(archive)
+    records = list(scan.lines)
+
+    assert [(record.member_path, record.text) for record in records] == [
+        ("good.log", "good line")
+    ]
+    assert scan.succeeded_members == {"good.log"}
+    assert len(scan.member_errors) == 1
+    assert scan.member_errors[0].member_path is None
+    assert scan.member_errors[0].scan_incomplete is True
+
+
+def test_scan_archive_reports_tar_truncated_at_member_boundary(tmp_path) -> None:
+    archive = tmp_path / "truncated.tar"
+    with tarfile.open(archive, "w") as tf:
+        for name, text in (("good.log", "good line\n"), ("bad.log", "bad line\n")):
+            payload = text.encode("utf-8")
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            tf.addfile(info, io.BytesIO(payload))
+    with tarfile.open(archive) as tf:
+        first_end = tf.getmember("good.log").offset_data + 512
+    archive.write_bytes(archive.read_bytes()[:first_end])
+
+    scan = scan_archive(archive)
+    records = list(scan.lines)
+
+    assert [(record.member_path, record.text) for record in records] == [
+        ("good.log", "good line")
+    ]
+    assert scan.succeeded_members == {"good.log"}
+    assert len(scan.member_errors) == 1
+    assert scan.member_errors[0].member_path is None
+    assert scan.member_errors[0].scan_incomplete is True
+
+
+def test_corrupt_single_gzip_raises_archive_format_error(tmp_path) -> None:
+    path = tmp_path / "bad.log.gz"
+    path.write_bytes(b"not gzip")
+
+    scan = scan_archive(path)
+    with pytest.raises(ArchiveFormatError, match="invalid compressed file"):
+        list(scan.lines)
+
+
 def test_iter_archive_lines_stays_strict_after_member_error(tmp_path) -> None:
     archive = tmp_path / "partial.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -198,7 +274,7 @@ def test_iter_archive_lines_stays_strict_after_member_error(tmp_path) -> None:
         zf.writestr("good.log", "good line\n")
     corrupt_zip_member(archive, "bad.log")
 
-    with pytest.raises(ArchiveFormatError, match="bad.log"):
+    with pytest.raises(ArchiveFormatError, match=r"bad\.log"):
         list(iter_archive_lines(archive))
 
 

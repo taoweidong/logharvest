@@ -34,8 +34,36 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "--strict-markers --strict-config"
+filterwarnings = [
+  # 以下三条来自依赖自身的弃用提示，本仓库无法修复；保留其余告警可见。
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
+  "ignore:The default datetime adapter is deprecated as of Python 3.12:DeprecationWarning",
+  "ignore:GitWildMatchPattern .* is deprecated:DeprecationWarning",
+]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/domain", "src/worker", "src/application/worker", "src/config"]
+check_untyped_defs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["jose", "psutil", "regex"]
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "PERF", "RUF", "BLE"]
+ignore = [
+  "RUF001",  # 中文注释/字符串中的全角标点是项目约定
+  "RUF002",
+  "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/env.py" = ["E402"]  # Alembic 需要先读取并改写 config，再导入模型
+"tests/conftest.py" = ["E402"]  # 测试密钥与告警过滤必须先于 src/fastapi 导入生效

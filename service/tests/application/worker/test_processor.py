@@ -12,6 +12,7 @@ import src.application.worker.processor as processor_module
 from src.application.worker.ports import ClaimedTask, MatchRecord
 from src.application.worker.processor import LeaseLost, TaskProcessor
 from src.domain import source_guard
+from src.domain.archive import ArchiveMemberError
 from src.domain.rules.evaluator import compile_ruleset
 from src.domain.rules.models import (
     KeywordMatch,
@@ -209,6 +210,31 @@ def make_processor(
         work_dir=work_dir,
         **options,
     )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"batch_size": 0}, "batch_size"),
+        ({"heartbeat_every_lines": 0}, "heartbeat_every_lines"),
+        ({"heartbeat_every_seconds": -1}, "heartbeat_every_seconds"),
+        ({"copy_heartbeat_seconds": -1}, "copy_heartbeat_seconds"),
+    ],
+)
+def test_processor_rejects_invalid_timing_config(
+    tmp_path: Path, overrides: dict, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        make_processor(FakeRepo(), FakeWriter(), tmp_path / "work", **overrides)
+
+
+def test_member_error_summary_is_bounded() -> None:
+    errors = [ArchiveMemberError(f"member-{index}.log", "x" * 100) for index in range(30)]
+
+    summary = processor_module._format_member_errors(errors)
+
+    assert len(summary) == processor_module.ERROR_TEXT_LIMIT
+    assert summary.endswith("...")
 
 
 def test_processor_reads_archive_and_writes_matches(tmp_path: Path) -> None:

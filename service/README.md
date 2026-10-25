@@ -204,7 +204,7 @@ LOGHARVEST_DATABASE_URL=postgresql://logharvest:logharvest@127.0.0.1:5432/loghar
 10. 任务处理成功后尝试汇总作业终态；队列为空时等待 `LOGHARVEST_WORKER_POLL_SECONDS` 再继续领取。Worker 不绑定作业，不会因为某个作业结束而退出。
 11. 每 300 秒重复执行僵死回收 + 作业终态补偿，覆盖没有完成回调的路径。
 
-成员级容错：zip 遇到损坏成员时记录错误并继续读取剩余成员；流式 tar 无法越过损坏成员，会在该处停止（`scan_incomplete`）。处理器按 `file_glob` 汇总成员结果：至少一个匹配成员完整读完 → `partial`；所有匹配成员失败 → `failed`；两者均以 `retryable=False` 写终态，不自动重试，错误摘要写入 `file_tasks.error`。被 `file_glob` 排除且扫描仍能继续的 zip 成员损坏不影响任务状态；但流式 tar 的停止位置之后可能还有匹配成员，因此该错误始终计入。
+成员级容错：zip 遇到损坏成员时记录错误并继续读取剩余成员；流式 tar 无法越过损坏成员，会在该处停止（`scan_incomplete`）。tarfile 会把后续坏 header 或块边界截断静默当作 EOF，因此 tar 扫描结束时还会额外校验零结束块，缺少结束标记同样标记 `scan_incomplete`，避免漏读成员却报告成功。处理器按 `file_glob` 汇总成员结果：至少一个匹配成员完整读完 → `partial`；所有匹配成员失败 → `failed`；两者均以 `retryable=False` 写终态，不自动重试，错误摘要写入 `file_tasks.error`。被 `file_glob` 排除且扫描仍能继续的 zip 成员损坏不影响任务状态；但流式 tar 的停止位置之后可能还有匹配成员，因此该错误始终计入。
 
 租约栅栏（M1b 写栅栏，M2a 未放宽）：任何 `matches` 写库前都必须先确认 `(file_task_id, attempts, status='running')` 仍然成立（`_verify_lease` → `touch`），丢租约立即 `LeaseLost` 中止且不写终态；`delete_for_task` 之前同样先过栅栏。
 
@@ -273,9 +273,23 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 
 ## 测试
 
-- API 测试（`tests/api/`、`tests/test_health.py`）使用内存 SQLite（`StaticPool`）与 FastAPI `dependency_overrides`，不需要 PostgreSQL；每个 API 用例通过 `create_db_and_tables()` 建表。`tests/conftest.py` 的 autouse fixture 会把 `settings.auto_create_tables` 置为 `False`，因此测试进程从不执行 Alembic，也不会碰开发库；`tests/conftest.py` 在任何 `src` 导入之前用 `os.environ.setdefault` 注入 `LOGHARVEST_ENVIRONMENT=test` 与测试签名密钥（`Settings` 在模块导入时即完成校验），`auth_headers` 夹具再用 `settings.jwt_secret_key` 签发真实 access token。`tests/domain/` 与 `tests/application/` 为领域/应用单元测试，不经过 API 与依赖覆盖（模型测试自行使用内存 SQLite 验证建表）。
+- API 测试（`tests/api/`、`tests/test_health.py`）使用内存 SQLite（`StaticPool`）与 FastAPI `dependency_overrides`，不需要 PostgreSQL；每个 API 用例通过 `create_db_and_tables()` 建表。`tests/conftest.py` 的 autouse fixture 会把 `settings.auto_create_tables` 置为 `False`，因此测试进程从不执行 Alembic，也不会碰开发库；`tests/conftest.py` 在任何 `src` 导入之前直接赋值注入 `LOGHARVEST_ENVIRONMENT=test` 与测试签名密钥（`Settings` 在模块导入时即完成校验），`auth_headers` 夹具再用 `settings.jwt_secret_key` 签发真实 access token。`tests/domain/` 与 `tests/application/` 为领域/应用单元测试，不经过 API 与依赖覆盖（模型测试自行使用内存 SQLite 验证建表）。
 - `tests/api/` 覆盖 JWT 登录/刷新/登出/停用账号、数据源、规则集、作业规划/幂等/路径校验/取消/失败重试、结果查询、Worker 管理、SSE、系统状态与概览/维护接口；`tests/domain/services/` 覆盖 bcrypt 与 `TokenService`（含过期、错密钥、access/refresh 不可互换）；`tests/scripts/test_seed_admin.py` 覆盖管理员种子的幂等与弱口令拒绝；`tests/application/` 覆盖 Worker 处理器的复制续租、时间心跳、租约丢失、取消检查与永久失败；`tests/worker/` 用 fake 仓库覆盖领取循环、drain、注册、僵死回收、周期补偿、取消检查接线与信号退出；`tests/infrastructure/` 覆盖队列 SQL 形状、批量写入、作业终态汇总（后两者在真实建表的 SQLite 上执行）以及迁移结果与 `SQLModel.metadata` 的逐表逐列比对；`tests/integration/` 在真实 PostgreSQL 上覆盖 `SKIP LOCKED` 并发领取、租约栅栏、重试/取消/永久失败、成员级 `partial`、僵死回收、作业汇总与批量写入。
-- 作业唯一约束、幂等并发回退、作业终态栅栏等并发语义仅在 SQLite 上验证；`SKIP LOCKED` 领取、`make_interval` 退避、`ON CONFLICT` 注册、`RECOVER_STALE_SQL` 回收等 PostgreSQL 行为留待真实环境验证。维护入口在测试里分两层：`tests/application/test_maintenance.py` 直接真实执行两步可移植清扫（降级静默 Worker、收尾作业）并断言 `run_maintenance` 在非 PostgreSQL 上拒绝；`tests/api/test_system.py` 只断言该场景返回 `503`。
+- 作业唯一约束、幂等并发回退、作业终态栅栏等并发语义在 SQLite 上验证；`SKIP LOCKED` 领取、`make_interval` 退避、`ON CONFLICT` 注册、`RECOVER_STALE_SQL` 回收等 PostgreSQL 行为由 `tests/integration/test_postgres_queue.py` 在真实 PostgreSQL 上验证。维护入口在测试里分两层：`tests/application/test_maintenance.py` 直接真实执行两步可移植清扫（降级静默 Worker、收尾作业）并断言 `run_maintenance` 在非 PostgreSQL 上拒绝；`tests/api/test_system.py` 只断言该场景返回 `503`。
+
+## 质量门禁
+
+```bash
+uv run ruff check .
+uv run mypy
+uv run pytest -q
+LOGHARVEST_TEST_PG_URL="postgresql+psycopg://logharvest:logharvest@127.0.0.1:5433/logharvest" \
+  uv run pytest -q tests/integration
+uv run --with coverage coverage run -m pytest -q
+uv run --with coverage coverage report --include="src/*"
+```
+
+`mypy` 当前只覆盖 `src/domain`、`src/worker`、`src/application/worker`、`src/config`（见 `pyproject.toml` 的 `[tool.mypy].files`）：`src/api` 与 `src/application/services` 大量使用 SQLModel，mypy 无法正确推断主键 `int | None` 与列表达式，全量检查会产生成片假阳性。前端门禁为 `pnpm typecheck` 与 `pnpm build`，见 [`../web/README.md`](../web/README.md)。
 
 ## 范围
 

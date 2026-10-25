@@ -11,6 +11,8 @@ import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import TracebackType
+from typing import Protocol
 
 from src.domain.archive.models import ArchiveFormatError, LineRecord, ScanLimitError
 
@@ -21,7 +23,6 @@ SINGLE_COMPRESSED_SUFFIXES = frozenset({".gz", ".bz2", ".xz"})
 RAW_SUFFIXES = frozenset({".log", ".txt"})
 ARCHIVE_SUFFIXES = frozenset({".zip"}) | TAR_SUFFIXES | SINGLE_COMPRESSED_SUFFIXES
 
-_SINGLE_OPENERS = {".gz": gzip.open, ".bz2": bz2.open, ".xz": lzma.open}
 _TAR_ERRORS = (tarfile.TarError, EOFError, lzma.LZMAError, gzip.BadGzipFile)
 _ZIP_MEMBER_ERRORS = (
     zipfile.BadZipFile,
@@ -268,6 +269,19 @@ def _scan_tar(
                         )
                         return
                     scan.succeeded_members.add(member.name)
+                # tarfile silently treats an invalid later header as EOF. A
+                # complete archive must still be followed by zero end blocks;
+                # anything else means the scan stopped before the real end.
+                archive_stream = archive.fileobj
+                remainder = b"" if archive_stream is None else archive_stream.read(1024)
+                if len(remainder) < 512 or any(remainder[:512]):
+                    scan.member_errors.append(
+                        ArchiveMemberError(
+                            None,
+                            "tar archive ended before its end-of-archive marker",
+                            scan_incomplete=True,
+                        )
+                    )
             except _TAR_ERRORS as exc:
                 scan.member_errors.append(
                     ArchiveMemberError(None, str(exc), scan_incomplete=True)
@@ -281,6 +295,27 @@ def _scan_tar(
         raise ArchiveFormatError(f"invalid tar archive: {path}") from exc
 
 
+class _ReadableStream(Protocol):
+    def readline(self, size: int = -1) -> bytes: ...
+    def __enter__(self) -> "_ReadableStream": ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+        /,
+    ) -> None: ...
+
+
+def _open_single(path: Path) -> _ReadableStream:
+    suffix = path.suffix.lower()
+    if suffix == ".gz":
+        return gzip.open(path, "rb")
+    if suffix == ".bz2":
+        return bz2.open(path, "rb")
+    return lzma.open(path, "rb")
+
+
 def _scan_single_compressed(
     path: Path,
     scan: ArchiveScan,
@@ -288,9 +323,8 @@ def _scan_single_compressed(
     fallback_encoding: str,
     max_line_bytes: int,
 ) -> Iterator[LineRecord]:
-    opener = _SINGLE_OPENERS[path.suffix.lower()]
     try:
-        with opener(path, "rb") as stream:
+        with _open_single(path) as stream:
             yield from _iter_binary_lines(
                 stream,
                 path.stem,

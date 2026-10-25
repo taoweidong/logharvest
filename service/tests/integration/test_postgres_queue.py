@@ -128,7 +128,8 @@ def test_session_timezone_is_utc_for_clock_comparisons(engine: Engine) -> None:
         timezone = conn.execute(text("show timezone")).scalar()
         fresh_within_thirty_seconds = conn.execute(
             text(
-                "SELECT (last_heartbeat >= now() - interval '30 seconds') FROM workers WHERE id='tz'"
+                "SELECT (last_heartbeat >= now() - interval '30 seconds') "
+                "FROM workers WHERE id='tz'"
             )
         ).scalar()
         orm_row_is_visible = conn.execute(
@@ -426,7 +427,8 @@ def test_worker_registry_and_dead_worker_demotion(
     with engine.begin() as conn:
         conn.execute(
             text(
-                "UPDATE workers SET last_heartbeat = now() - interval '10 minutes' WHERE id = 'w-reg'"
+                "UPDATE workers SET last_heartbeat = now() - interval '10 minutes' "
+                "WHERE id = 'w-reg'"
             )
         )
     assert repo.mark_dead_workers(120) == 1

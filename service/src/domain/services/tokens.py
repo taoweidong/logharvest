@@ -39,7 +39,7 @@ class TokenService:
         return self._create(claims, REFRESH_TYPE, self._refresh_delta)
 
     def decode(self, token: str, *, expected_type: str) -> dict[str, Any] | None:
-        """Return the verified claims (sans ``exp``), or None for an invalid/expired/wrong-type token."""
+        """Return verified claims (sans ``exp``), or None if invalid, expired, or wrong type."""
         try:
             payload = jwt.decode(token, self._secret_key, algorithms=[self._algorithm])
         except JWTError:

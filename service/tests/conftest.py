@@ -1,4 +1,5 @@
 import os
+import warnings
 
 # Settings 在模块导入时就完成校验，而 jwt_secret_key 现在任何环境都必填，
 # 所以测试密钥必须先落进环境，再导入任何 src 模块。
@@ -6,6 +7,13 @@ import os
 # 改变（甚至打断）测试结果——签名密钥不一致会让鉴权用例成片 401。
 os.environ["LOGHARVEST_ENVIRONMENT"] = "test"
 os.environ["LOGHARVEST_JWT_SECRET_KEY"] = "unit-secret-key-0123456789-abcdef"
+
+# fastapi.testclient 在导入时就发出弃用告警，早于 pytest 的 filterwarnings 生效。
+warnings.filterwarnings(
+    "ignore",
+    message="Using `httpx` with `starlette.testclient` is deprecated",
+    category=UserWarning,
+)
 
 from collections.abc import Iterator
 
