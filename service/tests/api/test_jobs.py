@@ -1,5 +1,7 @@
 import zipfile
 
+from sqlmodel import select
+
 from src.api.v1.schemas import JobCreate
 from src.application.services import jobs as jobs_service
 from src.domain.archive.models import ScanLimitError
@@ -453,9 +455,7 @@ def test_idempotency_key_is_trimmed(client, auth_headers, tmp_path) -> None:
     assert second.json()["id"] == first.json()["id"]
 
 
-def test_suffixes_must_overlap_compressed_archives(
-    client, auth_headers, tmp_path
-) -> None:
+def test_suffixes_must_overlap_compressed_archives(client, auth_headers, tmp_path) -> None:
     root, batch = make_nas(tmp_path)
     (batch / "raw.log").write_text("ERROR raw\n", encoding="utf-8")
     source, rules = seed_source_and_rules(client, auth_headers, root)
@@ -532,3 +532,82 @@ def test_job_scan_releases_transaction_and_passes_limits(
     assert seen["deadline_seconds"] == 10.0
     assert seen["suffixes"] is None
     assert job.idempotency_key == "scan-key"
+
+
+def _seed_job_with_tasks(session, specs) -> int:
+    """Create a job with one FileTask per (status, name) tuple, returned as its id."""
+    job = Job(name="seeded", data_source_id=1, source_path="/nas", rule_set_id=1, status="running")
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+    for status, name in specs:
+        session.add(
+            FileTask(
+                job_id=job.id,
+                source_path=f"/nas/{name}",
+                file_name=name,
+                size_bytes=1,
+                status=status,
+            )
+        )
+    session.commit()
+    return job.id
+
+
+def test_retry_failed_returns_terminal_tasks_to_queue(client, auth_headers, session) -> None:
+    job_id = _seed_job_with_tasks(session, [("failed", "ERROR"), ("succeeded", "OK")])
+
+    response = client.post(f"/api/jobs/{job_id}/files/retry-failed", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json() == {"retried": 1}
+    session.expire_all()
+    statuses = [
+        t.status for t in session.exec(select(FileTask).where(FileTask.job_id == job_id)).all()
+    ]
+    assert sorted(statuses) == ["pending", "succeeded"]
+
+
+def test_retry_failed_requires_admin(client, session) -> None:
+    job_id = _seed_job_with_tasks(session, [("failed", "ERROR")])
+
+    assert client.post(f"/api/jobs/{job_id}/files/retry-failed").status_code == 401
+
+
+def test_job_files_can_be_filtered_by_status(client, auth_headers, session) -> None:
+    job_id = _seed_job_with_tasks(session, [("pending", "a"), ("succeeded", "b"), ("failed", "c")])
+
+    pending = client.get(f"/api/jobs/{job_id}/files?status=pending", headers=auth_headers)
+
+    assert pending.status_code == 200
+    assert [item["status"] for item in pending.json()] == ["pending"]
+    assert [item["file_name"] for item in pending.json()] == ["a"]
+
+    every = client.get(f"/api/jobs/{job_id}/files", headers=auth_headers)
+    assert [item["file_name"] for item in every.json()] == ["a", "b", "c"]
+    assert {"status", "attempts"} <= set(every.json()[0])
+    assert [item["attempts"] for item in every.json()] == [0, 0, 0]
+
+
+def test_job_files_status_filter_combines_with_pagination(client, auth_headers, session) -> None:
+    job_id = _seed_job_with_tasks(
+        session, [("succeeded", "a"), ("succeeded", "b"), ("pending", "c")]
+    )
+
+    page = client.get(
+        f"/api/jobs/{job_id}/files?status=succeeded&limit=1&offset=1",
+        headers=auth_headers,
+    )
+
+    assert page.status_code == 200
+    assert [item["file_name"] for item in page.json()] == ["b"]
+
+
+def test_job_files_rejects_unknown_status_filter(client, auth_headers, session) -> None:
+    job_id = _seed_job_with_tasks(session, [("pending", "a")])
+
+    unknown = client.get(f"/api/jobs/{job_id}/files?status=nope", headers=auth_headers)
+    missing_job = client.get("/api/jobs/9999/files?status=pending", headers=auth_headers)
+
+    assert unknown.status_code == 422
+    assert missing_job.status_code == 404

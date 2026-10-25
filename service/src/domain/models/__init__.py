@@ -1,3 +1,4 @@
+from src.domain.models.auth import ADMIN_ROLE_CODE, Role, User, UserRole
 from src.domain.models.entities import (
     DataSource,
     FileTask,
@@ -9,11 +10,15 @@ from src.domain.models.entities import (
 )
 
 __all__ = [
+    "ADMIN_ROLE_CODE",
     "DataSource",
     "FileTask",
     "FileTaskAttempt",
     "Job",
     "Match",
+    "Role",
     "RuleSet",
+    "User",
+    "UserRole",
     "Worker",
 ]

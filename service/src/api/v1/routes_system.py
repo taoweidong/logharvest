@@ -1,8 +1,14 @@
 from fastapi import APIRouter, Query
 
-from src.api.dependencies import AdminDep, SessionDep
-from src.api.v1.schemas import SystemStatusRead, WorkerRead
-from src.application.services.queries import list_workers, system_status
+from src.api.dependencies import AdminDep, EngineDep, SessionDep
+from src.api.v1.schemas import (
+    MaintenanceRunRead,
+    SystemOverviewRead,
+    SystemStatusRead,
+    WorkerRead,
+)
+from src.application.services.maintenance import run_maintenance
+from src.application.services.queries import list_workers, system_overview, system_status
 
 router = APIRouter(tags=["system"])
 
@@ -20,3 +26,19 @@ def get_workers(
 @router.get("/system/status", response_model=SystemStatusRead)
 def get_system_status(session: SessionDep, _: AdminDep):
     return system_status(session)
+
+
+@router.get("/system/overview", response_model=SystemOverviewRead)
+def get_system_overview(session: SessionDep, _: AdminDep):
+    return system_overview(session)
+
+
+@router.post("/system/maintenance", response_model=MaintenanceRunRead)
+def trigger_maintenance(engine: EngineDep, _: AdminDep):
+    """Run the server-side compensation sweeps once, right now.
+
+    Worker 循环里的同类清扫只在有存活进程时执行；这里给运维（以及外部 cron /
+    compose job）一个无需重启 Worker 就能触发回收、降级与作业收尾的入口。可重复
+    执行，没有待处理项时三个计数都是 0。
+    """
+    return run_maintenance(engine)

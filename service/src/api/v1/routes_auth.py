@@ -1,0 +1,107 @@
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field, field_validator
+from sqlmodel import select
+
+from src.api.dependencies import CurrentUser, SessionDep, get_token_service
+from src.application.services.auth import role_codes
+from src.domain.models.auth import User
+from src.domain.services.passwords import verify_password
+from src.domain.services.tokens import TokenService
+
+router = APIRouter(tags=["auth"])
+
+
+def ok(data: Any) -> dict[str, Any]:
+    """Baseline frontend envelope: the Pure Admin store gates on ``data.code === 0``."""
+    return {"code": 0, "message": "ok", "data": data}
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=150)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class RefreshRequest(BaseModel):
+    refreshToken: str = Field(min_length=1)  # camelCase matches the frontend login contract
+
+    @field_validator("refreshToken")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("refreshToken must not be blank")
+        return value
+
+
+@router.post("/login")
+def login(
+    payload: LoginRequest,
+    session: SessionDep,
+    service: Annotated[TokenService, Depends(get_token_service)],
+):
+    user = session.exec(select(User).where(User.username == payload.username)).first()
+    if user is None or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="invalid credentials")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="user is disabled")
+
+    access_token, expires_at = service.create_access_token(
+        {"sub": str(user.id), "username": user.username}
+    )
+    refresh_token, _ = service.create_refresh_token(
+        {"sub": str(user.id), "username": user.username}
+    )
+    return ok(
+        {
+            "avatar": None,
+            "username": user.username,
+            "nickname": user.nickname,
+            "roles": role_codes(session, user),
+            "permissions": [],
+            "accessToken": access_token,
+            "refreshToken": refresh_token,
+            "expires": int(expires_at.timestamp() * 1000),
+        }
+    )
+
+
+@router.post("/refresh-token")
+def refresh(
+    payload: RefreshRequest,
+    session: SessionDep,
+    service: Annotated[TokenService, Depends(get_token_service)],
+):
+    claims = service.decode(payload.refreshToken, expected_type="refresh")
+    if claims is None:
+        raise HTTPException(status_code=401, detail="invalid refresh token")
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject.isdigit():
+        raise HTTPException(status_code=401, detail="invalid refresh token")
+    user = session.get(User, int(subject))
+    if user is None or not user.is_active or user.username != claims.get("username"):
+        raise HTTPException(status_code=401, detail="invalid refresh token")
+
+    access_token, expires_at = service.create_access_token(
+        {"sub": str(user.id), "username": user.username}
+    )
+    new_refresh, _ = service.create_refresh_token({"sub": str(user.id), "username": user.username})
+    return ok(
+        {
+            "accessToken": access_token,
+            "refreshToken": new_refresh,
+            "expires": int(expires_at.timestamp() * 1000),
+        }
+    )
+
+
+@router.get("/auth/routes")
+def auth_routes(_: CurrentUser):
+    # 菜单在前端代码里静态定义，这里返回空数组是最简的有意实现。
+    return ok([])
+
+
+@router.post("/logout")
+def logout(_: CurrentUser):
+    # 无服务端会话；JWT 自然过期。
+    return ok(None)

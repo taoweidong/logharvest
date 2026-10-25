@@ -4,8 +4,9 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from src.api.dependencies import get_session
+from src.api.dependencies import get_session, require_admin_user
 from src.api.v1 import routes_rule_sets
+from src.domain.models.auth import User
 from src.domain.models.entities import RuleSet
 from src.domain.rules.models import RuleSetConfig
 
@@ -102,7 +103,10 @@ def test_rule_set_conflict_returns_409_and_rolls_back(client, auth_headers, monk
     def override_session():
         yield mock_session
 
+    # 本例只验证服务层抛 IntegrityError 时路由映射为 409 并回滚；认证依赖与
+    # 内存库 session 无关，故直接覆盖掉，避免用 MagicMock 去查角色。
     client.app.dependency_overrides[get_session] = override_session
+    client.app.dependency_overrides[require_admin_user] = lambda: User(username="admin")
 
     def raise_conflict(*args, **kwargs):
         raise IntegrityError("INSERT", {}, Exception("conflict"))
@@ -136,9 +140,7 @@ def test_rule_set_detail_returns_config_and_creator(client, auth_headers) -> Non
     assert body["name"] == "baseline"
     assert body["version"] == 1
     assert body["created_by"] == "admin"
-    assert body["config"] == RuleSetConfig.model_validate(config_payload).model_dump(
-        mode="json"
-    )
+    assert body["config"] == RuleSetConfig.model_validate(config_payload).model_dump(mode="json")
     assert body["config"]["rules"][0]["threshold"]["value"] == "250.5"
     assert "created_at" in body
 

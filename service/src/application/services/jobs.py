@@ -13,7 +13,7 @@ from src.domain.archive.reader import (
     discover_archives,
     normalize_suffixes,
 )
-from src.domain.models.entities import DataSource, FileTask, Job, RuleSet
+from src.domain.models.entities import DataSource, FileTask, Job, RuleSet, utcnow
 
 TERMINAL_JOB_STATUSES = frozenset({"succeeded", "partial", "failed", "cancelled"})
 SCAN_DEADLINE_SECONDS = 10.0
@@ -196,3 +196,22 @@ def cancel_job(session: Session, job: Job) -> Job:
     session.commit()
     session.refresh(job)
     return job
+
+
+def retry_failed_tasks(session: Session, job_id: int, *, limit: int = 200) -> int:
+    """Return terminal failed tasks of a job to the queue, keeping attempt history.
+
+    attempts 不重置：手动重试是一次新尝试，仍受 max_attempts 约束，避免死循环刷库。
+    """
+    tasks = session.exec(
+        select(FileTask).where(FileTask.job_id == job_id, FileTask.status == "failed").limit(limit)
+    ).all()
+    for task in tasks:
+        task.status = "pending"
+        task.error = None
+        task.finished_at = None
+        task.worker_id = None
+        task.scheduled_at = utcnow()
+        session.add(task)
+    session.commit()
+    return len(tasks)

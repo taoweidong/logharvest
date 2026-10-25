@@ -1,6 +1,8 @@
 import io
 import tarfile
 import zipfile
+from dataclasses import replace
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -23,7 +25,8 @@ class FakeRepo:
     def __init__(self) -> None:
         self.heartbeats: list[tuple[int, int]] = []
         self.touches: list[tuple[int, int]] = []
-        self.completed: list[tuple[int, str, int, int, str | None]] = []
+        self.completed: list[tuple[int, int, str, int, int, str | None]] = []
+        self.retryables: list[tuple[int, bool]] = []
         self.heartbeat_result = True
         self.touch_result = True
 
@@ -45,8 +48,10 @@ class FakeRepo:
         processed_lines: int,
         matched_rows: int,
         error: str | None = None,
+        retryable: bool = True,
     ) -> None:
-        self.completed.append((task_id, status, processed_lines, matched_rows, error))
+        self.completed.append((task_id, attempts, status, processed_lines, matched_rows, error))
+        self.retryables.append((task_id, retryable))
 
 
 class SteppingClock:
@@ -93,8 +98,10 @@ class SuccessCompletionFailingRepo(FakeRepo):
         processed_lines: int,
         matched_rows: int,
         error: str | None = None,
+        retryable: bool = True,
     ) -> None:
-        self.completed.append((task_id, status, processed_lines, matched_rows, error))
+        self.completed.append((task_id, attempts, status, processed_lines, matched_rows, error))
+        self.retryables.append((task_id, retryable))
         if status == "succeeded":
             raise RuntimeError("completion write failed")
 
@@ -207,7 +214,7 @@ def test_processor_reads_archive_and_writes_matches(tmp_path: Path) -> None:
     assert writer.written[0].file_task_id == 10
     assert writer.written[0].source_path == str(task.source_path)
     assert writer.written[0].raw_truncated is False
-    assert repo.completed == [(10, "succeeded", 2, 2, None)]
+    assert repo.completed == [(10, 1, "succeeded", 2, 2, None)]
     assert writer.deleted == []
     assert task.source_path.read_bytes() == original_bytes
     assert not (work_dir / "10").exists()
@@ -265,7 +272,7 @@ def test_tar_gz_copy_keeps_original_name_and_processes_members(tmp_path: Path, m
         ("error", "nested/app.log", 1),
         ("slow", "nested/app.log", 2),
     ]
-    assert repo.completed == [(10, "succeeded", 2, 2, None)]
+    assert repo.completed == [(10, 1, "succeeded", 2, 2, None)]
 
 
 def test_raw_line_is_truncated_to_4096_bytes(tmp_path: Path) -> None:
@@ -334,7 +341,7 @@ def test_invalid_archive_completes_failed_and_removes_work_dir(tmp_path: Path) -
     assert result.processed_lines == 0
     assert result.matched_rows == 0
     assert "invalid zip archive" in (result.error or "")
-    assert repo.completed == [(11, "failed", 0, 0, result.error)]
+    assert repo.completed == [(11, 1, "failed", 0, 0, result.error)]
     assert writer.written == []
     assert not (work_dir / "11").exists()
 
@@ -353,7 +360,7 @@ def test_incomplete_copy_fails_task_before_processing(tmp_path: Path, monkeypatc
 
     assert result.status == "failed"
     assert "copy" in (result.error or "").lower()
-    assert repo.completed[0][1] == "failed"
+    assert repo.completed[0][2] == "failed"
     assert writer.written == []
     assert not (work_dir / "10").exists()
 
@@ -484,7 +491,7 @@ def test_file_glob_only_evaluates_matching_members(tmp_path: Path) -> None:
         ("app.log", "error"),
         ("nested/deep.log", "error"),
     ]
-    assert repo.completed == [(40, "succeeded", 3, 2, None)]
+    assert repo.completed == [(40, 1, "succeeded", 3, 2, None)]
 
 
 @pytest.mark.parametrize(
@@ -559,7 +566,7 @@ def test_success_completion_failure_does_not_trigger_failed_completion(tmp_path:
     with pytest.raises(RuntimeError, match="completion write failed"):
         make_processor(repo, writer, work_dir).process(make_task(tmp_path))
 
-    assert [entry[1] for entry in repo.completed] == ["succeeded"]
+    assert [entry[2] for entry in repo.completed] == ["succeeded"]
     assert len(writer.written) == 2
     assert not (work_dir / "10").exists()
 
@@ -603,3 +610,88 @@ def test_each_batch_flush_is_preceded_by_a_lease_check(tmp_path: Path) -> None:
     assert writer.written
     # One fence before any write, then one per batch flush (batch_size=1).
     assert len(repo.touches) == len(writer.written) + 1
+
+
+def test_cancelled_job_stops_processing_and_records_cancelled(tmp_path: Path) -> None:
+    repo = FakeRepo()
+    writer = FakeWriter()
+
+    def cancel_check() -> bool:
+        # 第一行之后立刻被取消：必须停止，不再评估后续行。
+        return True
+
+    processor = make_processor(
+        repo,
+        writer,
+        tmp_path / "work",
+        heartbeat_every_lines=1,
+        cancel_check=cancel_check,
+    )
+
+    result = processor.process(
+        make_task(tmp_path, members={"app.log": "ERROR a\nERROR b\nERROR c\n"})
+    )
+
+    assert result.status == "cancelled"
+    assert repo.completed == [(10, 1, "cancelled", 1, 1, None)]
+    assert result.processed_lines == 1
+
+
+def test_missing_source_file_fails_permanently_without_retry(tmp_path: Path) -> None:
+    repo = FakeRepo()
+    processor = make_processor(repo, FakeWriter(), tmp_path / "work")
+    task = make_task(tmp_path)
+    task.source_path.unlink()
+
+    result = processor.process(task)
+
+    assert result.status == "failed"
+    # 永久失败：写库标记不可重试，且不进入任何租约栅栏/写入。
+    assert repo.completed == [(10, 1, "failed", 0, 0, result.error)]
+    assert repo.retryables == [(10, False)]
+    assert repo.touches == []
+
+
+def test_size_change_is_permanent_failure(tmp_path: Path) -> None:
+    repo = FakeRepo()
+    processor = make_processor(repo, FakeWriter(), tmp_path / "work")
+    task = make_task(tmp_path, expected_size_bytes=999_999)
+
+    result = processor.process(task)
+
+    assert result.status == "failed"
+    assert "size" in (result.error or "").lower()
+    assert repo.retryables == [(10, False)]
+    assert repo.touches == []
+
+
+def test_naive_utc_mtime_from_database_is_accepted(tmp_path: Path) -> None:
+    """The queue hands back mtime as naive UTC wall time; it must not look stale."""
+    repo = FakeRepo()
+    processor = make_processor(repo, FakeWriter(), tmp_path / "work")
+    task = make_task(tmp_path)
+    stat_mtime = int(task.source_path.stat().st_mtime)
+    task = replace(
+        task, expected_mtime=datetime.fromtimestamp(stat_mtime, tz=UTC).replace(tzinfo=None)
+    )
+
+    result = processor.process(task)
+
+    assert result.status == "succeeded"
+    # 成功收尾的 complete 也记录 retryable；关键是没有任何"不可重试"的失败写库。
+    assert repo.completed == [(10, 1, "succeeded", 2, 2, None)]
+    assert (10, False) not in repo.retryables
+
+
+def test_real_mtime_change_is_still_a_permanent_failure(tmp_path: Path) -> None:
+    repo = FakeRepo()
+    processor = make_processor(repo, FakeWriter(), tmp_path / "work")
+    task = make_task(tmp_path)
+    stale = int(task.source_path.stat().st_mtime) - 3600
+    task = replace(task, expected_mtime=datetime.fromtimestamp(stale, tz=UTC).replace(tzinfo=None))
+
+    result = processor.process(task)
+
+    assert result.status == "failed"
+    assert "mtime" in (result.error or "").lower()
+    assert repo.retryables == [(10, False)]

@@ -52,7 +52,7 @@
   - `ADMIN_ROLE_CODE = "admin"`
   - settings 新字段：`jwt_secret_key: str`、`access_token_expire_minutes: int = 30`、`refresh_token_expire_days: int = 7`、`admin_username: str = "admin"`、`admin_password: str = ""`
 
-- [ ] **Step 1: 加依赖**
+- [x] **Step 1: 加依赖**
 
 在 `service/pyproject.toml` 的 `dependencies` 列表末尾追加（保持既有缩进两空格）：
 
@@ -65,7 +65,7 @@
 Run: `cd service && uv sync --python 3.12`
 Expected: 解析成功，`uv.lock` 更新。
 
-- [ ] **Step 2: 写失败测试（口令哈希）**
+- [x] **Step 2: 写失败测试（口令哈希）**
 
 `service/tests/domain/services/test_passwords.py`:
 
@@ -103,7 +103,7 @@ def test_empty_password_rejected() -> None:
 Run: `cd service && uv run --python 3.12 pytest tests/domain/services/test_passwords.py -v`
 Expected: FAIL，`ModuleNotFoundError: No module named 'src.domain.services'`
 
-- [ ] **Step 3: 实现口令服务**
+- [x] **Step 3: 实现口令服务**
 
 Create `service/src/domain/services/__init__.py`（空文件）。
 
@@ -143,7 +143,7 @@ def verify_password(password: str, hashed: str) -> bool:
 Run: `cd service && uv run --python 3.12 pytest tests/domain/services/test_passwords.py -v`
 Expected: 3 passed
 
-- [ ] **Step 4: 写失败测试（JWT）**
+- [x] **Step 4: 写失败测试（JWT）**
 
 `service/tests/domain/services/test_tokens.py`:
 
@@ -219,7 +219,7 @@ def test_secret_key_shorter_than_32_chars_is_rejected() -> None:
 Run: `cd service && uv run --python 3.12 pytest tests/domain/services/test_tokens.py -v`
 Expected: FAIL，`ModuleNotFoundError: ... tokens`
 
-- [ ] **Step 5: 实现 TokenService**
+- [x] **Step 5: 实现 TokenService**
 
 Create `service/src/domain/services/tokens.py`:
 
@@ -277,7 +277,7 @@ class TokenService:
 Run: `cd service && uv run --python 3.12 pytest tests/domain/services/test_tokens.py -v`
 Expected: 7 passed
 
-- [ ] **Step 6: 写认证模型测试并实现模型**
+- [x] **Step 6: 写认证模型测试并实现模型**
 
 `service/tests/domain/models/test_auth_models.py`:
 
@@ -369,7 +369,7 @@ from src.domain.models import auth, entities  # noqa: F401  (register tables on 
 Run: `cd service && uv run --python 3.12 pytest tests/domain/models/test_auth_models.py -v`
 Expected: 2 passed
 
-- [ ] **Step 7: settings 新增 JWT/管理员配置**
+- [x] **Step 7: settings 新增 JWT/管理员配置**
 
 Modify `service/src/config/settings.py`：在 `max_matches_per_task` 之后追加字段，并把校验器改名扩展：
 
@@ -410,7 +410,7 @@ Modify `service/src/config/settings.py`：在 `max_matches_per_task` 之后追�
 Run: `cd service && uv run --python 3.12 pytest -q`
 Expected: 全量仍绿（216 passed, 1 skipped）
 
-- [ ] **Step 8: Lint 与提交**
+- [x] **Step 8: Lint 与提交**
 
 ```bash
 cd service && uv run --python 3.12 ruff check src tests && uv run --python 3.12 ruff format src/domain src/config tests/domain
@@ -442,7 +442,7 @@ git commit -m "feat: 添加 JWT 与口令哈希认证领域核心"
   - `POST /api/login`、`POST /api/refresh-token`、`GET /api/auth/routes`、`POST /api/logout`
   - `ensure_admin(session: Session, username: str, password: str) -> User`（幂等）
 
-- [ ] **Step 1: 写失败测试（登录与受保护接口）**
+- [x] **Step 1: 写失败测试（登录与受保护接口）**
 
 `service/tests/api/test_auth.py`:
 
@@ -530,7 +530,7 @@ def test_inactive_user_token_is_rejected(client, session):
 Run: `cd service && uv run --python 3.12 pytest tests/api/test_auth.py -v`
 Expected: FAIL，`ModuleNotFoundError: ... routes_auth` / `ensure_admin`
 
-- [ ] **Step 2: 实现认证服务与登录路由**
+- [x] **Step 2: 实现认证服务与登录路由**
 
 Create `service/src/application/services/auth.py`:
 
@@ -706,7 +706,7 @@ def logout(_: CurrentUser):
     return ok(None)
 ```
 
-- [ ] **Step 3: 用 JWT 依赖替换静态 admin_token**
+- [x] **Step 3: 用 JWT 依赖替换静态 admin_token**
 
 Modify `service/src/api/dependencies.py`：删除 `secrets` 导入与 `require_admin` 实现，替换为：
 
@@ -788,7 +788,7 @@ Modify `service/src/api/v1/router.py`：`from src.api.v1 import routes_auth` 并
 Run: `cd service && uv run --python 3.12 pytest tests/api/test_auth.py -v`
 Expected: FAIL 直到 conftest 更新；`test_login_*` 两例先绿
 
-- [ ] **Step 4: conftest 改为签发 JWT，种子脚本可用**
+- [x] **Step 4: conftest 改为签发 JWT，种子脚本可用**
 
 Modify `service/tests/conftest.py` 的 `auth_headers`：
 
@@ -845,7 +845,7 @@ if __name__ == "__main__":
 
 Create `service/scripts/__init__.py`（空文件）。
 
-- [ ] **Step 5: 种子脚本测试**
+- [x] **Step 5: 种子脚本测试**
 
 `service/tests/scripts/test_seed_admin.py`:
 
@@ -887,7 +887,7 @@ Expected: 全部 passed（如 `main()` 返回值而非抛 SystemExit，把断言
 Run: `cd service && uv run --python 3.12 pytest -q`
 Expected: 全量绿（约 230 passed, 1 skipped）。若个别旧用例断言 `401 detail == "invalid admin token"`，改为断言状态码与新 detail `"missing bearer token"`，因为认证文案随机制一起更换。
 
-- [ ] **Step 6: Lint 与提交**
+- [x] **Step 6: Lint 与提交**
 
 ```bash
 cd service && uv run --python 3.12 ruff check src tests && uv run --python 3.12 ruff format src scripts tests
@@ -914,7 +914,7 @@ git commit -m "feat: 接入 JWT 登录与管理员种子，替换静态管理员
 - Consumes: `SQLModel.metadata`（Task 1 后含 10 张表）、`settings.database_url`
 - Produces: `run_migrations(database_url: str) -> None`、`BUSINESS_TABLES: tuple[str, ...]`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `service/tests/infrastructure/test_migrations.py`:
 
@@ -963,7 +963,7 @@ def test_migrations_match_model_metadata(tmp_path) -> None:
 Run: `cd service && uv run --python 3.12 pytest tests/infrastructure/test_migrations.py -v`
 Expected: FAIL，`ModuleNotFoundError: ... migrations`
 
-- [ ] **Step 2: Alembic 脚手架**
+- [x] **Step 2: Alembic 脚手架**
 
 Create `service/alembic.ini`:
 
@@ -1086,7 +1086,7 @@ def downgrade() -> None:
     ${downgrades if downgrades else "pass"}
 ```
 
-- [ ] **Step 3: baseline 与 auth 迁移**
+- [x] **Step 3: baseline 与 auth 迁移**
 
 Create `service/alembic/versions/0001_baseline.py`:
 
@@ -1196,7 +1196,7 @@ def downgrade() -> None:
     op.drop_table("users")
 ```
 
-- [ ] **Step 4: 迁移运行器与启动接线**
+- [x] **Step 4: 迁移运行器与启动接线**
 
 Create `service/src/infrastructure/migrations.py`:
 
@@ -1271,7 +1271,7 @@ Expected: 2 passed
 Run: `cd service && uv run --python 3.12 pytest -q`
 Expected: 全量绿
 
-- [ ] **Step 5: 真实 CLI 走一遍**
+- [x] **Step 5: 真实 CLI 走一遍**
 
 ```bash
 cd service && LOGHARVEST_DATABASE_URL="sqlite:///./migrate-check.db" uv run --python 3.12 alembic upgrade head
@@ -1279,7 +1279,7 @@ cd service && LOGHARVEST_DATABASE_URL="sqlite:///./migrate-check.db" uv run --py
 ```
 Expected: 无异常；`current` 输出 `0002 (head)`。然后删除临时库：`rm -f service/migrate-check.db`（该文件是本任务自建的临时产物）。
 
-- [ ] **Step 6: Lint 与提交**
+- [x] **Step 6: Lint 与提交**
 
 ```bash
 cd service && uv run --python 3.12 ruff check src tests && uv run --python 3.12 ruff format src tests
@@ -1309,7 +1309,7 @@ git commit -m "feat: 接入 Alembic 迁移与应用启动建表"
   - `PostgresTaskRepository.complete(..., retryable: bool = True) -> None`
   - `retry_failed_tasks(session, job_id) -> int`
 
-- [ ] **Step 1: 写失败测试（取消检查与永久失败）**
+- [x] **Step 1: 写失败测试（取消检查与永久失败）**
 
 追加到 `service/tests/application/worker/test_processor.py`:
 
@@ -1365,7 +1365,7 @@ def test_size_change_is_permanent_failure(tmp_path: Path) -> None:
 Run: `cd service && uv run --python 3.12 pytest tests/application/worker/test_processor.py -q`
 Expected: FAIL（`cancel_check` 未知参数 / `PermanentTaskFailure` 未定义）
 
-- [ ] **Step 2: 实现处理器语义**
+- [x] **Step 2: 实现处理器语义**
 
 Modify `service/src/application/worker/processor.py`：新增异常与构造参数，并在复制前后各加一道校验。
 
@@ -1444,7 +1444,7 @@ class PermanentTaskFailure(RuntimeError):
 
 （`LeaseLost` 仍原样向上抛，不写终态。）
 
-- [ ] **Step 3: 队列侧支持取消判定、不可重试与领取字段**
+- [x] **Step 3: 队列侧支持取消判定、不可重试与领取字段**
 
 Modify `service/src/application/worker/ports.py`：`ClaimedTask` 追加
 
@@ -1510,7 +1510,7 @@ def is_job_cancelled(self, job_id: int) -> bool:
         return bool(conn.execute(text(JOB_CANCELLED_SQL), {"job_id": job_id}).scalar_one_or_none())
 ```
 
-- [ ] **Step 4: Worker 循环接线 + 手动重试接口**
+- [x] **Step 4: Worker 循环接线 + 手动重试接口**
 
 Modify `service/src/worker/main.py`：给 `TaskProcessor` 传 `cancel_check`。
 
@@ -1558,7 +1558,7 @@ def retry_failed(job_id: int, session: SessionDep, admin: AdminDep):
     return {"retried": retry_failed_tasks(session, job_id)}
 ```
 
-- [ ] **Step 5: 测试**
+- [x] **Step 5: 测试**
 
 追加到 `service/tests/api/test_jobs.py`:
 
@@ -1633,7 +1633,7 @@ Expected: passed
 Run: `cd service && uv run --python 3.12 pytest -q`
 Expected: 全量绿
 
-- [ ] **Step 6: Lint 与提交**
+- [x] **Step 6: Lint 与提交**
 
 ```bash
 cd service && uv run --python 3.12 ruff check src tests && uv run --python 3.12 ruff format src tests
@@ -1660,7 +1660,7 @@ git commit -m "feat: 补齐取消检查、永久失败判定与失败任务手�
   - `GET /api/system/overview` → `{"jobs": {status: count}, "file_tasks": {status: count}, "matches_24h": int, "workers": {"online": int, "by_version": {version: count}}, "oldest_pending_seconds": int | None}`
   - `GET /api/jobs/{id}/files?status=`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加 `service/tests/api/test_system.py`:
 
@@ -1706,7 +1706,23 @@ def test_job_files_can_be_filtered_by_status(client, auth_headers, session):
 Run: `cd service && uv run --python 3.12 pytest tests/api/test_system.py -q`
 Expected: FAIL（404）
 
-- [ ] **Step 2: 维护服务**
+**实现落定后的偏差说明（与代码一致，保留备查）：**
+- `GET /api/jobs/{id}/files` 保持既有**纯列表**响应，不改成 `{items,total,limit,offset}`：全局约束要求业务接口不加信封、
+  且 M1a/M1b 已有断言（`files.json()[0]["file_name"]`）依赖纯列表，本计划 Self-Review 第 3 条也写明"与既有断言不冲突"。
+  因此示例里的 `pending["items"]` 落地为 `pending.json()`；`status` 与 `attempts` 已在 `FileTaskRead` 中，无需新增字段。
+  分页信封若统一引入，应作为独立任务覆盖所有业务列表，而不是只改这一个端点。
+- `system_overview` 的查询实现放在 `src/application/services/queries.py`（与 `system_status`、`list_*` 同一层），
+  路由只做参数与依赖，遵循既有分层；`workers.online` 用 `ONLINE_WORKER_STATUSES`（online/busy/draining），
+  `by_version` 含 offline 行，与示例中 `{"0.1.0": 2}` 的语义一致。
+- 概览响应加了 `SystemOverviewRead`/`MaintenanceRunRead`/`WorkerOverviewRead` 三个 schema（Task 5 文件清单里的
+  `schemas.py`），给前端一个显式契约。
+- 维护端点在内存 SQLite 上真实执行 `mark_dead_workers` 与 `finalize_finished_jobs`；`recover_stale` 的
+  `SKIP LOCKED`/`make_interval` 在 SQLite 上是语法错误（已实测：`sqlite3.OperationalError near ">"`），
+  故测试里只把这一步替换为计数桩，SQL 仍由 `tests/infrastructure/test_task_queue.py` 的形状断言覆盖，
+  **未在 PostgreSQL 上验证过**。
+- 状态筛选测试用 `tests/api/test_jobs.py` 里已有的 `_seed_job_with_tasks`，不新建 fixture。
+
+- [x] **Step 2: 维护服务**
 
 Create `service/src/application/services/maintenance.py`:
 
@@ -1788,7 +1804,7 @@ def system_overview(session: SessionDep, _: AdminDep):
 
 （补 `Counter`、`timedelta`、`utcnow`、`Job`/`FileTask`/`Match`/`Worker`、`func`/`select` 的导入。）
 
-- [ ] **Step 3: 文件任务状态筛选**
+- [x] **Step 3: 文件任务状态筛选**
 
 Modify `service/src/api/v1/routes_jobs.py` 的 `GET /{job_id}/files`：新增查询参数并下推到服务层。
 
@@ -1798,14 +1814,21 @@ Modify `service/src/api/v1/routes_jobs.py` 的 `GET /{job_id}/files`：新增查
 
 服务层的列表函数追加同名参数，并在查询里 `where(FileTask.status == status)`（`None` 时不加条件）。响应条目增加 `"status"` 与 `"attempts"`，供前端展示。
 
-- [ ] **Step 4: 全量验证与提交**
+- [x] **Step 4: 全量验证与提交**
 
 ```bash
 cd service && uv run --python 3.12 pytest -q
-cd service && uv run --python 3.12 ruff check src tests && uv run --python 3.12 ruff format src tests
+cd service && uv run --python 3.12 ruff check src tests scripts
 git add service/src/application/services/maintenance.py service/src/api service/tests
 git commit -m "feat: 新增服务端维护入口、概览统计与文件任务状态筛选"
 ```
+
+落地实测：`pytest -p no:warnings` → `249 passed, 1 skipped`（Task 5 前为 241 passed, 1 skipped）；
+`ruff check src tests scripts` → All checks passed。
+`ruff format` 只在本次改动的文件上跑：整树格式化会顺带重排 M0/M1 已提交的 `rule_sets.py`、
+`archive/reader.py`、`entities.py`、`evaluator.py` 等文件（历史上它们是在更窄的行宽下格式化的），
+这些无关重排已回退，避免混进功能提交。
+
 
 ---
 
@@ -1820,7 +1843,7 @@ git commit -m "feat: 新增服务端维护入口、概览统计与文件任务�
 - Consumes: Task 1-5 的实际接口
 - Produces: 与代码一致的文档（无未实现声明）
 
-- [ ] **Step 1: 更新 `service/README.md`**
+- [x] **Step 1: 更新 `service/README.md`**
 
 新增/修改要点，逐条落实：
 - 认证节：静态 `LOGHARVEST_ADMIN_TOKEN` 已移除；改为 `POST /api/login` 拿 `accessToken`，受保护接口带 `Authorization: Bearer <accessToken>`；`401` 含义（缺失/无效/过期）与 `403`（非 admin 角色）。
@@ -1831,12 +1854,26 @@ git commit -m "feat: 新增服务端维护入口、概览统计与文件任务�
 - Worker 节：新增取消检查（每行检查一次，作业取消即停并置 `cancelled`）、源文件 size/mtime 不符即永久失败不重试、`retryable` 栅栏；说明 `EventSource` 不能带 `Authorization` 头，前端用 `fetch` 流式读取。
 - 明确不包含：前端（M2b）、真实 PostgreSQL 集成验证、按钮级权限与动态菜单、进程内并发池、`max_matches_per_task` 强制。
 
-- [ ] **Step 2: 更新 `.env.example` 与 `README.md`**
+- [x] **Step 2: 更新 `.env.example` 与 `README.md`**
 
 `.env.example`：删掉 `LOGHARVEST_ADMIN_TOKEN`（若保留需注明仅供回滚测试），加入 JWT 与管理员账号变量，标注生产必填。
 `README.md`（仓库根）：状态推进到 M2a，说明后端已带登录与迁移；下一步 M2b 前端。
 
-- [ ] **Step 3: 全量验证与提交**
+**落地说明与偏差：**
+- `LOGHARVEST_ADMIN_TOKEN` 采取"保留但注释掉"而不是直接删除：`Settings.admin_token` 字段与
+  "非 dev/test 不得使用默认值"的校验仍在（Task 1 未删），删掉示例行会让生产部署撞上一条与鉴权无关的
+  启动报错。注释里写的是"已不参与任何鉴权、带它的 Bearer 一律 401、字段留待后续清理"，
+  没有写成"仅供回滚测试"——回滚需要改代码，这个措辞会误导。
+- `.env.example` 同时修正了 M1b 遗留的过时描述（"该开关仍未接入应用启动"），与 Task 3 的接线一致。
+- `service/README.md` 显式写明业务列表返回**纯 JSON 数组**、没有 `{items,total}` 包装，
+  与 Task 5 的实现决定一致；M2b 若按 `Page<T>` 消费 `GET /api/jobs/{id}/files`，需要在该里程碑统一引入分页信封。
+- 迁移章节里 "`upgrade head` / `current` / `downgrade base`" 是在临时 SQLite 文件上真实执行过的结果
+  （`0002 (head)`；downgrade 后只剩 `alembic_version`）；同节与"PostgreSQL 依赖与验证边界"都明确
+  **未在 PostgreSQL 上验证过**。
+- 维护入口一节按设计方案 §7.2/§7.4 解释了服务端补偿为何必要（零存活 Worker 时 Worker 循环里的同类清扫不会执行），
+  并写清周期调度属于外部 cron/compose，本里程碑不内置定时器、不引入 Redis。
+
+- [x] **Step 3: 全量验证与提交**
 
 ```bash
 cd service && uv run --python 3.12 pytest -q

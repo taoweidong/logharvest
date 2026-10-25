@@ -28,6 +28,10 @@ CORE_TABLES = {
     "file_task_attempts",
     "matches",
     "workers",
+    # M2a 认证表随 SQLModel.metadata 一起由 create_all 建立（生产走 Alembic）。
+    "users",
+    "roles",
+    "user_roles",
 }
 
 
@@ -41,7 +45,7 @@ def engine() -> Iterator[Engine]:
         test_engine.dispose()
 
 
-def test_create_db_and_tables_creates_seven_core_tables() -> None:
+def test_create_db_and_tables_creates_every_core_table() -> None:
     db_engine = create_engine_from_settings("sqlite://")
     try:
         create_db_and_tables(db_engine)

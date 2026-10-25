@@ -30,7 +30,7 @@ SET status = 'running',
     heartbeat_at = now()
 FROM picked p
 WHERE t.id = p.id
-RETURNING t.id, t.job_id, t.source_path, t.file_name, t.attempts;
+RETURNING t.id, t.job_id, t.source_path, t.file_name, t.attempts, t.size_bytes, t.mtime;
 """
 
 RULE_SQL = """
@@ -89,6 +89,7 @@ WITH target AS (
            f.max_attempts,
            j.cancel_requested,
            (:status = 'failed'
+            AND :retryable
             AND f.attempts < LEAST(f.max_attempts, :max_attempts)
             AND NOT j.cancel_requested) AS will_retry
     FROM file_tasks f
@@ -212,6 +213,8 @@ WHERE status <> 'offline'
 """
 
 DRAIN_SQL = "SELECT drain_requested FROM workers WHERE id = :id"
+
+JOB_CANCELLED_SQL = "SELECT cancel_requested FROM jobs WHERE id = :job_id"
 
 # Job finalization. The design requires a job to end once none of its file
 # tasks is pending/running; these statements stay portable (no PostgreSQL-only
@@ -346,6 +349,15 @@ class PostgresTaskRepository:
             ).scalar_one_or_none()
         return bool(value)
 
+    def is_job_cancelled(self, job_id: int) -> bool:
+        """Read the owning job's cancel flag so the worker can stop mid-flight."""
+        with self._engine.connect() as conn:
+            value = conn.execute(
+                text(JOB_CANCELLED_SQL),
+                {"job_id": job_id},
+            ).scalar_one_or_none()
+        return bool(value)
+
     def claim_next(self, worker_id: str, worker_version: str) -> ClaimedTask | None:
         with self._engine.begin() as conn:
             row = (
@@ -384,6 +396,8 @@ class PostgresTaskRepository:
                 rule_set_id=rule["rule_set_id"],
                 rule_version=rule["version"],
                 rule_config=rule["config"] or {},
+                expected_size_bytes=row["size_bytes"],
+                expected_mtime=row["mtime"],
             )
 
     def heartbeat(
@@ -422,6 +436,7 @@ class PostgresTaskRepository:
         processed_lines: int,
         matched_rows: int,
         error: str | None = None,
+        retryable: bool = True,
     ) -> None:
         with self._engine.begin() as conn:
             conn.execute(
@@ -434,6 +449,7 @@ class PostgresTaskRepository:
                     "matched_rows": matched_rows,
                     "error": error,
                     "max_attempts": self._max_attempts,
+                    "retryable": retryable,
                 },
             )
 

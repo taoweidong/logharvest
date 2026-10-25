@@ -71,6 +71,12 @@ class WorkerRuntime:
             return False
 
         self._repo.heartbeat_worker(self._worker_id, "busy", task.id)
+        # 轻量测试替身可能没有 is_job_cancelled；缺失时不传取消检查。
+        cancel_check = (
+            (lambda: self._repo.is_job_cancelled(task.job_id))
+            if hasattr(self._repo, "is_job_cancelled")
+            else None
+        )
         try:
             try:
                 processor = TaskProcessor(
@@ -79,6 +85,7 @@ class WorkerRuntime:
                     rules=self._rules_factory(task),
                     work_dir=self._work_dir,
                     batch_size=self._batch_size,
+                    cancel_check=cancel_check,
                     # A task can run for minutes; keep workers.last_heartbeat
                     # fresh so the management view and the peer dead-worker
                     # sweep do not see a live process as stalled.

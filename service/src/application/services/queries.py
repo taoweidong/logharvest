@@ -1,10 +1,28 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, func, or_
 from sqlmodel import Session, select
 
-from src.domain.models.entities import FileTask, Job, Match, Worker
+from src.domain.models.entities import FileTask, Job, Match, Worker, utcnow
+
+# Workers that still report in. ``offline`` rows are historical and are never
+# counted as online, but they stay in the version distribution.
+ONLINE_WORKER_STATUSES = ("online", "busy", "draining")
+MATCHES_WINDOW_HOURS = 24
+
+
+def _age_seconds_since(value: datetime | None) -> int | None:
+    """Seconds elapsed since a stored timestamp, or ``None`` when absent.
+
+    SQLite hands back naive datetimes from aggregate columns while PostgreSQL
+    sessions are forced to UTC; normalise both onto aware UTC before subtracting.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return max(0, int((datetime.now(UTC) - value).total_seconds()))
 
 
 def list_jobs(session: Session, limit: int = 50, offset: int = 0) -> list[Job]:
@@ -19,14 +37,12 @@ def list_file_tasks(
     job_id: int,
     limit: int = 50,
     offset: int = 0,
+    status: str | None = None,
 ) -> list[FileTask]:
-    statement = (
-        select(FileTask)
-        .where(FileTask.job_id == job_id)
-        .order_by(FileTask.id)
-        .offset(offset)
-        .limit(limit)
-    )
+    statement = select(FileTask).where(FileTask.job_id == job_id)
+    if status is not None:
+        statement = statement.where(FileTask.status == status)
+    statement = statement.order_by(FileTask.id).offset(offset).limit(limit)
     return list(session.exec(statement).all())
 
 
@@ -87,12 +103,62 @@ def system_status(session: Session) -> dict[str, Any]:
             oldest = oldest.replace(tzinfo=UTC)
         pending_oldest = max(0.0, (datetime.now(UTC) - oldest).total_seconds())
     online = session.exec(
-        select(func.count())
-        .select_from(Worker)
-        .where(Worker.status.in_(["online", "busy", "draining"]))
+        select(func.count()).select_from(Worker).where(Worker.status.in_(ONLINE_WORKER_STATUSES))
     ).one()
     return {
         "file_tasks": counts,
         "pending_oldest_seconds": pending_oldest,
         "workers_online": online,
+    }
+
+
+def _status_counts(session: Session, column: Any) -> dict[str, int]:
+    return {
+        str(status): int(count)
+        for status, count in session.exec(select(column, func.count()).group_by(column)).all()
+    }
+
+
+def _worker_online_count(session: Session) -> int:
+    return int(
+        session.exec(
+            select(func.count())
+            .select_from(Worker)
+            .where(Worker.status.in_(ONLINE_WORKER_STATUSES))
+        ).one()
+        or 0
+    )
+
+
+def system_overview(session: Session) -> dict[str, Any]:
+    """Aggregated counts for the dashboard's first screen.
+
+    与 ``system_status`` 的分工：后者只给队列健康（文件任务计数、最老 pending、
+    在线数），概览再补上作业分布、24 小时命中量与 Worker 版本分布，让前端不必
+    自己拉全表去数。
+    """
+    cutoff = utcnow() - timedelta(hours=MATCHES_WINDOW_HOURS)
+    matches_24h = int(
+        session.exec(
+            select(func.count()).select_from(Match).where(Match.created_at >= cutoff)
+        ).one()
+        or 0
+    )
+    oldest_pending = session.exec(
+        select(func.min(FileTask.scheduled_at)).where(FileTask.status == "pending")
+    ).one()
+    return {
+        "jobs": _status_counts(session, Job.status),
+        "file_tasks": _status_counts(session, FileTask.status),
+        "matches_24h": matches_24h,
+        "workers": {
+            "online": _worker_online_count(session),
+            "by_version": {
+                str(version): int(count)
+                for version, count in session.exec(
+                    select(Worker.version, func.count()).group_by(Worker.version)
+                ).all()
+            },
+        },
+        "oldest_pending_seconds": _age_seconds_since(oldest_pending),
     }

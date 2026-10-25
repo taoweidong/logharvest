@@ -22,9 +22,14 @@ class Settings(BaseSettings):
     max_concurrent_copies: int = 4
     matches_batch_size: int = 1000
     max_matches_per_task: int = 200_000
+    jwt_secret_key: str = ""
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
+    admin_username: str = "admin"
+    admin_password: str = ""
 
     @model_validator(mode="after")
-    def validate_admin_token(self) -> "Settings":
+    def validate_auth_settings(self) -> "Settings":
         token = self.admin_token.strip()
         if not token:
             raise ValueError("admin_token must not be empty")
@@ -36,6 +41,15 @@ class Settings(BaseSettings):
                 "the default admin token is only allowed when environment is dev or test"
             )
         self.admin_token = token
+        # dev/test 允许空 secret（走静态 admin_token 测试路径）；其他环境必须显式配置。
+        if self.jwt_secret_key.strip() and len(self.jwt_secret_key.strip()) < 32:
+            raise ValueError("jwt_secret_key must be at least 32 characters")
+        if self.environment.strip().lower() not in PROTECTED_ENVIRONMENTS:
+            if not self.jwt_secret_key.strip():
+                raise ValueError("jwt_secret_key is required outside dev and test")
+            if not self.admin_password.strip():
+                raise ValueError("admin_password is required outside dev and test")
+        self.jwt_secret_key = self.jwt_secret_key.strip()
         return self
 
 

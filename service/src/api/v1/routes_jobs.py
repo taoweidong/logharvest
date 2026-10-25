@@ -2,8 +2,13 @@ from fastapi import APIRouter, Header, HTTPException, Query, Response
 from sqlmodel import Session
 
 from src.api.dependencies import AdminDep, SessionDep
-from src.api.v1.schemas import FileTaskRead, JobCreate, JobRead
-from src.application.services.jobs import cancel_job, create_job
+from src.api.v1.schemas import FileTaskRead, FileTaskStatus, JobCreate, JobRead
+from src.application.services.jobs import (
+    TERMINAL_JOB_STATUSES,
+    cancel_job,
+    create_job,
+    retry_failed_tasks,
+)
 from src.application.services.queries import list_file_tasks, list_jobs
 from src.domain.models.entities import Job
 
@@ -48,7 +53,7 @@ def post_job(
     admin: AdminDep,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    job, created = create_job(session, payload, admin, idempotency_key)
+    job, created = create_job(session, payload, admin.username, idempotency_key)
     if not created:
         response.status_code = 200
     return job
@@ -64,13 +69,24 @@ def get_job_files(
     job_id: int,
     session: SessionDep,
     _: AdminDep,
+    status: FileTaskStatus | None = None,
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
     get_job_or_404(session, job_id)
-    return list_file_tasks(session, job_id, limit=limit, offset=offset)
+    return list_file_tasks(session, job_id, limit=limit, offset=offset, status=status)
 
 
 @router.post("/{job_id}/cancel", response_model=JobRead)
 def post_job_cancel(job_id: int, session: SessionDep, _: AdminDep):
     return cancel_job(session, get_job_or_404(session, job_id))
+
+
+@router.post("/{job_id}/files/retry-failed")
+def retry_failed(job_id: int, session: SessionDep, _: AdminDep):
+    job = session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status in TERMINAL_JOB_STATUSES and job.status != "cancelled":
+        raise HTTPException(status_code=409, detail="job is not retryable")
+    return {"retried": retry_failed_tasks(session, job_id)}

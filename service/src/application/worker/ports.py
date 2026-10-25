@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol
@@ -17,6 +18,9 @@ class ClaimedTask:
     encoding: str | None = None
     fallback_encoding: str | None = None
     rule_config: dict[str, Any] = field(default_factory=dict)
+    # 规划时记录的源文件 size/mtime，处理器执行前用来判定永久失败。
+    expected_size_bytes: int | None = None
+    expected_mtime: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -61,7 +65,10 @@ class TaskRepository(Protocol):
         processed_lines: int,
         matched_rows: int,
         error: str | None = None,
+        retryable: bool = True,
     ) -> None: ...
+
+    def is_job_cancelled(self, job_id: int) -> bool: ...
 
 
 class MatchWriter(Protocol):
