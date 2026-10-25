@@ -143,3 +143,67 @@ def test_login_uses_injected_session_not_module_engine(client, engine) -> None:
             {"sub": str(user.id), "username": user.username}
         )
     assert client.get("/api/jobs", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+
+def test_unknown_user_still_pays_a_bcrypt_verify(client, monkeypatch) -> None:
+    """登录耗时不能泄露用户名是否存在（timing oracle）。"""
+    from src.api.v1 import routes_auth
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        routes_auth, "verify_password", lambda password, hashed: seen.append(hashed) or False
+    )
+
+    response = client.post("/api/login", json={"username": "ghost", "password": "whatever"})
+
+    assert response.status_code == 401
+    assert seen == [routes_auth.UNKNOWN_USER_HASH]
+    # 哑哈希必须与真实哈希同型，否则成本差异依旧存在。
+    assert seen[0].startswith("$2b$")
+
+
+def test_existing_user_verifies_against_stored_hash(client, session, monkeypatch) -> None:
+    from src.api.v1 import routes_auth
+
+    user = ensure_admin(session, "timing", "Ombud-Pass-123")
+    seen: list[str] = []
+    monkeypatch.setattr(
+        routes_auth, "verify_password", lambda password, hashed: seen.append(hashed) or False
+    )
+
+    client.post("/api/login", json={"username": "timing", "password": "anything"})
+
+    assert seen == [user.password_hash]
+
+
+def test_disabled_user_with_correct_password_gets_403(client, session) -> None:
+    user = ensure_admin(session, "suspended", "Suspend-Pass-1")
+    user.is_active = False
+    session.add(user)
+    session.commit()
+
+    response = client.post("/api/login", json={"username": "suspended", "password": "Suspend-Pass-1"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "user is disabled"
+
+
+def test_token_service_follows_the_current_secret(monkeypatch) -> None:
+    """get_token_service 不能缓存密钥：轮换后旧对象会让新 token 验不过。"""
+    from src.api.dependencies import get_token_service
+    from src.config import settings as settings_module
+
+    old = settings_module.settings.jwt_secret_key
+    monkeypatch.setattr(settings_module.settings, "jwt_secret_key", "rotated-secret-key-0123456789-abcdef")
+    try:
+        token, _ = get_token_service().create_access_token({"sub": "1"})
+        assert get_token_service().decode(token, expected_type="access") == {
+            "sub": "1",
+            "type": "access",
+        }
+        assert old != settings_module.settings.jwt_secret_key
+    finally:
+        monkeypatch.setattr(settings_module.settings, "jwt_secret_key", old)
+
+    stale = get_token_service()
+    assert stale.decode(token, expected_type="access") is None

@@ -9,7 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
-from src.api.dependencies import AdminDep, EngineDep
+from src.api.dependencies import AdminStreamDep, EngineDep
 from src.application.services.jobs import TERMINAL_JOB_STATUSES
 from src.domain.models.entities import FileTask, Job
 
@@ -88,7 +88,7 @@ async def _event_stream(
 async def job_events(
     job_id: int,
     engine: EngineDep,
-    _: AdminDep,
+    _: AdminStreamDep,
     max_events: int = Query(default=0, ge=0, le=100),
 ):
     # Validate before returning a stream so unknown jobs get a normal 404.

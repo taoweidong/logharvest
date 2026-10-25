@@ -34,6 +34,12 @@ class RefreshRequest(BaseModel):
         return value
 
 
+# 用户名不存在时也要付一次 bcrypt 校验的成本。否则"未知用户"分支直接短路返回，
+# 响应时间差会把用户名是否存在泄露出来（实测 ~450ms 对 ~5ms）。这是预先算好的
+# bcrypt 摘要，对应一个无用的占位口令，不属于任何真实账号。
+UNKNOWN_USER_HASH = "$2b$12$XWjXDfmfNHDTb63JG0jtJOXDqa6agq99SX/8aaxacUWU.1dB4lm7C"
+
+
 @router.post("/login")
 def login(
     payload: LoginRequest,
@@ -41,7 +47,10 @@ def login(
     service: Annotated[TokenService, Depends(get_token_service)],
 ):
     user = session.exec(select(User).where(User.username == payload.username)).first()
-    if user is None or not verify_password(payload.password, user.password_hash):
+    password_ok = verify_password(
+        payload.password, user.password_hash if user is not None else UNKNOWN_USER_HASH
+    )
+    if user is None or not password_ok:
         raise HTTPException(status_code=401, detail="invalid credentials")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="user is disabled")

@@ -4,7 +4,7 @@ from typing import get_type_hints
 
 import pytest
 from sqlalchemy import delete
-from sqlmodel import Session, select
+from sqlmodel import Session, create_engine, select
 
 from src.api.dependencies import get_engine, get_session
 from src.api.v1.routes_events import _event_stream, job_events
@@ -208,3 +208,61 @@ def test_event_stream_stops_when_the_worker_finalizes_the_job(engine, session):
     assert len(events) == 2
     assert parse_events(events[0])[0]["status"] == "running"
     assert parse_events(events[1])[0]["status"] == "succeeded"
+
+
+def test_sse_route_leaves_the_connection_pool_free(tmp_path) -> None:
+    """Regression: M1b made SSE use short sessions; the JWT dependency must not re-pin one.
+
+    A pool of exactly one connection: if the auth dependency holds a request-scoped
+    session for the whole stream, the endpoint's own validation session cannot be
+    checked out and the request fails instead of streaming.
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy.pool import QueuePool
+
+    from src.api.dependencies import get_session
+    from src.application.services.auth import ensure_admin
+    from src.config.settings import settings
+    from src.domain.services.tokens import TokenService
+    from src.infrastructure.database import create_db_and_tables
+    from src.main import create_app
+
+    pool_engine = create_engine(
+        f"sqlite:///{(tmp_path / 'pool.db').as_posix()}",
+        poolclass=QueuePool,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=1,
+        connect_args={"check_same_thread": False},
+    )
+    create_db_and_tables(pool_engine)
+    with Session(pool_engine) as session:
+        user = ensure_admin(session, "admin", "Pool-Password-1")
+        job = Job(name="j", data_source_id=1, source_path="/nas", rule_set_id=1, status="running")
+        session.add(job)
+        session.commit()
+        job_id = job.id
+        token, _ = TokenService(secret_key=settings.jwt_secret_key).create_access_token(
+            {"sub": str(user.id), "username": user.username}
+        )
+
+    def _session():
+        with Session(pool_engine) as db:
+            yield db
+
+    app = create_app()
+    app.dependency_overrides[get_engine] = lambda: pool_engine
+    app.dependency_overrides[get_session] = _session
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                f"/api/jobs/{job_id}/events?max_events=1",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert response.status_code == 200, response.text
+            assert parse_events(response.text)[0]["job_id"] == job_id
+            # 连接已归还：同一个单连接池还能服务普通请求。
+            assert client.get("/api/health").status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+        pool_engine.dispose()
