@@ -253,7 +253,7 @@ git commit -m "feat: 接入 LogHarvest JWT 登录与静态菜单"
 - Consumes: 后端只读接口（纯 REST，无信封）：`GET /api/jobs`、`POST /api/jobs`、`GET /api/jobs/{id}`、`GET /api/jobs/{id}/files?limit&offset&status`、`POST /api/jobs/{id}/cancel`、`POST /api/jobs/{id}/files/retry-failed`、`GET /api/jobs/{id}/events`（SSE）、`GET /api/matches`、`GET /api/rule-sets`、`GET /api/rule-sets/{id}`、`POST /api/rule-sets`、`GET /api/data-sources`、`POST /api/data-sources`、`POST /api/data-sources/{id}/test`、`GET /api/workers`、`POST /api/workers/{id}/drain|resume`、`POST /api/workers/drain-version?version=`、`GET /api/system/overview`、`POST /api/system/maintenance`
 - Produces: `streamJobProgress(jobId, onEvent, signal): Promise<void>`、每个资源一组 typed 函数
 
-- [ ] **Step 1: 类型定义**
+- [x] **Step 1: 类型定义**
 
 Create `web/src/api/logharvestTypes.ts`——字段必须与 `service/src/api/v1/schemas.py` 逐项核对（读后端源码，不要臆测）：
 
@@ -341,7 +341,7 @@ export type ProgressEvent = {
 };
 ```
 
-- [ ] **Step 2: REST 客户端**
+- [x] **Step 2: REST 客户端**
 
 Create `web/src/api/logharvest.ts`（业务接口无信封，`http.request<T>` 直接拿对象；分页参数名固定 `limit`/`offset`）:
 
@@ -376,7 +376,7 @@ export const overview = () => http.request<Overview>("get", "/system/overview");
 ```
 （`listMatches` 的响应形状必须与后端 `routes_matches.py` 实际返回一致：实现前用 `Read` 打开该文件确认游标字段名，若后端返回的是 `cursor` 而非 `next_cursor`，以后端为准并同步修正 `logharvestTypes.ts`。）
 
-- [ ] **Step 3: SSE 用 fetch 读（EventSource 不能带 Authorization）**
+- [x] **Step 3: SSE 用 fetch 读（EventSource 不能带 Authorization）**
 
 Create `web/src/utils/sse.ts`:
 
@@ -425,7 +425,7 @@ export async function streamJobProgress(
 ```
 （`getToken` 的确切导出名以 `web/src/utils/auth.ts` 为准；实现前读该文件确认，它保存的是 `{accessToken, expires, refreshToken}` JSON。）
 
-- [ ] **Step 4: 验证解析函数**
+- [x] **Step 4: 验证解析函数**
 
 不引入前端测试框架（保持体量最小），改为把 `parseSseChunk` 的边界写进类型与注释，并用一次性脚本验证：
 
@@ -446,7 +446,7 @@ Expected: 输出 `1 "running" 68`（一帧被解析、残帧留在 rest）。若
 Run: `cd /e/GitHub/think/web && pnpm typecheck 2>&1 | tail -10`
 Expected: 无错误
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add web
