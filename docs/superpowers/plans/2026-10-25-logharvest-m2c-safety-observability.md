@@ -868,7 +868,7 @@ git commit -m "feat: Worker 上报资源指标并补齐结构化日志"
 - Consumes: `GET /api/jobs/{job_id}/files/{task_id}/attempts`（Task 3）、`WorkerRead` 的 `cpu_percent`/`memory_bytes`/`temp_disk_free_bytes`/`last_error`（Task 4 后有值）
 - Produces: 文件任务行的"尝试历史"抽屉；Worker 表的 CPU/内存/临时盘三列
 
-- [ ] **Step 1: 客户端与类型**
+- [x] **Step 1: 客户端与类型**
 
 `logharvestTypes.ts` 追加：
 
@@ -896,15 +896,15 @@ export const listTaskAttempts = (jobId: number, taskId: number) =>
 
 `WorkerInfo` 类型补 `cpu_percent: number | null`、`memory_bytes: number | null`、`temp_disk_free_bytes: number | null`、`last_error: string | null`（以 `service/src/api/v1/schemas.py` 的 `WorkerRead` 为准，字段名逐一对齐后再写）。
 
-- [ ] **Step 2: 尝试历史抽屉**
+- [x] **Step 2: 尝试历史抽屉**
 
 `jobs/detail.vue` 文件任务表加一列"历史"，点击打开 `el-drawer`：`listTaskAttempts` 拉取，表格列 `attempt_no`/`worker_id`/`worker_version`/`status`/`started_at`/`finished_at`/`processed_lines`/`matched_rows`/`error`；空数组时显示"该任务尚无尝试记录"；请求失败时显示后端 `detail`，不要静默空表。抽屉打开时把 `task_id` 与 `job_id` 记在状态里，切换任务重新加载。
 
-- [ ] **Step 3: Worker 资源列**
+- [x] **Step 3: Worker 资源列**
 
 `workers/index.vue` 增加三列：CPU（`cpu_percent` 一位小数 + `%`，`null` 显示 `—`）、内存（MB 保留 1 位）、临时盘空闲（GB 保留 2 位）。**必须如实呈现 `null`**：Task 4 之前上线的历史行没有值，界面不能显示 0 让人误判。
 
-- [ ] **Step 4: 验证与提交**
+- [x] **Step 4: 验证与提交**
 
 ```bash
 cd web && pnpm typecheck

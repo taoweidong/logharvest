@@ -39,3 +39,6 @@ coverage/
 
 # Superseded detailed design, kept locally only
 docs/superpowers/specs/archive/
+
+# Qoder 会话内的 agent 工作树与本地缓存（含各自 node_modules/.venv，不入库）
+.qoder/
