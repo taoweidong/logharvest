@@ -1,11 +1,15 @@
 import zipfile
 
+import pytest
 from sqlmodel import select
 
 from src.api.v1.schemas import JobCreate
 from src.application.services import jobs as jobs_service
+from src.config.settings import settings
+from src.domain import source_guard
 from src.domain.archive.models import ScanLimitError
 from src.domain.models.entities import FileTask, Job, Worker
+from src.domain.source_guard import UNKNOWN, WRITABLE
 
 
 def make_nas(tmp_path):
@@ -118,6 +122,67 @@ def test_source_path_outside_root_is_rejected(client, auth_headers, tmp_path) ->
         },
     )
     assert response.status_code == 400
+
+
+def test_job_creation_refuses_writable_mount(client, auth_headers, tmp_path, monkeypatch) -> None:
+    """规格 §7.2：发现可写就拒绝处理，而不是"照样跑，反正我们不写"。
+
+    这里只替换最外层的证据采集（detect_writability），策略判断、异常翻译与路由
+    映射都走真实代码路径。
+    """
+    root, batch = make_nas(tmp_path)
+    source, rules = seed_source_and_rules(client, auth_headers, root)
+    monkeypatch.setattr(settings, "nas_read_only_policy", "enforce", raising=True)
+    monkeypatch.setattr(source_guard, "detect_writability", lambda path: WRITABLE, raising=True)
+    scanned = []
+    monkeypatch.setattr(
+        jobs_service,
+        "discover_archives",
+        lambda path, **kwargs: scanned.append(path) or [],
+    )
+
+    response = create_job(client, auth_headers, source, rules, batch)
+
+    assert response.status_code == 409
+    assert "writable" in response.json()["detail"].lower()
+    # 拒绝发生在扫描之前，也不留下半个作业。
+    assert scanned == []
+    assert client.get("/api/jobs", headers=auth_headers).json() == []
+
+
+def test_job_creation_guard_targets_the_planned_directory(
+    client, auth_headers, tmp_path, monkeypatch
+) -> None:
+    """守卫要校验真正要扫描的那个目录，而不是数据源根：嵌套挂载可以不同。"""
+    root, batch = make_nas(tmp_path)
+    source, rules = seed_source_and_rules(client, auth_headers, root)
+    seen = []
+
+    def fake_detect(path):
+        seen.append(path)
+        return UNKNOWN
+
+    monkeypatch.setattr(settings, "nas_read_only_policy", "enforce", raising=True)
+    monkeypatch.setattr(source_guard, "detect_writability", fake_detect, raising=True)
+
+    assert create_job(client, auth_headers, source, rules, batch).status_code == 201
+    assert batch.resolve() in seen
+
+
+@pytest.mark.parametrize("policy", ["warn", "ignore"])
+def test_job_creation_non_enforce_policy_still_plans(
+    client, auth_headers, tmp_path, monkeypatch, policy
+) -> None:
+    """warn/ignore 不阻断规划，但判定值仍要原样交给日志与上层。"""
+    root, batch = make_nas(tmp_path)
+    source, rules = seed_source_and_rules(client, auth_headers, root)
+    monkeypatch.setattr(settings, "nas_read_only_policy", policy, raising=True)
+    monkeypatch.setattr(source_guard, "detect_writability", lambda path: WRITABLE, raising=True)
+
+    response = create_job(client, auth_headers, source, rules, batch)
+
+    assert response.status_code == 201
+    assert response.json()["total_files"] == 1
 
 
 def test_empty_directory_succeeds(client, auth_headers, tmp_path) -> None:

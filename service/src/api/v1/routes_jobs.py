@@ -11,6 +11,7 @@ from src.application.services.jobs import (
 )
 from src.application.services.queries import list_file_tasks, list_jobs
 from src.domain.models.entities import Job
+from src.domain.source_guard import SourceNotReadOnly
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -42,7 +43,12 @@ def get_jobs(
             "description": "Existing job replayed for the same Idempotency-Key",
         },
         400: {"description": "Blank Idempotency-Key, invalid path, or unsupported suffixes"},
-        409: {"description": "Idempotency-Key reused with a different request body"},
+        409: {
+            "description": (
+                "Idempotency-Key reused with a different request body, or the source "
+                "mount was detected writable"
+            )
+        },
         503: {"description": "Source directory scan exceeded the 10 second deadline"},
     },
 )
@@ -53,7 +59,11 @@ def post_job(
     admin: AdminDep,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    job, created = create_job(session, payload, admin.username, idempotency_key)
+    try:
+        job, created = create_job(session, payload, admin.username, idempotency_key)
+    except SourceNotReadOnly as exc:
+        # 规格 §7.2：挂载可写就拒绝处理。这是资源状态冲突，不是请求格式错误。
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if not created:
         response.status_code = 200
     return job

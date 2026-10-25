@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 
 from src.api.dependencies import AdminDep, SessionDep
-from src.api.v1.schemas import DataSourceCreate, DataSourceRead
+from src.api.v1.schemas import DataSourceCreate, DataSourceRead, DataSourceTestResult
 from src.application.services.data_sources import (
     create_data_source,
     list_data_sources,
@@ -32,7 +32,7 @@ def post_data_source(payload: DataSourceCreate, session: SessionDep, _: AdminDep
         raise HTTPException(status_code=409, detail="data source name already exists") from exc
 
 
-@router.post("/{source_id}/test")
+@router.post("/{source_id}/test", response_model=DataSourceTestResult)
 def test_source(source_id: int, session: SessionDep, _: AdminDep):
     source = session.get(DataSource, source_id)
     if source is None:

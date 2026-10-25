@@ -161,6 +161,29 @@ def test_run_once_forwards_configured_batch_size(tmp_path, monkeypatch):
     assert captured["batch_size"] == 7
 
 
+def test_run_once_forwards_the_nas_read_only_policy(tmp_path, monkeypatch):
+    """策略必须从构造函数一路传到处理器，而不是让处理器去读全局 settings。"""
+    captured = {}
+
+    class RecordingProcessor:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def process(self, task):
+            return TaskResult("succeeded", 0, 0)
+
+    monkeypatch.setattr(worker_main, "TaskProcessor", RecordingProcessor)
+    runtime = make_runtime(
+        FakeRepo([make_task(tmp_path)]),
+        FakeWriter(),
+        tmp_path,
+        nas_read_only_policy="warn",
+    )
+
+    assert runtime.run_once() is True
+    assert captured["nas_read_only_policy"] == "warn"
+
+
 def test_run_once_does_not_claim_while_draining(tmp_path):
     repo = FakeRepo([make_task(tmp_path)], draining=True)
     writer = FakeWriter()

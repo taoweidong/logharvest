@@ -44,3 +44,19 @@ def test_admin_password_optional_in_dev() -> None:
 def test_static_admin_token_field_is_gone() -> None:
     # 静态 token 已被 JWT 取代；留着"必填但不参与认证"的配置只会误导运维。
     assert "admin_token" not in Settings.model_fields
+
+
+def test_nas_read_only_policy_defaults_to_enforce() -> None:
+    settings = _make(environment="dev", jwt_secret_key=VALID_SECRET)
+    assert settings.nas_read_only_policy == "enforce"
+
+
+def test_nas_read_only_policy_is_normalized() -> None:
+    for raw, expected in ((" WARN ", "warn"), ("Ignore", "ignore"), ("ENFORCE", "enforce")):
+        settings = _make(environment="dev", jwt_secret_key=VALID_SECRET, nas_read_only_policy=raw)
+        assert settings.nas_read_only_policy == expected
+
+
+def test_unknown_nas_read_only_policy_is_rejected() -> None:
+    with pytest.raises(ValueError, match="nas_read_only_policy"):
+        _make(environment="dev", jwt_secret_key=VALID_SECRET, nas_read_only_policy="relaxed")

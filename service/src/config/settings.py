@@ -1,6 +1,8 @@
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.domain.source_guard import POLICY_ENFORCE, READ_ONLY_POLICIES
+
 PROTECTED_ENVIRONMENTS = frozenset({"dev", "test"})
 MIN_SECRET_LENGTH = 32
 
@@ -26,6 +28,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     admin_username: str = "admin"
     admin_password: str = ""
+    nas_read_only_policy: str = POLICY_ENFORCE
 
     @model_validator(mode="after")
     def validate_auth_settings(self) -> "Settings":
@@ -43,6 +46,17 @@ class Settings(BaseSettings):
             and not self.admin_password.strip()
         ):
             raise ValueError("admin_password is required outside dev and test")
+        return self
+
+    @model_validator(mode="after")
+    def validate_nas_read_only_policy(self) -> "Settings":
+        # 只读守卫的策略取值必须是已知的三个词之一：一个拼错的值如果静默降级成
+        # "不拦截"，就等于把规格 §7.2 的保护悄悄关掉了。
+        policy = self.nas_read_only_policy.strip().lower()
+        if policy not in READ_ONLY_POLICIES:
+            choices = ", ".join(f'"{name}"' for name in sorted(READ_ONLY_POLICIES))
+            raise ValueError(f"nas_read_only_policy must be one of {choices}")
+        self.nas_read_only_policy = policy
         return self
 
 

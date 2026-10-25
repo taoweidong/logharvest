@@ -11,6 +11,7 @@ import pytest
 import src.application.worker.processor as processor_module
 from src.application.worker.ports import ClaimedTask, MatchRecord
 from src.application.worker.processor import LeaseLost, TaskProcessor
+from src.domain import source_guard
 from src.domain.rules.evaluator import compile_ruleset
 from src.domain.rules.models import (
     KeywordMatch,
@@ -19,6 +20,7 @@ from src.domain.rules.models import (
     RuleSetConfig,
     Threshold,
 )
+from src.domain.source_guard import UNKNOWN, WRITABLE
 
 
 class FakeRepo:
@@ -663,6 +665,50 @@ def test_size_change_is_permanent_failure(tmp_path: Path) -> None:
     assert "size" in (result.error or "").lower()
     assert repo.retryables == [(10, False)]
     assert repo.touches == []
+
+
+def test_writable_mount_is_a_permanent_failure(tmp_path: Path, monkeypatch) -> None:
+    """守卫先于任何复制生效：可写挂载上连租约栅栏都不该消耗。"""
+    monkeypatch.setattr(source_guard, "detect_writability", lambda path: WRITABLE, raising=True)
+    repo = FakeRepo()
+    writer = FakeWriter()
+    processor = make_processor(repo, writer, tmp_path / "work")
+
+    result = processor.process(make_task(tmp_path))
+
+    assert result.status == "failed"
+    assert "writable" in (result.error or "").lower()
+    assert repo.retryables == [(10, False)]
+    assert repo.touches == []
+    assert writer.deleted == []
+    assert writer.written == []
+
+
+def test_warn_policy_processes_the_task_on_a_writable_mount(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(source_guard, "detect_writability", lambda path: WRITABLE, raising=True)
+    repo = FakeRepo()
+    writer = FakeWriter()
+    processor = make_processor(repo, writer, tmp_path / "work", nas_read_only_policy="warn")
+
+    result = processor.process(make_task(tmp_path))
+
+    assert result.status == "succeeded"
+    assert repo.completed == [(10, 1, "succeeded", 2, 2, None)]
+
+
+def test_guard_checks_the_directory_holding_the_archive(tmp_path: Path, monkeypatch) -> None:
+    """嵌套挂载可以各自只读/可写，所以要按任务文件所在目录做最长前缀判定。"""
+    seen: list[Path] = []
+
+    def fake_detect(path: Path) -> str:
+        seen.append(path)
+        return UNKNOWN
+
+    monkeypatch.setattr(source_guard, "detect_writability", fake_detect, raising=True)
+    processor = make_processor(FakeRepo(), FakeWriter(), tmp_path / "work")
+
+    assert processor.process(make_task(tmp_path)).status == "succeeded"
+    assert seen == [tmp_path]
 
 
 def test_naive_utc_mtime_from_database_is_accepted(tmp_path: Path) -> None:

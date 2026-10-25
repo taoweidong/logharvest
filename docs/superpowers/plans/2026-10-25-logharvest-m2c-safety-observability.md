@@ -46,7 +46,7 @@
   - `test_data_source_path(source) -> dict[str, object]` 新增键：`writability: str`、`read_only_confirmed: bool`
   - settings 新字段 `nas_read_only_policy: str = "enforce"`
 
-- [ ] **Step 1: 写领域层失败测试**
+- [x] **Step 1: 写领域层失败测试**
 
 Create `service/tests/domain/test_source_guard.py`:
 
@@ -121,7 +121,7 @@ def test_unknown_never_reports_confirmed_read_only(tmp_path, monkeypatch) -> Non
 Run: `cd service && uv run --python 3.12 pytest tests/domain/test_source_guard.py -v`
 Expected: FAIL，`ModuleNotFoundError: ... source_guard`
 
-- [ ] **Step 2: 实现 source_guard**
+- [x] **Step 2: 实现 source_guard**
 
 Create `service/src/domain/source_guard.py`:
 
@@ -247,7 +247,7 @@ def process_owner_id() -> int:
 Run: `cd service && uv run --python 3.12 pytest tests/domain/test_source_guard.py -v`
 Expected: 6 passed（Windows 上 `test_mount_options_none_off_posix` 断言 `None`；Linux 上该例跳过体由 `if` 自然短路）
 
-- [ ] **Step 3: settings + 数据源检测接入**
+- [x] **Step 3: settings + 数据源检测接入**
 
 Modify `service/src/config/settings.py`：在 `admin_password` 之后追加，并在校验器里加一条取值检查：
 
@@ -288,7 +288,7 @@ Modify `service/src/api/v1/schemas.py` 的 `DataSourceTestResult`：追加
 
 （若该模型不存在，就在 `routes_data_sources.py` 的 `/test` 响应模型处新增此二字段；不要改既有三个键的类型。）
 
-- [ ] **Step 4: API 测试**
+- [x] **Step 4: API 测试**
 
 追加到 `service/tests/api/test_data_sources.py`:
 
@@ -333,7 +333,7 @@ Expected: passed
 Run: `cd service && uv run --python 3.12 pytest -q`
 Expected: 全量绿（既有断言 `/test` 响应体的用例需同步补两个新键）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd service && uv run --python 3.12 ruff check src tests && uv run --python 3.12 ruff format src tests
@@ -356,7 +356,7 @@ git commit -m "feat: 添加无副作用的 NAS 只读判定与数据源检测结
 - Consumes: Task 1 的 `guard_source`、`SourceNotReadOnly`、`settings.nas_read_only_policy`
 - Produces: `POST /api/jobs` 在可写挂载上返回 `409`；Worker 在可写挂载上以永久失败落 `failed`（不自动重试）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加到 `service/tests/api/test_jobs.py`:
 
@@ -423,7 +423,7 @@ def test_writable_mount_is_a_permanent_failure(tmp_path: Path, monkeypatch) -> N
 Run: `cd service && uv run --python 3.12 pytest tests/api/test_jobs.py tests/application/worker/test_processor.py -q`
 Expected: FAIL（`guard_source` 名称不存在 → monkeypatch 的 raising 参数会报错）
 
-- [ ] **Step 2: 接线**
+- [x] **Step 2: 接线**
 
 Modify `service/src/application/services/jobs.py`：导入 `from src.domain.source_guard import SourceNotReadOnly, guard_source`，在 `create_job` 完成路径存在性与逃逸校验之后、开始扫描之前插入：
 
@@ -460,7 +460,7 @@ Modify `service/src/application/worker/processor.py`：导入 `from src.domain i
 Run: `cd service && uv run --python 3.12 pytest tests/api/test_jobs.py tests/application/worker tests/worker -q`
 Expected: passed
 
-- [ ] **Step 3: 全量与提交**
+- [x] **Step 3: 全量与提交**
 
 ```bash
 cd service && uv run --python 3.12 pytest -q
