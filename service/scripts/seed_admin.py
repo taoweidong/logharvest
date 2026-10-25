@@ -13,6 +13,7 @@ from sqlmodel import Session
 from src.application.services.auth import ensure_admin
 from src.config.settings import settings
 from src.infrastructure.database import engine
+from src.infrastructure.migrations import run_migrations
 
 MIN_PASSWORD_LENGTH = 8
 
@@ -22,6 +23,9 @@ def main() -> int:
     if not password or len(password) < MIN_PASSWORD_LENGTH:
         print("refusing to seed: password must be at least 8 characters", file=sys.stderr)
         return 1
+    # 先补齐 schema：在全新库上直接建管理员会因为 users 表不存在而抛底层
+    # OperationalError，让人以为是账号问题。迁移幂等，重复执行没有副作用。
+    run_migrations(settings.database_url)
     with Session(engine) as session:
         user = ensure_admin(session, settings.admin_username, password)
         # 读取属性要在会话内完成：commit 后 SQLModel 会过期实例，会话关闭再取就是 DetachedInstance。
