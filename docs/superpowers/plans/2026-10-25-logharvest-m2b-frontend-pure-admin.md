@@ -702,3 +702,38 @@ git commit -m "docs: 补充前端移植与联调说明"
 - Worker 状态枚举与后端 `routes_workers.py`/`mark_dead_workers` 使用的 `online|busy|draining|offline` 一致。
 - `drain-version` 返回 `{drained, flagged}` 与 M1b 终审后的实际响应一致（不是 M1b 初版的 `{drained}`）。
 - Task 7 Step 3 依赖 Task 1 删除 `views/welcome` 这一事实，顺序不可颠倒。
+
+---
+
+## 实现期核实到的计划错误（控制器补记，Task 6-8 必须按这里写）
+
+以下三条是我写计划时臆测的后端形状，实施中已用后端源码核实并纠正。**以这一节为准，不要回看上面任务里的旧代码块。**
+
+1. **所有列表接口返回裸数组，没有 `{items,total,limit,offset}` 包装。**
+   核实依据：`src/api/v1/routes_jobs.py:20` `@router.get("", response_model=list[JobRead])`、
+   `routes_jobs.py:62` `/{job_id}/files` 同为 `list[FileTaskRead]`、`routes_matches.py:18`
+   `list[MatchRead]`、`routes_system.py:10` `/workers` 为 `list[WorkerRead]`。
+   后果：后端不返回 `total`，前端**无法显示"共 N 条"或页码跳转**。作业/文件任务列表用
+   "上一页 / 下一页"窗口式翻页（offset 加减 limit，本页不足 limit 即视为末段），
+   UI 上注明"总数未知"。Task 3 里 `Page<T>` 的定义作废，`logharvestTypes.ts` 实际未使用它。
+
+2. **`GET /api/matches` 没有 `next_cursor` 字段，且缺作用域时返回 422 而不是 400。**
+   核实依据：`routes_matches.py:18-36`，返回 `list[MatchRead]`，
+   `if job_id is None and (created_from is None or created_to is None)` → `422`，
+   detail 文案为 `"either job_id or both created_from and created_to are required"`。
+   后果：Task 6 的游标必须由前端自己从本页最后一行取 `{created_at, id}` 组成
+   `created_before` + `id_before`（两者必须同时给）；查询前置校验做成"禁用按钮 + 提示"，
+   提示文案对齐后端的 422 语义，不要写成 400。
+
+3. **`GET /api/system/overview` 与既有 `GET /api/system/status` 职责重叠，两者都要用。**
+   核实依据：`routes_system.py:20` 已存在 `SystemStatusRead{file_tasks, pending_oldest_seconds,
+   workers_online}`（`schemas.py:137-140`）；M2a Task 5 正在新增字段更丰富的
+   `GET /api/system/overview`（作业状态分布、任务状态分布、24 小时命中数、Worker 版本分布、
+   最老 pending）。概览页（Task 7）以 `/api/system/overview` 为主数据源；若该请求失败，
+   退回 `/api/system/status` 渲染 `file_tasks` 与 `workers_online`，不要在页面里留空。
+
+另外两条待合流后处理，不要在本轨自行改动：
+- 文件任务的**服务端状态筛选** `GET /api/jobs/{id}/files?status=` 由 M2a Task 5 提供；
+  当前作业详情页第 4 屏只做当前页客户端筛选，合流后把筛选值下推为 `status` 查询参数。
+- `POST /api/jobs/{id}/files/retry-failed` 返回 `{"retried": n}`，同样来自 M2a；
+  本轨工作树的 `service/` 还没有它，联调要在合流后做。
