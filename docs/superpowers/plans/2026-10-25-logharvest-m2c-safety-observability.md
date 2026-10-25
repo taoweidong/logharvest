@@ -483,7 +483,7 @@ git commit -m "feat: 作业规划与 Worker 领取前强制 NAS 只读守卫"
 - Consumes: `FileTaskAttempt`（已有表，已有写入方）
 - Produces: `list_task_attempts(session, job_id, task_id) -> list[FileTaskAttempt]`；`GET /api/jobs/{job_id}/files/{task_id}/attempts` → `list[FileTaskAttemptRead]`，按 `attempt_no` 升序，**只返回该作业该任务的行**（跨作业访问 404）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 def test_task_attempts_are_returned_in_order_scoped_to_the_job(client, auth_headers, session) -> None:
@@ -542,7 +542,7 @@ def test_attempts_requires_admin(client, auth_headers, session) -> None:
 Run: `cd service && uv run --python 3.12 pytest tests/api/test_jobs.py -q -k attempts`
 Expected: FAIL（404 路由不存在）
 
-- [ ] **Step 2: 实现**
+- [x] **Step 2: 实现**
 
 `queries.py`：
 
@@ -603,7 +603,7 @@ def get_task_attempts(job_id: int, task_id: int, session: SessionDep, _: AdminDe
 
 （`list_task_attempts` 内的归属判断保留，两处一致即可；补一个"存在但无历史 → 200 空数组"的测试。）
 
-- [ ] **Step 3: 全量与提交**
+- [x] **Step 3: 全量与提交**
 
 ```bash
 cd service && uv run --python 3.12 pytest -q
@@ -630,7 +630,7 @@ git commit -m "feat: 新增文件任务尝试历史读取接口"
   - `heartbeat_worker(worker_id, status, current_task_id=None, stats: WorkerStats | None = None)`
   - structlog logger：`src/worker/logging.py:configure_worker_logging()` + 关键事件日志
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `tests/infrastructure/test_task_queue.py`:
 
@@ -775,7 +775,7 @@ def collect_worker_stats(work_dir: Path) -> WorkerStats:
 
 （`shutil.disk_usage` 只读目录所在盘的统计信息，不写 NAS；`work_dir` 始终是本地临时盘。）
 
-- [ ] **Step 3: 日志与循环接线**
+- [x] **Step 3: 日志与循环接线**
 
 Create `service/src/worker/logging_setup.py`:
 
@@ -818,7 +818,7 @@ Modify `service/src/worker/main.py`：
 Run: `cd service && uv run --python 3.12 pytest tests/infrastructure/test_task_queue.py tests/worker -q`
 Expected: passed（`FakeRepo.heartbeat_worker` 需接受 `stats=None` 关键字）
 
-- [ ] **Step 4: 采集函数测试**
+- [x] **Step 4: 采集函数测试**
 
 `tests/worker/test_metrics.py`:
 
@@ -845,7 +845,7 @@ def test_collect_survives_missing_work_dir(tmp_path: Path) -> None:
 Run: `cd service && uv run --python 3.12 pytest tests/worker/test_metrics.py -v`
 Expected: 2 passed
 
-- [ ] **Step 5: 全量与提交**
+- [x] **Step 5: 全量与提交**
 
 ```bash
 cd service && uv run --python 3.12 pytest -q
