@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import type { FormInstance, FormRules } from "element-plus";
 import { message } from "@/utils/message";
 import { createRuleSet, getRuleSet } from "@/api/logharvestAdmin";
@@ -12,6 +12,7 @@ import type {
   RuleSetDetail
 } from "@/api/logharvestTypes";
 import { formatDetailError } from "../format";
+import { hasPerms } from "@/utils/auth";
 
 defineOptions({ name: "RuleSetEditDrawer" });
 
@@ -21,6 +22,9 @@ const props = defineProps<{
   sourceId?: number | null;
 }>();
 const emit = defineEmits<{ (e: "created", ruleSet: RuleSet): void }>();
+
+/** 只读用户仍可查看配置（列表操作叫“查看/另存新版本”），但不能提交新版本。 */
+const canWrite = computed(() => hasPerms("rulesets:write"));
 
 /** 表单内的规则行：把后端的判别联合摊平成可编辑字段，提交时再组装回 `match` */
 type RuleForm = {
@@ -202,6 +206,7 @@ watch(visible, async open => {
 });
 
 async function onSubmit() {
+  if (!canWrite.value) return;
   backendError.value = "";
   const invalid = validateRows();
   if (invalid) {
@@ -243,9 +248,11 @@ async function onSubmit() {
   <el-drawer
     v-model="visible"
     :title="
-      sourceId == null
-        ? '新建规则集'
-        : `基于规则集 #${sourceId} 另存新版本（后端同名版本自动 +1）`
+      !canWrite
+        ? `查看规则集${sourceId != null ? ` #${sourceId}` : ''}`
+        : sourceId == null
+          ? '新建规则集'
+          : `基于规则集 #${sourceId} 另存新版本（后端同名版本自动 +1）`
     "
     size="760px"
     :close-on-click-modal="false"
@@ -255,6 +262,7 @@ async function onSubmit() {
       v-loading="loadingSource"
       :model="form"
       :rules="rules"
+      :disabled="!canWrite"
       label-width="110px"
     >
       <el-form-item label="名称" prop="name">
@@ -386,7 +394,7 @@ async function onSubmit() {
           </div>
         </el-form-item>
       </el-card>
-      <el-button class="mb-3" @click="form.rules.push(newRule())">
+      <el-button v-if="canWrite" class="mb-3" @click="form.rules.push(newRule())">
         添加规则
       </el-button>
 
@@ -401,8 +409,13 @@ async function onSubmit() {
       </el-alert>
     </el-form>
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="submitting" @click="onSubmit">
+      <el-button @click="visible = false">{{ canWrite ? "取消" : "关闭" }}</el-button>
+      <el-button
+        v-if="canWrite"
+        type="primary"
+        :loading="submitting"
+        @click="onSubmit"
+      >
         {{ sourceId == null ? "创建" : "另存为新版本" }}
       </el-button>
     </template>
