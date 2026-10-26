@@ -61,7 +61,7 @@ FastAPI Server ──────────────> PostgreSQL
 - RBAC 已完整实现（2026-10-27）：`menus`/`role_menus` 两张新表 + `roles` 扩展，菜单即权限（目录/页面/权限节点）；登录返回角色与权限码，`GET /api/auth/routes` 按角色下发动态菜单/路由；用户/角色/菜单管理 API 与前端页面齐备；业务接口按 `模块:动作` 细粒度权限校验，前端按钮用 `v-perms` 控制；admin 内置保护角色 + operator/viewer 默认角色与 18 个权限节点由启动种子幂等写入。验证：后端全量 `pytest`（含新增 RBAC/管理接口/业务权限用例）、`ruff`、`mypy` 与前端 `pnpm typecheck`/`pnpm build` 全部通过，并用真实 SQLite + 浏览器验证 admin/viewer 的菜单、页面与按钮差异。
 - 成员级容错已实现：zip 损坏成员隔离后继续读取其余成员，流式 tar 在损坏成员处停止并校验结束标记；至少一个 `file_glob` 匹配成员成功时任务写 `partial`，全部匹配成员失败写 `failed`，两者均不自动重试。错误摘要写入 `file_tasks.error`，作业汇总按 `partial` 计入。
 - 本地运行注意：应用启动（lifespan）时按 `LOGHARVEST_AUTO_CREATE_TABLES=true` 执行 `alembic upgrade head`，不需要手工建表；新库先跑 `uv run --python 3.12 -m scripts.seed_admin` 建管理员，再用 `POST /api/login` 换 access token（静态管理员 token 已不再参与认证）。Worker 必须指向 PostgreSQL 连接串，命令与配置见 [service/README.md](service/README.md)。
-- 尚未实现（后续里程碑）：Alembic 迁移在真实 PostgreSQL 上的执行验证（队列 SQL 已由 `tests/integration/test_postgres_queue.py` 覆盖）、Docker/PostgreSQL 部署编排、进程内复制并发池与单任务命中上限强制、多行堆栈规则、数据权限（部门/本人范围）、token 黑名单/服务端会话与 Redis。
+- 尚未实现（后续里程碑）：Docker/PostgreSQL 生产部署编排（本机 wslc PG16 容器已完成 Alembic 迁移、真实 Worker 入库与 RBAC 删除回归验证，生产编排仍未做）、进程内复制并发池与单任务命中上限强制、多行堆栈规则、数据权限（部门/本人范围）、token 黑名单/服务端会话与 Redis。
 - 前端验证口径：`pnpm typecheck` 与 `pnpm build` 均通过；RBAC 改造还用真实后端 + 浏览器可访问性快照/DOM 断言验证了 admin 与 viewer 的动态菜单、页面加载和按钮显隐。本机内置浏览器是隐藏页，**未做人工视觉截图确认**。
 - 下一步：多行堆栈规则（M3）按实际需求排期；部署编排由 Jenkins + Docker Compose 侧承接。
 - 历史详细稿保留在本地 `docs/superpowers/specs/archive/`，未纳入仓库，避免与当前方案混淆。

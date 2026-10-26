@@ -311,7 +311,7 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 ## 测试
 
 - API 测试（`tests/api/`、`tests/test_health.py`）使用内存 SQLite（`StaticPool`）与 FastAPI `dependency_overrides`，不需要 PostgreSQL；每个 API 用例通过 `create_db_and_tables()` 建表。`tests/conftest.py` 的 autouse fixture 会把 `settings.auto_create_tables` 置为 `False`，因此测试进程从不执行 Alembic，也不会碰开发库；`tests/conftest.py` 在任何 `src` 导入之前直接赋值注入 `LOGHARVEST_ENVIRONMENT=test` 与测试签名密钥（`Settings` 在模块导入时即完成校验），`auth_headers` 夹具再用 `settings.jwt_secret_key` 签发真实 access token。`tests/domain/` 与 `tests/application/` 为领域/应用单元测试，不经过 API 与依赖覆盖（模型测试自行使用内存 SQLite 验证建表）。
-- `tests/api/` 覆盖 JWT 登录/刷新/登出/停用账号、数据源、规则集、作业规划/幂等/路径校验/取消/失败重试、结果查询、Worker 管理、SSE、系统状态与概览/维护接口；`tests/domain/services/` 覆盖 bcrypt 与 `TokenService`（含过期、错密钥、access/refresh 不可互换）；`tests/scripts/test_seed_admin.py` 覆盖管理员种子的幂等与弱口令拒绝；`tests/application/` 覆盖 Worker 处理器的复制续租、时间心跳、租约丢失、取消检查与永久失败；`tests/worker/` 用 fake 仓库覆盖领取循环、drain、注册、僵死回收、周期补偿、取消检查接线与信号退出；`tests/infrastructure/` 覆盖队列 SQL 形状、批量写入、作业终态汇总（后两者在真实建表的 SQLite 上执行）以及迁移结果与 `SQLModel.metadata` 的逐表逐列比对；`tests/integration/` 在真实 PostgreSQL 上覆盖 `SKIP LOCKED` 并发领取、租约栅栏、重试/取消/永久失败、成员级 `partial`、僵死回收、作业汇总与批量写入。
+- `tests/api/` 覆盖 JWT 登录/刷新/登出/停用账号、数据源、规则集、作业规划/幂等/路径校验/取消/失败重试、结果查询、Worker 管理、SSE、系统状态与概览/维护接口；`tests/domain/services/` 覆盖 bcrypt 与 `TokenService`（含过期、错密钥、access/refresh 不可互换）；`tests/scripts/test_seed_admin.py` 覆盖管理员种子的幂等与弱口令拒绝；`tests/application/` 覆盖 Worker 处理器的复制续租、时间心跳、租约丢失、取消检查与永久失败；`tests/worker/` 用 fake 仓库覆盖领取循环、drain、注册、僵死回收、周期补偿、取消检查接线与信号退出；`tests/infrastructure/` 覆盖队列 SQL 形状、批量写入、作业终态汇总（后两者在真实建表的 SQLite 上执行）以及迁移结果与 `SQLModel.metadata` 的逐表逐列比对；`tests/integration/` 在真实 PostgreSQL 上覆盖 `SKIP LOCKED` 并发领取、租约栅栏、重试/取消/永久失败、成员级 `partial`、僵死回收、作业汇总与批量写入，以及用户/角色/菜单删除时外键关联的 flush 顺序（`test_postgres_rbac.py`）。
 - 作业唯一约束、幂等并发回退、作业终态栅栏等并发语义在 SQLite 上验证；`SKIP LOCKED` 领取、`make_interval` 退避、`ON CONFLICT` 注册、`RECOVER_STALE_SQL` 回收等 PostgreSQL 行为由 `tests/integration/test_postgres_queue.py` 在真实 PostgreSQL 上验证。维护入口在测试里分两层：`tests/application/test_maintenance.py` 直接真实执行两步可移植清扫（降级静默 Worker、收尾作业）并断言 `run_maintenance` 在非 PostgreSQL 上拒绝；`tests/api/test_system.py` 只断言该场景返回 `503`。
 
 ## 质量门禁
@@ -364,7 +364,7 @@ uv run --with coverage coverage report --include="src/*"
 ### 明确不包含（后续里程碑）
 
 - 前端本身在仓库的 [`../web/`](../web/)（见其 README）；后端提供动态菜单/路由，菜单数据由 `menus` 表维护。
-- Alembic 迁移与 `alembic upgrade head` 在 PostgreSQL 上的执行验证（含多副本启动的 advisory lock 串行化）；队列 SQL 已有 `tests/integration/test_postgres_queue.py` 的真实 PostgreSQL 覆盖。
+- 多副本并发启动时的 advisory lock 压测：单实例 `alembic upgrade head` 已在真实 PostgreSQL 上执行验证，但尚未专门压测多个 API 副本同时启动的锁竞争。
 - Docker/PostgreSQL 部署编排；镜像替换由 Jenkins + Docker Compose 执行，Web 不承载部署。
 - 进程内复制并发池与 `LOGHARVEST_MAX_MATCHES_PER_TASK` 强制执行。
 - `data_sources.copy_to_local` 与 `workers.last_error` 的行为：两列都随表建出、API 也返回，但当前没有读取或写入方——Worker 无条件把压缩包复制到本地临时盘（开关不生效），`last_error` 没有任何写入方（恒为 `null`）。列是**有意保留**的，避免 M3 再做一次迁移；在接线前不要把它们当成已生效的能力。

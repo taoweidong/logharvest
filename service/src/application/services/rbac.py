@@ -252,6 +252,9 @@ def delete_user(session: Session, *, actor_id: int, user_id: int) -> None:
     links = session.exec(select(UserRole).where(UserRole.user_id == user_id)).all()
     for link in links:
         session.delete(link)
+    # PostgreSQL 会立即检查外键；SQLite 默认不检查，所以必须先 flush 关联删除，
+    # 否则 SQLAlchemy 的 UoW 可能先发 DELETE users 而撞 fk_user_roles_user_id_users。
+    session.flush()
     session.delete(user)
     session.commit()
 
@@ -314,6 +317,8 @@ def delete_role(session: Session, role_id: int) -> None:
     links = session.exec(select(RoleMenu).where(RoleMenu.role_id == role_id)).all()
     for link in links:
         session.delete(link)
+    # 先 flush 关联删除，避免 PostgreSQL 先删角色撞 fk_role_menus_role_id_roles。
+    session.flush()
     session.delete(role)
     session.commit()
 
@@ -565,5 +570,7 @@ def delete_menu(session: Session, menu_id: int) -> None:
     links = session.exec(select(RoleMenu).where(RoleMenu.menu_id == menu_id)).all()
     for link in links:
         session.delete(link)
+    # 同 delete_role：PostgreSQL 的外键检查要求先把引用行删干净。
+    session.flush()
     session.delete(menu)
     session.commit()
