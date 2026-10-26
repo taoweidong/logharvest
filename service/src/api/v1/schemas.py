@@ -204,3 +204,125 @@ class MaintenanceRunRead(BaseModel):
     recovered: int
     workers_demoted: int
     jobs_finalized: int
+
+
+# --- RBAC 管理接口 ---------------------------------------------------------
+
+
+class RoleBriefRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    code: str
+    name: str
+
+
+class UserRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    username: str
+    nickname: str
+    is_active: bool
+    created_at: datetime
+    roles: list[RoleBriefRead]
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=150)
+    password: str = Field(min_length=8, max_length=256)
+    nickname: str = ""
+    is_active: bool = True
+    role_ids: list[int] = Field(default_factory=list)
+
+
+class UserUpdate(BaseModel):
+    nickname: str | None = None
+    is_active: bool | None = None
+
+
+class UserRolesUpdate(BaseModel):
+    role_ids: list[int]
+
+
+class PasswordReset(BaseModel):
+    password: str = Field(min_length=8, max_length=256)
+
+
+class RoleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    code: str
+    name: str
+    description: str
+    is_active: bool
+    is_system: bool
+
+
+class RoleCreate(BaseModel):
+    code: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,49}$")
+    name: str = Field(min_length=1)
+    description: str = ""
+    is_active: bool = True
+
+
+class RoleUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    is_active: bool | None = None
+
+
+class RoleMenusUpdate(BaseModel):
+    menu_ids: list[int]
+
+
+class MenuRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    parent_id: int | None
+    name: str
+    menu_type: int
+    path: str
+    component: str
+    title: str
+    icon: str
+    rank: int
+    show_link: bool
+    keep_alive: bool
+    is_active: bool
+    is_system: bool
+    created_at: datetime
+    children: list["MenuRead"] = Field(default_factory=list)
+
+
+class MenuCreate(BaseModel):
+    parent_id: int | None = None
+    name: str = Field(min_length=1)
+    menu_type: Literal[0, 1, 2]
+    path: str = ""
+    component: str = ""
+    title: str = Field(min_length=1)
+    icon: str = ""
+    rank: int = 0
+    show_link: bool = True
+    keep_alive: bool = False
+    is_active: bool = True
+
+
+class MenuUpdate(BaseModel):
+    """``model_dump(exclude_unset=True)`` 区分“未传”与“显式 null”：
+
+    ``parent_id`` 显式传 null 表示移动到根，未传则保持原父节点。
+    """
+
+    parent_id: int | None = None
+    name: str | None = None
+    path: str | None = None
+    component: str | None = None
+    title: str | None = None
+    icon: str | None = None
+    rank: int | None = None
+    show_link: bool | None = None
+    keep_alive: bool | None = None
+    is_active: bool | None = None
+
+
+MenuRead.model_rebuild()

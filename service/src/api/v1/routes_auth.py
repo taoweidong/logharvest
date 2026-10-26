@@ -11,7 +11,8 @@ from src.api.dependencies import (
     SessionDep,
     get_token_service,
 )
-from src.application.services.auth import role_codes
+from src.application.services.auth import permission_codes, role_codes
+from src.application.services.navigation import build_user_routes
 from src.domain.models.auth import User
 from src.domain.services.passwords import verify_password
 from src.domain.services.rate_limit import attempt_key
@@ -96,7 +97,7 @@ def login(
             "username": user.username,
             "nickname": user.nickname,
             "roles": role_codes(session, user),
-            "permissions": [],
+            "permissions": permission_codes(session, user),
             "accessToken": access_token,
             "refreshToken": refresh_token,
             "expires": int(expires_at.timestamp() * 1000),
@@ -134,9 +135,9 @@ def refresh(
 
 
 @router.get("/auth/routes")
-def auth_routes(_: CurrentUser):
-    # 菜单在前端代码里静态定义，这里返回空数组是最简的有意实现。
-    return ok([])
+def auth_routes(user: CurrentUser, session: SessionDep):
+    # 菜单即权限：路由树由 menus 表动态生成，前端不再维护静态业务菜单。
+    return ok(build_user_routes(session, user))
 
 
 @router.post("/logout")

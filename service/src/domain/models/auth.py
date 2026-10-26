@@ -24,6 +24,9 @@ class Role(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     code: str = Field(index=True, unique=True)
     name: str
+    description: str = ""
+    is_active: bool = True
+    is_system: bool = False
 
 
 class UserRole(SQLModel, table=True):

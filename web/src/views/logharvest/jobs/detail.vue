@@ -398,7 +398,8 @@ onMounted(async () => {
     return;
   }
   loading.value = false;
-  if (!terminal.value) startStream();
+  // 终态作业也打开 SSE：服务端会立即发一个终态快照并结束，头部进度/行数才不会停在 0。
+  startStream();
 });
 
 onBeforeUnmount(stopAll);
@@ -422,6 +423,7 @@ onBeforeUnmount(stopAll);
             </el-tag>
             <el-button
               v-if="job && !terminal"
+              v-perms="'jobs:operate'"
               type="danger"
               plain
               @click="onCancel"
@@ -430,6 +432,7 @@ onBeforeUnmount(stopAll);
             </el-button>
             <el-button
               v-if="failedCount > 0"
+              v-perms="'jobs:operate'"
               type="warning"
               plain
               @click="onRetryFailed"

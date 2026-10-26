@@ -13,6 +13,7 @@
 
 import os
 from datetime import timedelta
+from pathlib import Path
 from threading import Barrier, Thread
 from uuid import uuid4
 
@@ -189,6 +190,7 @@ def test_claim_records_attempt_history_and_rule_snapshot(
     assert task.attempts == 1
     assert task.expected_size_bytes == 1024
     assert task.rule_version == 1
+    assert task.root_path == Path("/nas")
     with Session(engine) as session:
         attempts = session.exec(
             select(FileTaskAttempt).where(FileTaskAttempt.file_task_id == task.id)

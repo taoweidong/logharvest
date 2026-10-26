@@ -121,7 +121,11 @@ onMounted(load);
   <div class="p-4">
     <PureTableBar title="数据源" :columns="columns" @refresh="load">
       <template #buttons>
-        <el-button type="primary" @click="createVisible = true">
+        <el-button
+          v-perms="'datasources:write'"
+          type="primary"
+          @click="createVisible = true"
+        >
           新建数据源
         </el-button>
       </template>

@@ -5,8 +5,11 @@ from src.api.v1.routes_data_sources import router as data_sources_router
 from src.api.v1.routes_events import router as events_router
 from src.api.v1.routes_jobs import router as jobs_router
 from src.api.v1.routes_matches import router as matches_router
+from src.api.v1.routes_menus import router as menus_router
+from src.api.v1.routes_roles import router as roles_router
 from src.api.v1.routes_rule_sets import router as rule_sets_router
 from src.api.v1.routes_system import router as system_router
+from src.api.v1.routes_users import router as users_router
 from src.api.v1.routes_workers import router as workers_router
 
 api_router = APIRouter()
@@ -25,3 +28,6 @@ api_router.include_router(events_router)
 api_router.include_router(matches_router)
 api_router.include_router(workers_router)
 api_router.include_router(system_router)
+api_router.include_router(users_router)
+api_router.include_router(roles_router)
+api_router.include_router(menus_router)

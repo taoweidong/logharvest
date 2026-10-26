@@ -60,7 +60,7 @@ const onLogin = async (formEl: FormInstance | undefined) => {
           password: ruleForm.password
         })
         .then(async () => {
-          // 菜单与路由全部前端静态定义，这里只是把本地路由表装载进 router
+          // 拉取后端按角色过滤的动态菜单并注册进 router
           await initRouter();
           disabled.value = true;
           // 支持 /login?redirect=xxx 回跳（守卫在鉴权失败时写入），否则进首个菜单
@@ -69,7 +69,7 @@ const onLogin = async (formEl: FormInstance | undefined) => {
             | undefined;
           const target = redirect
             ? decodeURIComponent(redirect)
-            : getTopMenu(true).path;
+            : getTopMenu(true)?.path || "/access-denied";
           router.push(target).then(() => {
             message(t("login.pureLoginSuccess"), { type: "success" });
           });

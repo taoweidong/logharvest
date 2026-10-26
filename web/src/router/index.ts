@@ -149,9 +149,20 @@ router.beforeEach((to: ToRouteType, _from) => {
     return whiteList.includes(to.fullPath) ? _from.fullPath : undefined;
   }
   if (Cookies.get(multipleTabsKey) && userInfo) {
-    // 无权限跳转403页面
+    // 无权限跳转403页面（remaining.ts 里注册的实际路径是 /access-denied）
     if (to.meta?.roles && !isOneOfArray(to.meta?.roles, userInfo?.roles)) {
-      return { path: "/error/403" };
+      return { path: "/access-denied" };
+    }
+    // 静态路由/动态页面声明的 meta.auths：admin 通配，其余用户至少命中一个即可
+    const requiredAuths = to.meta?.auths as Array<string> | undefined;
+    if (Array.isArray(requiredAuths) && requiredAuths.length) {
+      const permissions = userInfo?.permissions ?? [];
+      if (
+        !permissions.includes("*:*:*") &&
+        !requiredAuths.some(code => permissions.includes(code))
+      ) {
+        return { path: "/access-denied" };
+      }
     }
     // 开启隐藏首页后在浏览器地址栏手动输入首页路由则跳转到404页面
     if (VITE_HIDE_HOME === "true" && to.fullPath === "/home") {
@@ -177,6 +188,12 @@ router.beforeEach((to: ToRouteType, _from) => {
         to.path !== "/login"
       ) {
         initRouter().then((router: Router) => {
+          // 没有任何可见菜单（例如账号只登录但没有分配角色）时不要停在
+          // 一个会持续 403 的首页，直接给出无权限页面。
+          if (usePermissionStoreHook().wholeMenus.length === 0) {
+            router.push("/access-denied");
+            return;
+          }
           if (!useMultiTagsStoreHook().getMultiTagsCache) {
             const { path } = to;
             const route = findRouteByPath(

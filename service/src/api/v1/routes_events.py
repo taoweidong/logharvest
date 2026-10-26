@@ -1,17 +1,19 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
-from src.api.dependencies import AdminStreamDep, EngineDep
+from src.api.dependencies import EngineDep, require_permission_streaming
 from src.application.services.jobs import TERMINAL_JOB_STATUSES
+from src.domain.models.auth import User
 from src.domain.models.entities import FileTask, Job
+from src.domain.permissions import Permissions
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -88,7 +90,7 @@ async def _event_stream(
 async def job_events(
     job_id: int,
     engine: EngineDep,
-    _: AdminStreamDep,
+    _: Annotated[User, Depends(require_permission_streaming(Permissions.JOBS_READ))],
     max_events: int = Query(default=0, ge=0, le=100),
 ):
     # Validate before returning a stream so unknown jobs get a normal 404.

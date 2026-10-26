@@ -70,7 +70,13 @@ onMounted(load);
   <div class="p-4">
     <PureTableBar title="规则集" :columns="columns" @refresh="load">
       <template #buttons>
-        <el-button type="primary" @click="openCreate">新建规则集</el-button>
+        <el-button
+          v-perms="'rulesets:write'"
+          type="primary"
+          @click="openCreate"
+        >
+          新建规则集
+        </el-button>
       </template>
       <template v-slot="{ size }">
         <pure-table

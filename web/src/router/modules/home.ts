@@ -27,6 +27,9 @@ export default {
       component: () => import("@/views/logharvest/overview/index.vue"),
       meta: {
         title: "概览",
+        // 概览页直接调用 /system/overview 与 /system/status；没有 system:read
+        // 的用户既看不到这个菜单，也不应该把首页当成默认落地页。
+        auths: ["system:read"],
         showLink: VITE_HIDE_HOME === "true" ? false : true
       }
     }

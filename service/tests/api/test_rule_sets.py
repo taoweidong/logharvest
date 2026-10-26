@@ -4,9 +4,9 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from src.api.dependencies import get_session, require_admin_user
+import src.api.dependencies as api_dependencies
+from src.api.dependencies import get_session
 from src.api.v1 import routes_rule_sets
-from src.domain.models.auth import User
 from src.domain.models.entities import RuleSet
 from src.domain.rules.models import RuleSetConfig
 
@@ -103,10 +103,10 @@ def test_rule_set_conflict_returns_409_and_rolls_back(client, auth_headers, monk
     def override_session():
         yield mock_session
 
-    # 本例只验证服务层抛 IntegrityError 时路由映射为 409 并回滚；认证依赖与
-    # 内存库 session 无关，故直接覆盖掉，避免用 MagicMock 去查角色。
+    # 本例只验证服务层抛 IntegrityError 时路由映射为 409 并回滚。session 是
+    # MagicMock，无法解析真实权限，因此直接让权限闭包放行（admin 通配）。
     client.app.dependency_overrides[get_session] = override_session
-    client.app.dependency_overrides[require_admin_user] = lambda: User(username="admin")
+    monkeypatch.setattr(api_dependencies, "permission_codes", lambda session, user: ["*:*:*"])
 
     def raise_conflict(*args, **kwargs):
         raise IntegrityError("INSERT", {}, Exception("conflict"))

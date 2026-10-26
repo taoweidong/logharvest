@@ -262,6 +262,7 @@ onMounted(load);
             <el-option v-for="v in versions" :key="v" :label="v" :value="v" />
           </el-select>
           <el-button
+            v-perms="'workers:operate'"
             type="warning"
             :loading="drainingVersion"
             :disabled="!versionInput.trim()"
@@ -324,6 +325,7 @@ onMounted(load);
           </template>
           <template #operation="{ row }">
             <el-button
+              v-perms="'workers:operate'"
               :size="size"
               link
               type="warning"
@@ -339,11 +341,20 @@ onMounted(load);
               placement="top"
             >
               <span>
-                <el-button :size="size" link type="primary" disabled>恢复</el-button>
+                <el-button
+                  v-perms="'workers:operate'"
+                  :size="size"
+                  link
+                  type="primary"
+                  disabled
+                >
+                  恢复
+                </el-button>
               </span>
             </el-tooltip>
             <el-button
               v-else
+              v-perms="'workers:operate'"
               :size="size"
               link
               type="primary"

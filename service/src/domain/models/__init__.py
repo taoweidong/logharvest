@@ -8,6 +8,7 @@ from src.domain.models.entities import (
     RuleSet,
     Worker,
 )
+from src.domain.models.rbac import Menu, RoleMenu
 
 __all__ = [
     "ADMIN_ROLE_CODE",
@@ -16,7 +17,9 @@ __all__ = [
     "FileTaskAttempt",
     "Job",
     "Match",
+    "Menu",
     "Role",
+    "RoleMenu",
     "RuleSet",
     "User",
     "UserRole",

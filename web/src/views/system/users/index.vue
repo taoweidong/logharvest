@@ -1,0 +1,542 @@
+<script setup lang="ts">
+import { computed, nextTick, onMounted, reactive, ref } from "vue";
+import type { FormInstance, FormRules } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { PureTableBar } from "@/components/RePureTableBar";
+import { message } from "@/utils/message";
+import { apiErrorDetail } from "@/api/logharvest";
+import {
+  assignUserRoles,
+  createUser,
+  deleteUser,
+  listRoles,
+  listUsers,
+  resetUserPassword,
+  updateUser
+} from "@/api/rbac";
+import type { RoleRecord, UserRecord } from "@/api/rbacTypes";
+import { formatDateTime } from "@/views/logharvest/format";
+
+defineOptions({ name: "Users" });
+
+const loading = ref(false);
+const rows = ref<UserRecord[]>([]);
+const roles = ref<RoleRecord[]>([]);
+
+const keyword = ref("");
+/** 后端列表接口是裸数组且没有 total，沿用窗口式 limit/offset 翻页 */
+const page = reactive({ limit: 20, offset: 0 });
+const hasNext = computed(() => rows.value.length === page.limit);
+const pageIndex = computed(() => Math.floor(page.offset / page.limit) + 1);
+
+async function load() {
+  loading.value = true;
+  try {
+    rows.value = await listUsers({
+      limit: page.limit,
+      offset: page.offset,
+      keyword: keyword.value.trim() || undefined
+    });
+  } catch (error) {
+    rows.value = [];
+    message(apiErrorDetail(error, "用户列表加载失败"), { type: "error" });
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function loadRoles() {
+  try {
+    roles.value = await listRoles();
+  } catch (error) {
+    roles.value = [];
+    message(apiErrorDetail(error, "角色列表加载失败"), { type: "error" });
+  }
+}
+
+function onSearch() {
+  page.offset = 0;
+  load();
+}
+
+function goPrev() {
+  page.offset = Math.max(0, page.offset - page.limit);
+  load();
+}
+
+function goNext() {
+  page.offset += page.limit;
+  load();
+}
+
+// ---------------------------------------------------------------- 新建 / 编辑
+
+const dialogVisible = ref(false);
+const mode = ref<"create" | "edit">("create");
+const editingId = ref<number | null>(null);
+const isCreate = computed(() => mode.value === "create");
+const saving = ref(false);
+const formRef = ref<FormInstance>();
+
+const form = reactive({
+  username: "",
+  nickname: "",
+  password: "",
+  is_active: true,
+  role_ids: [] as number[]
+});
+
+const rules = computed<FormRules>(() => ({
+  username: [
+    { required: true, message: "请填写用户名", trigger: "blur" }
+  ],
+  password: isCreate.value
+    ? [
+        { required: true, message: "请填写初始密码", trigger: "blur" },
+        { min: 8, message: "密码至少 8 位", trigger: "blur" }
+      ]
+    : []
+}));
+
+function clearFormValidate() {
+  nextTick(() => formRef.value?.clearValidate());
+}
+
+function openCreate() {
+  mode.value = "create";
+  editingId.value = null;
+  Object.assign(form, {
+    username: "",
+    nickname: "",
+    password: "",
+    is_active: true,
+    role_ids: []
+  });
+  dialogVisible.value = true;
+  clearFormValidate();
+}
+
+function openEdit(row: UserRecord) {
+  mode.value = "edit";
+  editingId.value = row.id;
+  Object.assign(form, {
+    username: row.username,
+    nickname: row.nickname,
+    password: "",
+    is_active: row.is_active,
+    role_ids: []
+  });
+  dialogVisible.value = true;
+  clearFormValidate();
+}
+
+async function onSubmit() {
+  if (!formRef.value) return;
+  const valid = await formRef.value.validate().catch(() => false);
+  if (!valid) return;
+  saving.value = true;
+  try {
+    if (isCreate.value) {
+      const username = form.username.trim();
+      await createUser({
+        username,
+        password: form.password,
+        nickname: form.nickname.trim() || undefined,
+        is_active: form.is_active,
+        role_ids: form.role_ids
+      });
+      message(`用户“${username}”已创建`, { type: "success" });
+    } else if (editingId.value !== null) {
+      await updateUser(editingId.value, {
+        nickname: form.nickname.trim(),
+        is_active: form.is_active
+      });
+      message("用户信息已更新", { type: "success" });
+    }
+    dialogVisible.value = false;
+    await load();
+  } catch (error) {
+    message(apiErrorDetail(error, isCreate.value ? "创建用户失败" : "更新用户失败"), {
+      type: "error"
+    });
+  } finally {
+    saving.value = false;
+  }
+}
+
+// ---------------------------------------------------------------- 分配角色
+
+const assignVisible = ref(false);
+const assignTarget = ref<UserRecord | null>(null);
+const assignRoleIds = ref<number[]>([]);
+const assigning = ref(false);
+
+function openAssign(row: UserRecord) {
+  assignTarget.value = row;
+  assignRoleIds.value = row.roles.map(role => role.id);
+  assignVisible.value = true;
+}
+
+async function onAssign() {
+  if (!assignTarget.value) return;
+  assigning.value = true;
+  try {
+    await assignUserRoles(assignTarget.value.id, assignRoleIds.value);
+    message(`用户“${assignTarget.value.username}”的角色已更新`, {
+      type: "success"
+    });
+    assignVisible.value = false;
+    await load();
+  } catch (error) {
+    message(apiErrorDetail(error, "分配角色失败"), { type: "error" });
+  } finally {
+    assigning.value = false;
+  }
+}
+
+// ---------------------------------------------------------------- 重置密码
+
+const resetVisible = ref(false);
+const resetTarget = ref<UserRecord | null>(null);
+const resetFormRef = ref<FormInstance>();
+const resetSaving = ref(false);
+const resetForm = reactive({ password: "", confirm: "" });
+
+const resetRules = computed<FormRules>(() => ({
+  password: [
+    { required: true, message: "请填写新密码", trigger: "blur" },
+    { min: 8, message: "密码至少 8 位", trigger: "blur" }
+  ],
+  confirm: [
+    { required: true, message: "请再次输入新密码", trigger: "blur" },
+    {
+      validator: (_rule, value, callback) => {
+        if (value !== resetForm.password) {
+          callback(new Error("两次输入的密码不一致"));
+        } else {
+          callback();
+        }
+      },
+      trigger: "blur"
+    }
+  ]
+}));
+
+function openReset(row: UserRecord) {
+  resetTarget.value = row;
+  resetForm.password = "";
+  resetForm.confirm = "";
+  resetVisible.value = true;
+  nextTick(() => resetFormRef.value?.clearValidate());
+}
+
+async function onResetSubmit() {
+  if (!resetFormRef.value || !resetTarget.value) return;
+  const valid = await resetFormRef.value.validate().catch(() => false);
+  if (!valid) return;
+  resetSaving.value = true;
+  try {
+    await resetUserPassword(resetTarget.value.id, resetForm.password);
+    message(`用户“${resetTarget.value.username}”的密码已重置`, {
+      type: "success"
+    });
+    resetVisible.value = false;
+  } catch (error) {
+    message(apiErrorDetail(error, "重置密码失败"), { type: "error" });
+  } finally {
+    resetSaving.value = false;
+  }
+}
+
+// ---------------------------------------------------------------- 删除
+
+async function onDelete(row: UserRecord) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除用户“${row.username}”？删除后无法恢复。`,
+      "删除用户",
+      {
+        type: "warning",
+        confirmButtonText: "删除",
+        cancelButtonText: "取消",
+        confirmButtonClass: "el-button--danger"
+      }
+    );
+  } catch {
+    return;
+  }
+  try {
+    await deleteUser(row.id);
+    message(`用户“${row.username}”已删除`, { type: "success" });
+    // 当前页删空时回退一页，避免停在空列表
+    if (rows.value.length === 1 && page.offset > 0) {
+      page.offset -= page.limit;
+    }
+    await load();
+  } catch (error) {
+    message(apiErrorDetail(error, "删除用户失败"), { type: "error" });
+  }
+}
+
+const columns: TableColumnList = [
+  { label: "ID", prop: "id", width: 80 },
+  { label: "用户名", prop: "username", minWidth: 140, showOverflowTooltip: true },
+  { label: "昵称", prop: "nickname", minWidth: 140, showOverflowTooltip: true },
+  { label: "角色", prop: "roles", slot: "roles", minWidth: 220 },
+  { label: "状态", prop: "is_active", slot: "is_active", width: 90 },
+  { label: "创建时间", prop: "created_at", slot: "created_at", width: 190 },
+  {
+    label: "操作",
+    prop: "operation",
+    slot: "operation",
+    width: 300,
+    fixed: "right"
+  }
+];
+
+onMounted(() => {
+  load();
+  loadRoles();
+});
+</script>
+
+<template>
+  <div class="p-4">
+    <PureTableBar title="用户管理" :columns="columns" @refresh="load">
+      <template #buttons>
+        <div class="flex flex-wrap items-center gap-2">
+          <el-input
+            v-model="keyword"
+            clearable
+            placeholder="搜索用户名 / 昵称"
+            class="w-56"
+            @keyup.enter="onSearch"
+            @clear="onSearch"
+          />
+          <el-button @click="onSearch">搜索</el-button>
+          <el-button :disabled="loading" @click="load">刷新</el-button>
+          <el-button v-perms="'users:write'" type="primary" @click="openCreate">
+            新建用户
+          </el-button>
+        </div>
+      </template>
+      <template v-slot="{ size }">
+        <pure-table
+          :size="size"
+          row-key="id"
+          adaptive
+          :loading="loading"
+          :data="rows"
+          :columns="columns"
+        >
+          <template #roles="{ row }">
+            <div v-if="row.roles.length" class="flex flex-wrap gap-1">
+              <el-tag
+                v-for="role in row.roles"
+                :key="role.id"
+                :size="size"
+                effect="plain"
+              >
+                {{ role.name }}
+              </el-tag>
+            </div>
+            <span v-else class="text-gray-400">未分配</span>
+          </template>
+          <template #is_active="{ row }">
+            <el-tag
+              :size="size"
+              :type="row.is_active ? 'success' : 'info'"
+              effect="plain"
+            >
+              {{ row.is_active ? "启用" : "停用" }}
+            </el-tag>
+          </template>
+          <template #created_at="{ row }">
+            {{ formatDateTime(row.created_at) }}
+          </template>
+          <template #operation="{ row }">
+            <el-button
+              v-perms="'users:write'"
+              :size="size"
+              link
+              type="primary"
+              @click="openEdit(row)"
+            >
+              编辑
+            </el-button>
+            <el-button
+              v-perms="'users:write'"
+              :size="size"
+              link
+              type="primary"
+              @click="openAssign(row)"
+            >
+              分配角色
+            </el-button>
+            <el-button
+              v-perms="'users:write'"
+              :size="size"
+              link
+              type="primary"
+              @click="openReset(row)"
+            >
+              重置密码
+            </el-button>
+            <el-button
+              v-perms="'users:write'"
+              :size="size"
+              link
+              type="danger"
+              @click="onDelete(row)"
+            >
+              删除
+            </el-button>
+          </template>
+        </pure-table>
+        <div class="mt-3 flex items-center justify-between text-sm">
+          <span class="text-gray-500">
+            后端列表接口不返回总数；第 {{ pageIndex }} 页，本页 {{ rows.length }} 条
+          </span>
+          <div class="flex gap-2">
+            <el-button :disabled="page.offset === 0 || loading" @click="goPrev">
+              上一页
+            </el-button>
+            <el-button :disabled="!hasNext || loading" @click="goNext">
+              下一页
+            </el-button>
+          </div>
+        </div>
+      </template>
+    </PureTableBar>
+
+    <el-dialog
+      v-model="dialogVisible"
+      :title="isCreate ? '新建用户' : '编辑用户'"
+      width="560px"
+      :close-on-click-modal="false"
+      append-to-body
+    >
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
+        <el-form-item label="用户名" prop="username">
+          <el-input
+            v-model="form.username"
+            clearable
+            :disabled="!isCreate"
+            placeholder="登录名，唯一"
+          />
+        </el-form-item>
+        <el-form-item label="昵称">
+          <el-input v-model="form.nickname" clearable placeholder="显示名称（可选）" />
+        </el-form-item>
+        <el-form-item v-if="isCreate" label="初始密码" prop="password">
+          <el-input
+            v-model="form.password"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            placeholder="至少 8 位"
+          />
+        </el-form-item>
+        <el-form-item v-if="isCreate" label="角色">
+          <el-select
+            v-model="form.role_ids"
+            multiple
+            filterable
+            clearable
+            placeholder="可选，支持多选"
+            class="w-full"
+          >
+            <el-option
+              v-for="role in roles"
+              :key="role.id"
+              :label="`${role.name}（${role.code}）`"
+              :value="role.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="form.is_active" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="onSubmit">
+          {{ isCreate ? "创建" : "保存" }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="assignVisible"
+      :title="`分配角色${assignTarget ? ` - ${assignTarget.username}` : ''}`"
+      width="520px"
+      :close-on-click-modal="false"
+      append-to-body
+    >
+      <el-select
+        v-model="assignRoleIds"
+        multiple
+        filterable
+        clearable
+        placeholder="选择该用户拥有的角色；不选表示不分配任何角色"
+        class="w-full"
+      >
+        <el-option
+          v-for="role in roles"
+          :key="role.id"
+          :label="`${role.name}（${role.code}）`"
+          :value="role.id"
+        />
+      </el-select>
+      <p class="mt-2 text-xs text-gray-500">
+        提交后会以当前选择覆盖该用户的角色集合。
+      </p>
+      <template #footer>
+        <el-button @click="assignVisible = false">取消</el-button>
+        <el-button type="primary" :loading="assigning" @click="onAssign">
+          保存
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="resetVisible"
+      :title="`重置密码${resetTarget ? ` - ${resetTarget.username}` : ''}`"
+      width="480px"
+      :close-on-click-modal="false"
+      append-to-body
+    >
+      <el-form
+        ref="resetFormRef"
+        :model="resetForm"
+        :rules="resetRules"
+        label-width="100px"
+      >
+        <el-form-item label="新密码" prop="password">
+          <el-input
+            v-model="resetForm.password"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            placeholder="至少 8 位"
+          />
+        </el-form-item>
+        <el-form-item label="确认密码" prop="confirm">
+          <el-input
+            v-model="resetForm.confirm"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            placeholder="再次输入新密码"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="resetVisible = false">取消</el-button>
+        <el-button type="primary" :loading="resetSaving" @click="onResetSubmit">
+          重置
+        </el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>

@@ -6,9 +6,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.engine import Engine
 from sqlmodel import Session
 
-from src.application.services.auth import role_codes
+from src.application.services.auth import permission_codes
 from src.config.settings import settings
-from src.domain.models.auth import ADMIN_ROLE_CODE, User
+from src.domain.models.auth import User
+from src.domain.permissions import ALL_PERMISSION_CODE
 from src.domain.services.rate_limit import SlidingWindowLimiter
 from src.domain.services.tokens import TokenService
 from src.infrastructure.database import engine
@@ -110,35 +111,49 @@ def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
-def require_admin_user(user: CurrentUser, session: SessionDep) -> User:
-    if ADMIN_ROLE_CODE not in role_codes(session, user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin role required")
-    return user
+def require_permission(code: str):
+    """Build a dependency that requires one permission code.
 
-
-AdminDep = Annotated[User, Depends(require_admin_user)]
-
-
-def require_admin_streaming_user(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-    engine: EngineDep,
-    service: Annotated[TokenService, Depends(get_token_service)],
-) -> User:
-    """Admin check for long-lived responses; never holds a request-scoped session.
-
-    ``AdminDep`` 走 ``SessionDep``，会在整个 SSE 连接期间占住一条连接——那正是 M1b
-    把 ``/api/jobs/{id}/events`` 改成 ``EngineDep`` + 短会话所要避免的事情。这里用
-    同一个引擎自开自闭一条会话，连接在响应开始前就归还。
+    Admin short-circuits through the wildcard returned by ``permission_codes``;
+    every other user must have the code granted via an active role. Missing /
+    invalid tokens and disabled users keep the usual 401 contract.
     """
-    user_id = _access_claims(credentials, service)
-    with Session(engine) as session:
-        user = session.get(User, user_id)
-        codes = role_codes(session, user) if user is not None else []
-    if user is None or not user.is_active:
-        raise _unauthorized("user is not available")
-    if ADMIN_ROLE_CODE not in codes:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin role required")
-    return user
+
+    def dependency(user: CurrentUser, session: SessionDep) -> User:
+        codes = permission_codes(session, user)
+        if ALL_PERMISSION_CODE not in codes and code not in codes:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"permission '{code}' required",
+            )
+        return user
+
+    return dependency
 
 
-AdminStreamDep = Annotated[User, Depends(require_admin_streaming_user)]
+def require_permission_streaming(code: str):
+    """Permission check for long-lived responses (SSE), without a request session.
+
+    与 :func:`require_permission` 唯一的区别是会话来源：这里按 ``EngineDep``
+    自开自闭一条短会话，连接在响应开始前就归还，不会在整个 SSE 期间占住连接。
+    """
+
+    def dependency(
+        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+        engine: EngineDep,
+        service: Annotated[TokenService, Depends(get_token_service)],
+    ) -> User:
+        user_id = _access_claims(credentials, service)
+        with Session(engine) as session:
+            user = session.get(User, user_id)
+            codes = permission_codes(session, user) if user is not None else []
+        if user is None or not user.is_active:
+            raise _unauthorized("user is not available")
+        if ALL_PERMISSION_CODE not in codes and code not in codes:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"permission '{code}' required",
+            )
+        return user
+
+    return dependency

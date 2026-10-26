@@ -182,7 +182,12 @@ onMounted(load);
           {{ loading ? "加载中…" : `数据截至 ${loadedAt}` }}
         </span>
         <el-button :loading="loading" @click="load">刷新</el-button>
-        <el-button type="primary" :loading="maintaining" @click="onMaintenance">
+        <el-button
+          v-perms="'system:operate'"
+          type="primary"
+          :loading="maintaining"
+          @click="onMaintenance"
+        >
           执行维护
         </el-button>
       </div>

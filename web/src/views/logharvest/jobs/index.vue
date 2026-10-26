@@ -109,7 +109,11 @@ onMounted(load);
               :value="item"
             />
           </el-select>
-          <el-button type="primary" @click="dialogVisible = true">
+          <el-button
+            v-perms="'jobs:write'"
+            type="primary"
+            @click="dialogVisible = true"
+          >
             新建作业
           </el-button>
         </div>
@@ -149,11 +153,20 @@ onMounted(load);
               placement="top"
             >
               <span>
-                <el-button :size="size" link type="danger" disabled>取消</el-button>
+                <el-button
+                  v-perms="'jobs:operate'"
+                  :size="size"
+                  link
+                  type="danger"
+                  disabled
+                >
+                  取消
+                </el-button>
               </span>
             </el-tooltip>
             <el-button
               v-else
+              v-perms="'jobs:operate'"
               :size="size"
               link
               type="danger"

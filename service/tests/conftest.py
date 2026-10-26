@@ -21,14 +21,16 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, create_engine
+from sqlmodel import Session, create_engine, select
 
 from src.api import dependencies
 from src.api.dependencies import get_engine, get_session
 from src.application.services.auth import ensure_admin
+from src.application.services.rbac_seed import ensure_rbac_seed
 from src.config.settings import settings
 from src.domain import source_guard
-from src.domain.models.auth import User
+from src.domain.models.auth import Role, User, UserRole
+from src.domain.services.passwords import hash_password
 from src.domain.services.tokens import TokenService
 from src.infrastructure.database import create_db_and_tables
 from src.main import create_app
@@ -91,6 +93,34 @@ def client(engine: Engine) -> Iterator[TestClient]:
         yield test_client
 
 
+VIEWER_PASSWORD = "Viewer-Pass-123"
+OPERATOR_PASSWORD = "Operator-Pass-123"
+
+
+def _user_with_role(session: Session, username: str, role_code: str, password: str) -> User:
+    """Seed RBAC, then create an active user linked to one built-in role."""
+    ensure_rbac_seed(session)
+    role = session.exec(select(Role).where(Role.code == role_code)).one()
+    user = User(
+        username=username,
+        password_hash=hash_password(password),
+        nickname=username,
+    )
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    session.add(UserRole(user_id=user.id, role_id=role.id))
+    session.commit()
+    return user
+
+
+def _headers_for(user: User) -> dict[str, str]:
+    token, _ = TokenService(secret_key=UNIT_SECRET).create_access_token(
+        {"sub": str(user.id), "username": user.username}
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
 @pytest.fixture()
 def admin_user(session: Session) -> User:
     return ensure_admin(session, "admin", "Test-Admin-Pass")
@@ -98,7 +128,24 @@ def admin_user(session: Session) -> User:
 
 @pytest.fixture()
 def auth_headers(admin_user: User) -> dict[str, str]:
-    token, _ = TokenService(secret_key=UNIT_SECRET).create_access_token(
-        {"sub": str(admin_user.id), "username": admin_user.username}
-    )
-    return {"Authorization": f"Bearer {token}"}
+    return _headers_for(admin_user)
+
+
+@pytest.fixture()
+def viewer_user(session: Session) -> User:
+    return _user_with_role(session, "viewer", "viewer", VIEWER_PASSWORD)
+
+
+@pytest.fixture()
+def viewer_headers(viewer_user: User) -> dict[str, str]:
+    return _headers_for(viewer_user)
+
+
+@pytest.fixture()
+def operator_user(session: Session) -> User:
+    return _user_with_role(session, "operator", "operator", OPERATOR_PASSWORD)
+
+
+@pytest.fixture()
+def operator_headers(operator_user: User) -> dict[str, str]:
+    return _headers_for(operator_user)

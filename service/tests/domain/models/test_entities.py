@@ -32,6 +32,9 @@ CORE_TABLES = {
     "users",
     "roles",
     "user_roles",
+    # RBAC：菜单即权限，角色与菜单多对多。
+    "menus",
+    "role_menus",
 }
 
 

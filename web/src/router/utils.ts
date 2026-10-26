@@ -1,4 +1,5 @@
 import {
+  type Router,
   type RouterHistory,
   type RouteRecordRaw,
   type RouteComponent,
@@ -7,6 +8,8 @@ import {
 } from "vue-router";
 import { router } from "./index";
 import { isProxy, toRaw } from "vue";
+import { getAsyncRoutes } from "@/api/user";
+import type { AsyncRouteRecord } from "@/api/rbacTypes";
 import { useTimeoutFn } from "@vueuse/core";
 import {
   isString,
@@ -21,7 +24,10 @@ import { userKey, type DataInfo } from "@/utils/auth";
 import { type menuType, routerArrays } from "@/layout/types";
 import { useMultiTagsStoreHook } from "@/store/modules/multiTags";
 import { usePermissionStoreHook } from "@/store/modules/permission";
+const Layout = () => import("@/layout/index.vue");
 const IFrame = () => import("@/layout/frame.vue");
+/** 目录路由（component 为空、带 children）的容器，避免嵌套完整 Layout */
+const EmptyLayout = () => import("@/layout/empty-layout.vue");
 // https://cn.vitejs.dev/guide/features.html#glob-import
 const modulesRoutes = import.meta.glob("/src/views/**/*.{vue,tsx}");
 
@@ -77,13 +83,25 @@ function isOneOfArray(a: Array<string>, b: Array<string>) {
     : true;
 }
 
-/** 从localStorage里取出当前登录用户的角色roles，过滤无权限的菜单 */
+/** 从localStorage里取出当前登录用户的角色与权限，过滤无权限的菜单 */
 function filterNoPermissionTree(data: RouteComponent[]) {
-  const currentRoles =
-    storageLocal().getItem<DataInfo<number>>(userKey)?.roles ?? [];
-  const newTree = cloneDeep(data).filter((v: any) =>
-    isOneOfArray(v.meta?.roles, currentRoles)
-  );
+  const info = storageLocal().getItem<DataInfo<number>>(userKey);
+  const currentRoles = info?.roles ?? [];
+  const currentPermissions = info?.permissions ?? [];
+  const newTree = cloneDeep(data).filter((v: any) => {
+    if (!isOneOfArray(v.meta?.roles, currentRoles)) return false;
+    // 静态路由可以用 meta.auths 声明自身需要的权限（例如首页概览需要
+    // system:read）；动态路由的 meta.auths 是“按钮权限全集”，任一命中即放行。
+    const required: string[] | undefined = v.meta?.auths;
+    if (Array.isArray(required) && required.length) {
+      if (!currentPermissions.includes("*:*:*")) {
+        if (!required.some(code => currentPermissions.includes(code))) {
+          return false;
+        }
+      }
+    }
+    return true;
+  });
   newTree.forEach(
     (v: any) => v.children && (v.children = filterNoPermissionTree(v.children))
   );
@@ -151,11 +169,11 @@ function addPathMatch() {
 }
 
 /** 处理动态路由（后端返回的路由） */
-function handleAsyncRoutes(routeList) {
+function handleAsyncRoutes(routeList: AsyncRouteRecord[]) {
   if (routeList.length === 0) {
     usePermissionStoreHook().handleWholeMenus(routeList);
   } else {
-    formatFlatteningRoutes(addAsyncRoutes(routeList)).map(
+    formatFlatteningRoutes(addAsyncRoutes(routeList) ?? []).map(
       (v: RouteRecordRaw) => {
         // 防止重复添加路由
         if (
@@ -182,8 +200,18 @@ function handleAsyncRoutes(routeList) {
     usePermissionStoreHook().handleWholeMenus(routeList);
   }
   if (!useMultiTagsStoreHook().getMultiTagsCache) {
+    // 首页概览需要 system:read；无此权限时 wholeMenus 里不会有 /home，
+    // 默认标签也不能留一个点进去只会 403 的「概览」。
+    const homeVisible = usePermissionStoreHook().wholeMenus.some(
+      menu =>
+        menu.path === "/home" ||
+        menu.children?.some(child => child.path === "/home")
+    );
+    const defaultTags = routerArrays.filter(
+      tag => tag.path !== "/home" || homeVisible
+    );
     useMultiTagsStoreHook().handleTags("equal", [
-      ...routerArrays,
+      ...defaultTags,
       ...usePermissionStoreHook().flatteningRoutes.filter(
         v => v?.meta?.fixedTag
       )
@@ -193,17 +221,36 @@ function handleAsyncRoutes(routeList) {
 }
 
 /**
- * 初始化路由。
+ * 初始化路由：登录完成或刷新页面时拉取 `GET /api/auth/routes`，
+ * 把后端按角色过滤后的菜单树注册进 router。
  *
- * LogHarvest 的菜单与路由全部在前端静态定义（`src/router/modules/*.ts`），
- * 因此这里不再请求 `GET /api/auth/routes`（M2a 后端该接口固定返回空数组，
- * 也没有服务端菜单管理）。保留 `handleAsyncRoutes` 的签名与实现，是为了
- * `layout` 的调用点不变；传入空数组时只走“静态菜单组装”这条分支。
+ * 容错：请求失败或信封 `code !== 0` 时回退为空数组（只保留静态首页菜单），
+ * 并照常 resolve(router)——守卫在 `initRouter().then()` 里继续走，不会卡死。
  */
-function initRouter() {
+function initRouter(): Promise<Router> {
   return new Promise(resolve => {
-    handleAsyncRoutes([]);
-    resolve(router);
+    getAsyncRoutes()
+      .then(res => {
+        if (res?.code === 0 && Array.isArray(res.data)) {
+          handleAsyncRoutes(cloneDeep(res.data));
+        } else {
+          console.error(
+            "[router] GET /api/auth/routes 返回异常，已回退为空菜单：",
+            res?.code,
+            res?.message
+          );
+          handleAsyncRoutes([]);
+        }
+        resolve(router);
+      })
+      .catch(error => {
+        console.error(
+          "[router] GET /api/auth/routes 请求失败，已回退为空菜单：",
+          error
+        );
+        handleAsyncRoutes([]);
+        resolve(router);
+      });
   });
 }
 
@@ -286,33 +333,85 @@ function handleAliveRoute({ name }: ToRouteType, mode?: string) {
   }
 }
 
-/** 过滤后端传来的动态路由 重新生成规范路由 */
-function addAsyncRoutes(arrRoutes: Array<RouteRecordRaw>) {
-  if (!arrRoutes || !arrRoutes.length) return;
+/**
+ * 把后端返回的页面组件路径（如 `"logharvest/jobs/index"`）映射到
+ * `src/views` 下的懒加载组件。先做后缀精确匹配，再退回 `includes`，
+ * 避免 `jobs` 之类的短路径误命中别的页面。
+ */
+function findPageComponent(component: string) {
+  const normalized = component
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/\.(vue|tsx)$/i, "");
+  if (!normalized) return undefined;
   const modulesRoutesKeys = Object.keys(modulesRoutes);
-  arrRoutes.forEach((v: RouteRecordRaw) => {
+  const exact = modulesRoutesKeys.find(key =>
+    [`/views/${normalized}.vue`, `/views/${normalized}.tsx`].some(suffix =>
+      key.endsWith(suffix)
+    )
+  );
+  if (exact) return modulesRoutes[exact];
+  const fuzzy = modulesRoutesKeys.find(key => key.includes(normalized));
+  return fuzzy ? modulesRoutes[fuzzy] : undefined;
+}
+
+/** 子路由允许写相对 path；统一成绝对 path，菜单与 `getTopMenu` 的跳转才不会偏 */
+function normalizeRoutePath(path: string | undefined, parentPath?: string) {
+  const value = (path ?? "").trim();
+  if (!value) return parentPath || "/";
+  if (/^https?:\/\//.test(value) || value.startsWith("/")) return value;
+  if (!parentPath || parentPath === "/") return `/${value}`;
+  return `${parentPath.replace(/\/+$/, "")}/${value}`;
+}
+
+/** 过滤后端传来的动态路由 重新生成规范路由 */
+function addAsyncRoutes(
+  arrRoutes: Array<Record<string, any>>,
+  parentPath?: string
+): RouteRecordRaw[] | undefined {
+  if (!arrRoutes || !arrRoutes.length) return;
+  arrRoutes.forEach((v: Record<string, any>) => {
+    const hasChildren = Array.isArray(v.children) && v.children.length > 0;
+    v.path = normalizeRoutePath(v.path, parentPath);
+    v.meta = v.meta ?? {};
     // 将backstage属性加入meta，标识此路由为后端返回路由
     v.meta.backstage = true;
-    // 父级的redirect属性取值：如果子级存在且父级的redirect属性不存在，默认取第一个子级的path；如果子级存在且父级的redirect属性存在，取存在的redirect属性，会覆盖默认值
-    if (v?.children && v.children.length && !v.redirect)
-      v.redirect = v.children[0].path;
     // 父级的name属性取值：如果子级存在且父级的name属性不存在，默认取第一个子级的name；如果子级存在且父级的name属性存在，取存在的name属性，会覆盖默认值（注意：测试中发现父级的name不能和子级name重复，如果重复会造成重定向无效（跳转404），所以这里给父级的name起名的时候后面会自动加上`Parent`，避免重复）
-    if (v?.children && v.children.length && !v.name)
-      v.name = (v.children[0].name as string) + "Parent";
+    if (hasChildren && !v.name) v.name = `${v.children[0].name}Parent`;
+
     if (v.meta?.frameSrc) {
       v.component = IFrame;
+    } else if (v.component === "Layout") {
+      // 后端约定：顶级页面路由的容器写 "Layout"
+      v.component = Layout;
+    } else if (v.component) {
+      const matched = findPageComponent(v.component);
+      if (matched) {
+        v.component = matched;
+      } else {
+        // 不静默置空，否则 vue-router 会报错且页面白屏无从排查
+        console.error(
+          `[router] 动态路由 "${v.path}" 的 component "${v.component}" 在 src/views 下找不到，已用 EmptyLayout 兜底（该页面会空白）`
+        );
+        v.component = EmptyLayout;
+      }
+    } else if (hasChildren) {
+      // 目录路由：只用 router-view 占位，不能复用完整 Layout（否则嵌套侧边栏）
+      v.component = EmptyLayout;
     } else {
-      // 对后端传component组件路径和不传做兼容（如果后端传component组件路径，那么path可以随便写，如果不传，component组件路径会跟path保持一致）
-      const index = v?.component
-        ? modulesRoutesKeys.findIndex(ev => ev.includes(v.component as any))
-        : modulesRoutesKeys.findIndex(ev => ev.includes(v.path));
-      v.component = modulesRoutes[modulesRoutesKeys[index]];
+      console.error(
+        `[router] 动态路由 "${v.path}" 既没有 component 也没有 children，已用 EmptyLayout 兜底（该页面会空白）`
+      );
+      v.component = EmptyLayout;
     }
-    if (v?.children && v.children.length) {
-      addAsyncRoutes(v.children);
+
+    if (hasChildren) {
+      addAsyncRoutes(v.children, v.path);
+      // 父级的redirect：子级路径已归一化，缺省取第一个子级；后端显式给的相对路径也补齐
+      v.redirect = normalizeRoutePath(v.redirect || v.children[0].path, v.path);
     }
   });
-  return arrRoutes;
+  return arrRoutes as unknown as RouteRecordRaw[];
 }
 
 /** 获取路由历史模式 https://next.router.vuejs.org/zh/guide/essentials/history-mode.html */
@@ -367,11 +466,12 @@ function handleTopMenu(route) {
   }
 }
 
-/** 获取所有菜单中的第一个菜单（顶级菜单）*/
-function getTopMenu(tag = false): menuType {
+/** 获取所有菜单中的第一个菜单（顶级菜单）；没有任何可见菜单时返回 undefined */
+function getTopMenu(tag = false): menuType | undefined {
   const topMenu = handleTopMenu(
-    usePermissionStoreHook().wholeMenus[0]?.children[0]
+    usePermissionStoreHook().wholeMenus[0]?.children?.[0]
   );
+  if (!topMenu) return undefined;
   tag && useMultiTagsStoreHook().handleTags("push", topMenu);
   return topMenu;
 }

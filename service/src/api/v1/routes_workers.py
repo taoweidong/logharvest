@@ -1,10 +1,14 @@
-from fastapi import APIRouter, HTTPException, Query
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
-from src.api.dependencies import AdminDep, SessionDep
+from src.api.dependencies import SessionDep, require_permission
 from src.api.v1.schemas import WorkerRead
 from src.application.services.queries import list_workers
+from src.domain.models.auth import User
 from src.domain.models.entities import Worker
+from src.domain.permissions import Permissions
 
 router = APIRouter(prefix="/workers", tags=["workers"])
 
@@ -19,7 +23,7 @@ def _get_worker(session: Session, worker_id: str) -> Worker:
 @router.get("", response_model=list[WorkerRead])
 def get_workers(
     session: SessionDep,
-    _: AdminDep,
+    _: Annotated[User, Depends(require_permission(Permissions.WORKERS_READ))],
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
@@ -28,7 +32,11 @@ def get_workers(
 
 
 @router.post("/{worker_id}/drain")
-def drain_worker(worker_id: str, session: SessionDep, _: AdminDep):
+def drain_worker(
+    worker_id: str,
+    session: SessionDep,
+    _: Annotated[User, Depends(require_permission(Permissions.WORKERS_OPERATE))],
+):
     worker = _get_worker(session, worker_id)
     worker.drain_requested = True
     # An offline worker must stay offline so the management view keeps showing
@@ -45,7 +53,11 @@ def drain_worker(worker_id: str, session: SessionDep, _: AdminDep):
 
 
 @router.post("/{worker_id}/resume")
-def resume_worker(worker_id: str, session: SessionDep, _: AdminDep):
+def resume_worker(
+    worker_id: str,
+    session: SessionDep,
+    _: Annotated[User, Depends(require_permission(Permissions.WORKERS_OPERATE))],
+):
     worker = _get_worker(session, worker_id)
     if worker.status == "offline":
         raise HTTPException(status_code=409, detail="worker is offline")
@@ -63,7 +75,7 @@ def resume_worker(worker_id: str, session: SessionDep, _: AdminDep):
 @router.post("/drain-version")
 def drain_version(
     session: SessionDep,
-    _: AdminDep,
+    _: Annotated[User, Depends(require_permission(Permissions.WORKERS_OPERATE))],
     version: str = Query(min_length=1),
 ):
     # A rolling upgrade must also take effect after a restart, so offline

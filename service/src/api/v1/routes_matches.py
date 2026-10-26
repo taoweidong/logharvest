@@ -1,10 +1,13 @@
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from src.api.dependencies import AdminDep, SessionDep
+from src.api.dependencies import SessionDep, require_permission
 from src.api.v1.schemas import MatchRead
 from src.application.services.queries import list_matches
+from src.domain.models.auth import User
+from src.domain.permissions import Permissions
 
 router = APIRouter(prefix="/matches", tags=["matches"])
 
@@ -18,7 +21,7 @@ def _as_utc(value: datetime) -> datetime:
 @router.get("", response_model=list[MatchRead])
 def get_matches(
     session: SessionDep,
-    _: AdminDep,
+    _: Annotated[User, Depends(require_permission(Permissions.MATCHES_READ))],
     job_id: int | None = None,
     rule_id: str | None = None,
     file_name: str | None = None,

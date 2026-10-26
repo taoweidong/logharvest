@@ -22,7 +22,7 @@ def test_login_returns_envelope_with_tokens_and_roles(client, session) -> None:
     data = body["data"]
     assert data["username"] == "admin"
     assert data["roles"] == [ADMIN_ROLE_CODE]
-    assert data["permissions"] == []
+    assert data["permissions"] == ["*:*:*"]
     assert data["accessToken"] and data["refreshToken"]
     assert isinstance(data["expires"], int)
 
@@ -119,7 +119,14 @@ def test_auth_routes_and_logout_require_login(client, session) -> None:
 
     routes = client.get("/api/auth/routes", headers=headers)
     assert routes.status_code == 200
-    assert routes.json() == {"code": 0, "message": "ok", "data": []}
+    body = routes.json()
+    assert body["code"] == 0 and body["message"] == "ok"
+    paths = {route["path"] for route in body["data"]}
+    assert {"/logharvest", "/system"} <= paths
+    logharvest = next(route for route in body["data"] if route["path"] == "/logharvest")
+    page_auths = [child["meta"]["auths"] for child in logharvest["children"] if child["component"]]
+    assert page_auths
+    assert all("jobs:read" in auths for auths in page_auths)
 
     logout = client.post("/api/logout", headers=headers)
     assert logout.status_code == 200

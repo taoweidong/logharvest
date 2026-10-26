@@ -1,6 +1,8 @@
-from fastapi import APIRouter, HTTPException, status
+from typing import Annotated
 
-from src.api.dependencies import AdminDep, EngineDep, SessionDep
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from src.api.dependencies import EngineDep, SessionDep, require_permission
 from src.api.v1.schemas import (
     MaintenanceRunRead,
     SystemOverviewRead,
@@ -8,17 +10,25 @@ from src.api.v1.schemas import (
 )
 from src.application.services.maintenance import MaintenanceRequiresPostgres, run_maintenance
 from src.application.services.queries import system_overview, system_status
+from src.domain.models.auth import User
+from src.domain.permissions import Permissions
 
 router = APIRouter(tags=["system"])
 
 
 @router.get("/system/status", response_model=SystemStatusRead)
-def get_system_status(session: SessionDep, _: AdminDep):
+def get_system_status(
+    session: SessionDep,
+    _: Annotated[User, Depends(require_permission(Permissions.SYSTEM_READ))],
+):
     return system_status(session)
 
 
 @router.get("/system/overview", response_model=SystemOverviewRead)
-def get_system_overview(session: SessionDep, _: AdminDep):
+def get_system_overview(
+    session: SessionDep,
+    _: Annotated[User, Depends(require_permission(Permissions.SYSTEM_READ))],
+):
     return system_overview(session)
 
 
@@ -27,7 +37,10 @@ def get_system_overview(session: SessionDep, _: AdminDep):
     response_model=MaintenanceRunRead,
     responses={503: {"description": "队列数据库不是 PostgreSQL"}},
 )
-def trigger_maintenance(engine: EngineDep, _: AdminDep):
+def trigger_maintenance(
+    engine: EngineDep,
+    _: Annotated[User, Depends(require_permission(Permissions.SYSTEM_OPERATE))],
+):
     """Run the server-side compensation sweeps once, right now.
 
     Worker 循环里的同类清扫只在有存活进程时执行；这里给运维（以及外部 cron /

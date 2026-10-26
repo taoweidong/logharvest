@@ -15,9 +15,10 @@ from src.domain.models.entities import utcnow
 # 规划期校验过的是"当时的路径字符串"，执行期必须重新按 realpath 判一次。
 CLAIM_SQL = """
 WITH picked AS (
-    SELECT t.id
+    SELECT t.id, d.root_path
     FROM file_tasks t
     JOIN jobs j ON j.id = t.job_id
+    LEFT JOIN data_sources d ON d.id = j.data_source_id
     WHERE t.status = 'pending'
       AND t.scheduled_at <= now()
       AND j.cancel_requested = false
@@ -32,11 +33,9 @@ SET status = 'running',
     started_at = COALESCE(t.started_at, now()),
     heartbeat_at = now()
 FROM picked p
-JOIN jobs j ON j.id = t.job_id
-LEFT JOIN data_sources d ON d.id = j.data_source_id
 WHERE t.id = p.id
 RETURNING t.id, t.job_id, t.source_path, t.file_name, t.attempts, t.size_bytes, t.mtime,
-          d.root_path AS root_path;
+          p.root_path AS root_path;
 """
 
 RULE_SQL = """
