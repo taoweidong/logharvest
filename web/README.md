@@ -105,7 +105,10 @@ Worker 都会显示 `—`。界面把 `NULL` 一律渲染成 `—`（未知）�
 所以所有分页都是窗口式「上一页 / 下一页」（本页不足 `limit` 即视为末段）或游标式
 「下一页 / 回到第一屏」，没有页码跳转；只有认证接口
 （`POST /api/login`、`POST /api/refresh-token`、`POST /api/logout`、`GET /api/auth/routes`）
-使用 `{code, message, data}` 信封。菜单在前端静态定义，服务端没有动态菜单。
+使用 `{code, message, data}` 信封。业务菜单与路由由后端 `GET /api/auth/routes` 按角色下发，
+前端不再维护静态业务菜单；`src/router/utils.ts#addAsyncRoutes` 把目录路由映射为
+`EmptyLayout`（只含 `<router-view />`，避免嵌套侧边栏），页面组件按
+`src/views/**/*.vue` 的路径字符串解析。
 
 **已对本机 8000 端口的 dev 后端实测核对**（只发 GET 请求）：`GET /api/matches` 缺作用域、
 只给 `created_from` 一端、只给 `created_before` 都返回 `422` 且 `detail` 原文是
@@ -114,31 +117,42 @@ Worker 都会显示 `—`。界面把 `NULL` 一律渲染成 `—`（未知）�
 `limit` 上限 500（`/api/workers` 是 200）；`/api/matches`、`/api/workers` 返回裸数组；
 `MatchRead` / `WorkerRead` / `SystemStatusRead` 的字段名与 `src/api/logharvestTypes.ts` 逐项相符。
 
-**待合流复核**（契约按后端约定先行实现，当前运行的后端实例还没有这些端点）：
-`POST /api/login` 等认证接口、`GET /api/system/overview`、`POST /api/system/maintenance`、
-`GET /api/jobs/{id}/files?status=`（状态筛选下推到服务端，已在主仓 `routes_jobs.py:66-76` 源码核对）、
-`POST /api/jobs/{id}/files/retry-failed`、
-`GET /api/jobs/{id}/files/{task_id}/attempts`（M2c Task 3，按 `list[FileTaskAttemptRead]`
-先行对接，界面在接口缺失时显示 `HTTP 404` 原文而不是空表）、
-`python -m scripts.seed_admin` 的确切命令与密码来源。
-
-Worker 资源四列同样按 M2c Task 4 的约定对接：`WorkerRead` 的字段名与可空性已在
-`service/src/api/v1/schemas.py:130-144` 源码核对，但**写入方与实测值尚未验证**——
-需要升级到 Task 4 的 Worker 并重启后，页面上才会出现真实数字。
+**历史核对记录**：M2c 期间对 `POST /api/login`、`GET /api/system/overview`、
+`POST /api/system/maintenance`、`GET /api/jobs/{id}/files?status=`、尝试历史与
+`python -m scripts.seed_admin` 的契约核对均已完成；RBAC 改造后这些接口与新增的
+用户/角色/菜单接口已在真实后端实例上联调。
 
 ## 验证口径
 
+质量门槛是 `pnpm typecheck` 与 `pnpm build`。RBAC 改造额外使用真实后端 +
+浏览器可访问性快照/DOM 断言验证了 admin 与 viewer 的动态菜单、页面加载与按钮显隐。
+本项目的开发环境里内置浏览器是一个隐藏页（截图失败、`innerWidth` 为 0、
+`requestAnimationFrame` 冻结），**未做人工视觉截图确认**；上述检查能证明
+类型、构建、路由注册与数据渲染，但不能替代视觉走查。
+
+## RBAC 管理页与按钮权限
+
+- `src/views/system/users`：用户列表、新建/编辑、分配角色、重置密码、删除、启停；
+- `src/views/system/roles`：角色 CRUD、菜单/权限树精确授权（`check-strictly`）、系统角色 admin 只读；
+- `src/views/system/menus`：目录/页面/权限三级菜单树管理，内置菜单仅允许修改展示字段；
+- `src/api/rbac.ts` / `rbacTypes.ts`：上述页面的纯 REST API 与类型；
+- 登录返回的 `permissions`（admin 为 `*:*:*`）驱动 `v-perms`；动态路由的 `meta.auths`
+  同时可用于 `v-auth`。既有业务页面的写/操作按钮已按 `jobs:write`、`jobs:operate`、
+  `datasources:write`、`rulesets:write`、`workers:operate`、`system:operate` 隐藏。
+- 权限或角色变更后需重新登录：前端 `permissions` 是登录时的快照，后端接口权限实时生效。
+
 质量门槛是 `pnpm typecheck` 与 `pnpm build`。本项目的开发环境里内置浏览器是一个隐藏页
-（截图失败、`innerWidth` 为 0、`requestAnimationFrame` 冻结），**没有做过任何人工视觉确认**，
+（截图失败、`innerWidth` 为 0、`requestAnimationFrame` 冻结），**未做人工视觉确认**，
 因此上述命令只能证明类型与产物可构建，不能证明每个界面渲染正确。
-M2c Task 5 的尝试历史抽屉、Worker 资源列同样只过了这两道门；`@pureadmin/table` 的
-`slot` 约定（见上）是源码核对 + Node 侧插槽归一化行为验证的结论，也不是界面截图结论。
+`@pureadmin/table` 的 `slot` 约定（见上）是源码核对 + Node 侧插槽归一化行为验证的结论，
+也不是界面截图结论。
 
 后端接口清单见 `service/README.md`。
 
 ## 说明
 
-- 菜单与路由在前端静态定义（`src/router/modules/*.ts`），没有服务端动态菜单。
+- 业务菜单与路由由后端 `GET /api/auth/routes` 动态下发；`src/router/modules` 只保留首页与
+  登录/错误页等静态路由。
 - `public/platform-config.json` 与 `types/*.d.ts` 是框架启动与 `@/` 别名类型的必需品，删除会导致
   `main.ts` 启动报错或 typecheck 失败。
 - 本 fork 未复制上游的 eslint/stylelint/husky/playwright 配置与依赖，因此没有 `pnpm lint`；

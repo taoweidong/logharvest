@@ -131,13 +131,41 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` 已从认证路径与
 | `401` | 用户不存在或 `is_active=false` | `user is not available` |
 | `401` | 登录时用户名或口令错误 | `invalid credentials` |
 | `403` | 口令正确但账号被停用 | `user is disabled` |
-| `403` | 已认证但没有 `admin` 角色 | `admin role required` |
+| `403` | 已认证但缺少该接口要求的权限码 | `permission '<code>' required` |
 
 受保护接口返回的 `401`（认证依赖发出）带 `WWW-Authenticate: Bearer` 头；`POST /api/login` 的 `401` 是普通 `HTTPException`，只有 `{"detail": "invalid credentials"}`，不带该头。
 
 **响应信封**：只有 `POST /api/login`、`POST /api/refresh-token`、`GET /api/auth/routes`、`POST /api/logout` 返回 `{"code": 0, "message": "ok", "data": ...}`（前端基座按 `data.code === 0` 判定）；其余业务接口保持纯 REST 对象与 `{"detail": ...}` 错误体，不包信封。
 
-**RBAC 边界（有意的最简实现）**：授权只看 `admin` 这一个角色码，`roles`/`user_roles` 表已经建好但没有角色管理接口；不做动态菜单、按钮级权限，菜单位在前端代码里静态定义，`GET /api/auth/routes` 因此返回空数组。
+**RBAC（菜单即权限）**：`menus` 表同时承载目录、页面与权限节点（`menu_type` 0/1/2），权限码是 `menu_type=2` 的 `name`（如 `jobs:read`）。`roles` 增加 `description`/`is_active`/`is_system`，`role_menus`、`user_roles` 建立角色-菜单与用户-角色多对多。启动时幂等种子写入 2 个目录、10 个页面、18 个权限节点和 admin/operator/viewer 三个默认角色；已存在的数据不会被覆盖。admin 是内置保护角色（`is_system`），operator/viewer 是可编辑的默认角色（仅在首次种子创建，删除后重启不会重建）。admin 不依赖授权表，权限解析返回通配 `*:*:*`；其他用户只拿到 active 角色关联的 active 权限节点。登录返回 `roles`/`permissions`；`GET /api/auth/routes` 按当前用户生成动态菜单/路由（没有可见子页面的目录会被剔除），页面 `meta.auths` 携带有效权限码供前端按钮级控制。业务接口按细粒度权限码校验（如 `jobs:read`/`jobs:write`/`jobs:operate`），SSE 使用短会话的流式权限依赖，不在连接期间占用请求级 Session。内置 admin 角色不可删除、不可停用、菜单授权只读；用户/角色/菜单管理接口见下表。
+
+### 用户 / 角色 / 菜单管理
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/users` | 用户列表（裸数组），支持 `keyword`（用户名/昵称）与 `limit`/`offset`；每行带 `roles` |
+| `POST` | `/api/users` | 创建用户（用户名唯一，口令至少 8 位，可带 `role_ids`） |
+| `PUT` | `/api/users/{id}` | 修改昵称/启用状态；禁止停用自己 |
+| `PUT` | `/api/users/{id}/roles` | 覆盖用户角色集合；移除最后一名 active admin 的 admin 角色返回 `409` |
+| `POST` | `/api/users/{id}/reset-password` | 重置口令（204） |
+| `DELETE` | `/api/users/{id}` | 删除用户（204）；禁止删除自己或最后一名 active admin |
+| `GET` | `/api/roles` | 角色列表（裸数组） |
+| `POST` | `/api/roles` | 创建角色；`code` 唯一且不可修改 |
+| `PUT` | `/api/roles/{id}` | 修改名称/描述/启用状态；系统角色（admin）不可停用 |
+| `DELETE` | `/api/roles/{id}` | 删除角色（204）；系统角色或仍被用户引用时 `409` |
+| `GET` | `/api/roles/{id}/menus` | 角色已授权菜单 id；admin 返回全部菜单 id |
+| `PUT` | `/api/roles/{id}/menus` | 覆盖角色菜单授权（204）；系统角色 `409` |
+| `GET` | `/api/menus` | 菜单平铺列表（裸数组） |
+| `GET` | `/api/menus/tree` | 菜单树（目录/页面/权限节点） |
+| `POST` | `/api/menus` | 新建自定义菜单；校验目录→页面→权限的父子关系 |
+| `PUT` | `/api/menus/{id}` | 更新菜单；内置菜单只允许改标题/图标/排序/显示/启用 |
+| `DELETE` | `/api/menus/{id}` | 删除自定义叶子菜单（204）；内置菜单或有子节点时 `409` |
+
+管理接口全部要求对应的 `users:*` / `roles:*` / `menus:*` 权限；未授权返回 `403`。权限变更在重新登录后反映到前端菜单与 `permissions` 快照，后端接口权限实时生效。
+
+**权限码的唯一来源**是 `src/domain/permissions.py`（`Permissions` 常量与通配码 `*:*:*`）：路由声明、启动种子、前端按钮权限三处共用这一份定义。加权限时先在那里加常量，再补种子条目——`tests/api/test_rbac_core.py::test_every_declared_permission_code_is_seeded` 会在权限码声明了却没有种子节点时立刻失败。写错权限码没有任何编译期报错，只会让接口对所有人返回 403。
+
+**动态路由的 component 契约**：后端菜单的 `component` 必须是 `src/views` 下的相对路径（页面写 `logharvest/jobs/index`，目录留空）。前端按它在 `import.meta.glob` 里找组件，找不到会兜底成空布局并在控制台报错，**不会**在构建期失败——改菜单数据前先确认路径存在。
 
 ## API（M1a 控制面 + M1b 队列/进度 + M2a 认证/运维）
 
@@ -146,7 +174,7 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` 已从认证路径与
 | `GET` | `/api/health` | 健康检查，无需认证 |
 | `POST` | `/api/login` | 用户名口令换 `accessToken`/`refreshToken`；返回信封，`roles`/`permissions` 在 `data` 里 |
 | `POST` | `/api/refresh-token` | 用 `refreshToken` 换新令牌对；返回信封 |
-| `GET` | `/api/auth/routes` | 需认证；固定返回空数组（菜单在前端静态定义）；返回信封 |
+| `GET` | `/api/auth/routes` | 需认证；按当前用户角色返回动态菜单/路由树（目录无可见页面时剔除），页面 `meta.auths` 带有效权限码；返回信封 |
 | `POST` | `/api/logout` | 需认证；只回 `data: null`，服务端无会话；返回信封 |
 | `GET` | `/api/data-sources` | 数据源列表，`limit`/`offset` 分页 |
 | `POST` | `/api/data-sources` | 创建数据源；名称重复返回 `409`；`read_only` 只接受 `true` |
@@ -270,7 +298,7 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 - `max_events` 默认 `0`（持续到作业终态），`1..100` 为调试/测试用的有限流；非法值返回 `422`。
 - 作业进入终态后发送最后一个快照再结束；作业在流中被删除时安静结束。
 - 每次轮询使用独立的短生命周期 Session，长连接不会占用数据库连接。
-- 该端点需要认证（`AdminDep`）：浏览器的 `EventSource` **不能**设置 `Authorization` 头，所以前端必须用 `fetch` + 流式读取（`response.body.getReader()`）自己解析 `event:`/`data:` 帧，而不是 `EventSource`。本里程碑没有为 SSE 提供查询参数口令等替代鉴权方式。
+- 该端点需要 `jobs:read` 权限（SSE 使用短会话的流式权限依赖）：浏览器的 `EventSource` **不能**设置 `Authorization` 头，所以前端必须用 `fetch` + 流式读取（`response.body.getReader()`）自己解析 `event:`/`data:` 帧，而不是 `EventSource`。本里程碑没有为 SSE 提供查询参数口令等替代鉴权方式。
 
 ## PostgreSQL 依赖与验证边界
 
@@ -328,20 +356,20 @@ uv run --with coverage coverage report --include="src/*"
 ### M2a（已交付）
 
 - 认证领域核心：`users`/`roles`/`user_roles` 三张表、bcrypt 口令哈希（超 72 字节先 SHA-256，拒绝空口令）、HS256 `TokenService`（`access`/`refresh` 带 `type` 声明、密钥最短 32 字符、过期与错签名一律拒绝）。
-- JWT 登录链路：`POST /api/login`、`POST /api/refresh-token`、`GET /api/auth/routes`、`POST /api/logout`（四个端点返回 `{"code","message","data"}` 信封），`AdminDep` 由"比对静态 token"替换为"解码 access token + 校验 `admin` 角色码"并接入全部业务路由，`scripts/seed_admin.py` 幂等创建管理员。
-- Alembic：`0001_baseline`（七张业务表）+ `0002_auth_tables`（显式 op），`src/infrastructure/migrations.py:run_migrations()` 由 lifespan 按 `LOGHARVEST_AUTO_CREATE_TABLES` 执行 `upgrade head`；测试关掉迁移改用 `create_all`，并用逐表逐列断言防止漏写迁移。
+- JWT 登录链路：`POST /api/login`、`POST /api/refresh-token`、`GET /api/auth/routes`、`POST /api/logout`（四个端点返回 `{"code","message","data"}` 信封），认证依赖解码 access token；后续 RBAC 把业务路由从单一 `AdminDep` 升级为细粒度 `require_permission(...)`，`scripts/seed_admin.py` 幂等创建管理员，启动时补齐 RBAC 种子。
+- Alembic：`0001_baseline`（七张业务表）+ `0002_auth_tables`（显式 op）+ `0004_rbac_menus`（menus/role_menus 与 roles 扩列），`src/infrastructure/migrations.py:run_migrations()` 由 lifespan 按 `LOGHARVEST_AUTO_CREATE_TABLES` 执行 `upgrade head`；测试关掉迁移改用 `create_all`，并用逐表逐列断言防止漏写迁移。
 - 队列/Worker 遗留语义：领取语句带回 `size_bytes`/`mtime`，复制前源校验，源缺失或变更走 `PermanentTaskFailure` 并以 `retryable=False` 落 `failed`（不自动重试），取消检查按心跳预算执行（每 `heartbeat_every_lines` 行或每 `heartbeat_every_seconds` 秒一次，`is_job_cancelled` → `cancelled`；规格 §7.3 的"每 2 万行"，不是逐行 SELECT），手动重试 `POST /api/jobs/{id}/files/retry-failed`。
 - 概览与运维：`GET /api/system/overview`（作业/文件任务分组计数、24 小时命中量、在线 Worker 与版本分布、最老 pending 等待秒数）、`POST /api/system/maintenance`（`run_maintenance`：回收僵死任务、降级静默 Worker、收尾作业；**队列不是 PostgreSQL 时返回 503**，因为回收语句用了 PostgreSQL 专有语法）、`GET /api/jobs/{id}/files?status=` 状态筛选。
 
 ### 明确不包含（后续里程碑）
 
-- 前端本身在仓库的 [`../web/`](../web/)（M2b 已交付，见其 README）；后端不为前端提供动态菜单接口，`GET /api/auth/routes` 有意返回空数组。
+- 前端本身在仓库的 [`../web/`](../web/)（见其 README）；后端提供动态菜单/路由，菜单数据由 `menus` 表维护。
 - Alembic 迁移与 `alembic upgrade head` 在 PostgreSQL 上的执行验证（含多副本启动的 advisory lock 串行化）；队列 SQL 已有 `tests/integration/test_postgres_queue.py` 的真实 PostgreSQL 覆盖。
 - Docker/PostgreSQL 部署编排；镜像替换由 Jenkins + Docker Compose 执行，Web 不承载部署。
 - 进程内复制并发池与 `LOGHARVEST_MAX_MATCHES_PER_TASK` 强制执行。
 - `data_sources.copy_to_local` 与 `workers.last_error` 的行为：两列都随表建出、API 也返回，但当前没有读取或写入方——Worker 无条件把压缩包复制到本地临时盘（开关不生效），`last_error` 没有任何写入方（恒为 `null`）。列是**有意保留**的，避免 M3 再做一次迁移；在接线前不要把它们当成已生效的能力。
 - 多行堆栈规则；v1 保持单行优先。
-- 动态菜单与按钮级权限、用户/角色管理接口（`roles`/`user_roles` 只是为 RBAC 留的表，当前只有 `admin` 一个角色码参与判断）。
+- 数据权限（部门/本人范围）：当前 RBAC 只控制功能权限，所有有权限的用户看到同一批作业与结果；`roles.data_scope` 与部门表未引入。
 - Token 黑名单与服务端会话、Redis 缓存、进程内后台定时器：`POST /api/system/maintenance` 只执行一次补偿，周期由外部 cron / compose job 负责。
 - 口令策略（长度、复杂度）与**账号级**失败锁定：口令强度只在种子脚本里检查最短 8 位。登录限流已实现（`LOGHARVEST_LOGIN_MAX_ATTEMPTS` / `LOGHARVEST_LOGIN_WINDOW_SECONDS`，按"用户名 + 来源 IP"的失败次数，见配置表），但它只挡住来源维度，不是账号级锁定。
 
