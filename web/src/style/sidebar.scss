@@ -27,9 +27,20 @@
     margin-right: 5px;
     font-size: 18px;
 
-    svg {
+    svg,
+    .svg-raw-icon {
       width: 18px;
       height: 18px;
+    }
+
+    .svg-raw-icon {
+      display: inline-flex;
+      align-items: center;
+    }
+
+    /* 原始 svg 字符串进门后没有 currentColor 继承，强制跟随菜单文字色 */
+    .svg-raw-icon svg path {
+      fill: currentcolor !important;
     }
   }
 

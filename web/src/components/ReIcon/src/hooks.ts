@@ -3,8 +3,15 @@ import { h, defineComponent, type Component } from "vue";
 import { FontIcon, IconifyIconOnline, IconifyIconOffline } from "../index";
 import { OFFLINE_ICON_NAMES } from "./offlineIconNames";
 
+/** 原始 `<svg>` 字符串：允许直接把后端下发或富文本里的 svg 当图标渲染 */
+const svgReg = /^\s*<svg[\s>]/;
+const imgReg = /^(https?:\/\/|\/\/|data:image\/)/;
+/** 清洗结果缓存，避免同一串 svg 在每次渲染时重复跑正则 */
+const svgCache = new Map<string, string>();
+
 /**
- * 支持 `iconfont`、自定义 `svg` 以及 `iconify` 中所有的图标
+ * 支持 `iconfont`、`SVG` 字符串、`SVG` 函数组件、图片 `URL`
+ * 以及 `iconify` 中所有的图标
  * @see 点击查看文档图标篇 {@link https://pure-admin.cn/pages/icon/}
  * @param icon 必传 图标
  * @param attrs 可选 iconType 属性
@@ -14,7 +21,43 @@ export function useRenderIcon(icon: any, attrs?: iconType): Component {
   // iconfont
   const ifReg = /^IF-/;
   // typeof icon === "function" 属于SVG
-  if (ifReg.test(icon)) {
+  if (typeof icon === "string" && svgReg.test(icon)) {
+    // SVG 字符串：去掉写死的宽高，交由外层 class / attrs 控制尺寸
+    let cleanedSvg = svgCache.get(icon);
+    if (cleanedSvg === undefined) {
+      if (svgCache.size > 200) svgCache.clear();
+      cleanedSvg = icon.replace(/<svg([^>]*)>/, (_, a) =>
+        `<svg${a.replace(/\s*(width|height)="[^"]*"/g, "")}>`
+      );
+      svgCache.set(icon, cleanedSvg);
+    }
+    return defineComponent({
+      name: "SvgRawIcon",
+      render: () =>
+        h("span", {
+          class: "svg-raw-icon",
+          innerHTML: cleanedSvg,
+          ...attrs
+        })
+    });
+  } else if (typeof icon === "string" && imgReg.test(icon)) {
+    // 图片 URL
+    return defineComponent({
+      name: "ImgIcon",
+      render: () =>
+        h("img", {
+          src: icon,
+          alt: "",
+          style: {
+            width: "18px",
+            height: "18px",
+            minWidth: "18px",
+            objectFit: "contain"
+          },
+          ...attrs
+        })
+    });
+  } else if (ifReg.test(icon)) {
     // iconfont
     const name = icon.split(ifReg)[1];
     const iconName = name.slice(

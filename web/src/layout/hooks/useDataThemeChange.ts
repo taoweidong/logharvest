@@ -109,7 +109,7 @@ export function useDataThemeChange() {
   }
 
   /** 清空缓存并返回登录页 */
-  function onReset() {
+  async function onReset() {
     removeToken();
     storageLocal().clear();
     const { Grey, Weak, MultiTagsCache, EpThemeColor, Layout } = getConfig();
@@ -118,8 +118,9 @@ export function useDataThemeChange() {
     useMultiTagsStoreHook().multiTagsCacheChange(MultiTagsCache);
     toggleClass(Grey, "html-grey", document.querySelector("html"));
     toggleClass(Weak, "html-weakness", document.querySelector("html"));
-    router.push("/login");
     useMultiTagsStoreHook().handleTags("equal", [...routerArrays]);
+    // 与 logOut 一致：跳转完成后再清动态路由，避免当前页面闪 404
+    await router.push("/login");
     resetRouter();
   }
 

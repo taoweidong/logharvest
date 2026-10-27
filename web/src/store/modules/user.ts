@@ -95,7 +95,7 @@ export const useUserStore = defineStore("pure-user", {
      * 返回 Promise：401 拦截器要等它落地才能复位 isLoggingOut，否则 /logout 自身
      * 返回的 401 会再次触发登出，形成无限 POST 与重复提示。
      */
-    logOut() {
+    async logOut() {
       // 没有 token 时不再打这个电话：后端会回 401，纯浪费一次往返。
       const notify = getToken() ? logoutApi().catch(() => undefined) : Promise.resolve();
       this.username = "";
@@ -103,9 +103,10 @@ export const useUserStore = defineStore("pure-user", {
       this.permissions = [];
       removeToken();
       useMultiTagsStoreHook().handleTags("equal", [...routerArrays]);
+      // 先完成跳转再清动态路由：顺序颠倒时当前页面会短暂失去匹配，闪一下 404
+      await router.push("/login");
       resetRouter();
-      router.push("/login");
-      return notify;
+      await notify;
     },
     /** 刷新`token` */
     async handRefreshToken(data: { refreshToken: string }) {

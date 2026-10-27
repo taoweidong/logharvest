@@ -31,6 +31,8 @@ const EmptyLayout = () => import("@/layout/empty-layout.vue");
 // https://cn.vitejs.dev/guide/features.html#glob-import
 const modulesRoutes = import.meta.glob("/src/views/**/*.{vue,tsx}");
 
+const PAGE_NOT_FOUND_ROUTE_NAME = "PageNotFound" as const;
+
 function handRank(routeInfo: any) {
   const { name, path, parentId, meta } = routeInfo;
   return isAllEmpty(parentId)
@@ -155,17 +157,19 @@ function findRouteByPath(path: string, routes: RouteRecordRaw[]) {
 
 /** 动态路由注册完成后，再添加全屏404（页面不存在）页面，避免刷新动态路由页面时误跳转到404页面 */
 function addPathMatch() {
-  if (!router.hasRoute("pathMatch")) {
-    router.addRoute({
-      path: "/:pathMatch(.*)*",
-      name: "PageNotFound",
-      component: () => import("@/views/error/404.vue"),
-      meta: {
-        title: "menus.purePageNotFound",
-        showLink: false
-      }
-    });
-  }
+  // 按路由 name 判重：vue-router 的 addRoute 对同名路由是替换，
+  // 但对同名之外的通配 path 会叠加匹配器。原先校验的名字从未注册过，
+  // 导致每次进动态路由都追加一条 404 通配路由。
+  if (router.hasRoute(PAGE_NOT_FOUND_ROUTE_NAME)) return;
+  router.addRoute({
+    path: "/:pathMatch(.*)*",
+    name: PAGE_NOT_FOUND_ROUTE_NAME,
+    component: () => import("@/views/error/404.vue"),
+    meta: {
+      title: "menus.purePageNotFound",
+      showLink: false
+    }
+  });
 }
 
 /** 处理动态路由（后端返回的路由） */
