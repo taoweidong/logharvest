@@ -124,11 +124,13 @@ Worker 都会显示 `—`。界面把 `NULL` 一律渲染成 `—`（未知）�
 
 ## 验证口径
 
-质量门槛是 `pnpm typecheck` 与 `pnpm build`。RBAC 改造额外使用真实后端 +
-浏览器可访问性快照/DOM 断言验证了 admin 与 viewer 的动态菜单、页面加载与按钮显隐。
-本项目的开发环境里内置浏览器是一个隐藏页（截图失败、`innerWidth` 为 0、
-`requestAnimationFrame` 冻结），**未做人工视觉截图确认**；上述检查能证明
-类型、构建、路由注册与数据渲染，但不能替代视觉走查。
+质量门槛是 `pnpm typecheck` 与 `pnpm build`。RBAC 改造除类型与构建外，还在真实后端
+（`wslc` PostgreSQL 容器）+ 全局 Playwright + Chrome 的**真实视口**（1440/1280/390）下
+截图并量 DOM，跑完用户/角色/菜单三屏 18 步 CRUD 与"菜单上级选项/用户名规则"探针，
+0 console error、0 意外 4xx/5xx；admin 与 viewer 的动态菜单、页面加载与按钮显隐均已验证。
+本项目的开发环境里内置浏览器仍是一个隐藏页（截图失败、`innerWidth` 为 0、
+`requestAnimationFrame` 冻结），只可用于结构与交互检查，**不能**用于布局与截图结论；
+视觉结论一律以 Playwright + Chrome 为准。
 
 ## RBAC 管理页与按钮权限
 
@@ -140,6 +142,9 @@ Worker 都会显示 `—`。界面把 `NULL` 一律渲染成 `—`（未知）�
   同时可用于 `v-auth`。既有业务页面的写/操作按钮已按 `jobs:write`、`jobs:operate`、
   `datasources:write`、`rulesets:write`、`workers:operate`、`system:operate` 隐藏。
 - 权限或角色变更后需重新登录：前端 `permissions` 是登录时的快照，后端接口权限实时生效。
+
+设计依据、边界保护矩阵、验收记录与已知限制（含"最后一名 admin"的并发定性）见
+[`docs/superpowers/specs/2026-10-27-logharvest-rbac-menus-permissions-design.md`](../docs/superpowers/specs/2026-10-27-logharvest-rbac-menus-permissions-design.md)。
 
 质量门槛是 `pnpm typecheck` 与 `pnpm build`。本项目的开发环境里内置浏览器是一个隐藏页
 （截图失败、`innerWidth` 为 0、`requestAnimationFrame` 冻结），**未做人工视觉确认**，

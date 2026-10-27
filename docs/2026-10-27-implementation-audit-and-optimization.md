@@ -28,6 +28,7 @@ LogHarvest 是**压缩日志规则提取平台**：面向企业 NAS 上的海量
 | `specs/2026-10-24-technology-selection-evaluation.md` | 选型评估 | 结论已落到主设计 §3 |
 | `specs/archive/2026-10-24-...-detailed.md` | 详细版归档 | 被主设计取代 |
 | `specs/2026-10-26-logharvest-m3-multiline-records-design.md` | M3 多行记录设计 | 已评审，**代码零实现** |
+| `specs/2026-10-27-logharvest-rbac-menus-permissions-design.md` | RBAC 菜单权限与动态路由设计（回溯补记 + 验收记录） | 已入库，D1–D4 的评审链在此收口 |
 | `plans/2026-10-24-m0-core.md` | M0 计划 | 已完成 |
 | `plans/2026-10-25-m1a-control-plane-api.md` | M1a 计划 | 已完成 |
 | `plans/2026-10-25-m1b-worker-queue.md` | M1b 计划 | 已完成 |
@@ -48,7 +49,7 @@ LogHarvest 是**压缩日志规则提取平台**：面向企业 NAS 上的海量
 | M2b 前端五屏 | m2b | ✅ | 登录、概览、作业+SSE、规则集、数据源、结果游标、Worker |
 | M2c 安全可观测 | m2c | ✅ | 只读守卫、尝试历史、资源上报、structlog、前端抽屉 |
 | M3 多行记录 | m3-design + m3-plan | ⬜ 未开始 | 设计已评审，代码零实现 |
-| **RBAC 菜单/权限（新增，无文档）** | — | ⚠️ 已实现未收口 | 见 §1.5 |
+| **RBAC 菜单/权限（新增，计划外）** | [rbac-design](superpowers/specs/2026-10-27-logharvest-rbac-menus-permissions-design.md) | ✅ 已收口 | 设计与验收记录已补，见 §1.5 D1–D4 |
 
 ### 1.4 已完成功能（按层）
 
@@ -68,7 +69,7 @@ LogHarvest 是**压缩日志规则提取平台**：面向企业 NAS 上的海量
 | D1 | **实现并突破了文档"明确不做"的项**：`sys_menus`、按钮级权限、服务端动态菜单 | M2a §6.1、M2b §2.3/§9.1 均列为"不做" | 已实现：`menus`/`role_menus` 表（迁移 0004）、18 个权限码、3 个管理端点族、`GET /api/auth/routes` 返回真实菜单树 |
 | D2 | 前端菜单来源由"静态定义"改为"服务端下发" | M2b §2.3「菜单和路由完全静态定义，不请求服务端路由合并」 | `router/modules/logharvest.ts` 已删除，`initRouter()` 改为拉 `/api/auth/routes` |
 | D3 | 登录响应 `permissions` | M2a §2.0 只要求字段存在 | 现在是真实权限码列表（非 `[]`） |
-| D4 | 上述 RBAC 改造**没有设计/计划文档**（`service/README.md` 有操作说明，但没有 `docs/superpowers/**` 下的设计与验收记录） | — | 代码已落地，范围扩大的评审链缺失 |
+| D4 | 上述 RBAC 改造**没有设计/计划文档**（`service/README.md` 有操作说明，但没有 `docs/superpowers/**` 下的设计与验收记录） | — | **已闭合（2026-10-27）**：补记 [`specs/2026-10-27-logharvest-rbac-menus-permissions-design.md`](superpowers/specs/2026-10-27-logharvest-rbac-menus-permissions-design.md)，含范围扩大评审（D1–D3 与被取代的 M2a/M2b 陈述）、边界保护矩阵、真实 PG 与浏览器验收记录、已知限制 L1–L7 |
 | D5 | M3 多行记录 | m3-design §12 | 零实现 |
 | D6 | `matches` 按月分区 + 结果保留期 | 主设计 §6.6/§8.3 | 未实现 |
 | D7 | 单机 4–6 Worker + 内存压力自适应降并发 | 主设计 §7.2/§8.2 | 只有部署约定，代码不检查内存 |
@@ -207,8 +208,8 @@ LogHarvest 是**压缩日志规则提取平台**：面向企业 NAS 上的海量
 - **P1-4 组件映射**：把 `includes` 模糊匹配改成精确映射需要同时改后端种子与前端注册，属于独立改动，留到下轮。
 - **P2-4 死配置**：与上一轮一致，按"不删除、只标注"处理。
 - **M3 多行记录**：设计已评审但零实现，是下一个里程碑的完整功能，不是"优化"，不在本轮顺手做。
-- **P1-3 的正式设计文档**：本报告记录了契约与偏差；完整的 RBAC 设计文档建议与"范围扩大"的评审一起补。
+- **P1-3 的正式设计文档**：本报告记录了契约与偏差；完整的 RBAC 设计文档已于 2026-10-27 补记（`specs/2026-10-27-logharvest-rbac-menus-permissions-design.md`），"范围扩大"的评审链同步在其中收口。
 
 ### 仍然开放（M3 及以后）
 
-多行堆栈规则、`matches` 按月分区、内存自适应并发、`max_matches_per_task` 强制执行、Prometheus 接入、`copy_to_local` 开关生效、`last_error` 写入、样本试跑端点、Worker 详情端点、Monaco 编辑器、结果保留期与告警；登录限流进程内计数在多副本下按副本数放大。此外新增一项：**RBAC 范围扩大需要补一次正式评审**（见 §1.5 D1–D4）。
+多行堆栈规则、`matches` 按月分区、内存自适应并发、`max_matches_per_task` 强制执行、Prometheus 接入、`copy_to_local` 开关生效、`last_error` 写入、样本试跑端点、Worker 详情端点、Monaco 编辑器、结果保留期与告警；登录限流进程内计数在多副本下按副本数放大。**RBAC 范围扩大的评审链已于 2026-10-27 补记设计文档收口**（D4 闭合）；该条线上仍然开放的是设计文档 §13 定性的限制：最后一名 active admin 的 TOCTOU（仅 PG 多副本写路径）、前端权限快照需重登刷新、以及尚无 RBAC 变更审计与服务端 token 吊销。
