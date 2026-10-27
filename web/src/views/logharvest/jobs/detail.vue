@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessageBox } from "element-plus";
 import { PureTableBar } from "@/components/RePureTableBar";
 import { message } from "@/utils/message";
@@ -34,6 +34,7 @@ import {
 defineOptions({ name: "JobDetail" });
 
 const route = useRoute();
+const router = useRouter();
 const jobId = Number(route.params.id);
 
 const job = ref<Job | null>(null);
@@ -218,15 +219,32 @@ async function loadAttempts() {
   }
 }
 
-/** 打开抽屉：记下 job/task，切换任务时历史重新拉取 */
-function openAttempts(row: FileTask) {
+/** 打开某个文件任务的尝试历史抽屉 */
+function openAttemptsFor(taskId: number, fileName: string) {
   attempts.visible = true;
-  attempts.taskId = row.id;
-  attempts.fileName = row.file_name;
+  attempts.taskId = taskId;
+  attempts.fileName = fileName;
   attempts.rows = [];
   attempts.error = "";
   attempts.loaded = false;
   void loadAttempts();
+}
+
+/** 表格行点「历史」：记下 job/task，切换任务时历史重新拉取 */
+function openAttempts(row: FileTask) {
+  openAttemptsFor(row.id, row.file_name);
+}
+
+/**
+ * 命中结果页的「所属文件」链接带 `?file_task=` 跳回来。
+ * 该任务可能不在当前这一窗口的文件列表里（列表只有 limit/offset），
+ * 但尝试历史接口按 `task_id` 查，所以照常打开，只是标题里带不出文件名。
+ */
+function openAttemptFromQuery() {
+  const raw = typeof route.query.file_task === "string" ? route.query.file_task : "";
+  const taskId = Number(raw);
+  if (!Number.isInteger(taskId) || taskId <= 0) return;
+  openAttemptsFor(taskId, files.value.find(item => item.id === taskId)?.file_name ?? "");
 }
 
 function closeAttempts() {
@@ -384,6 +402,11 @@ async function onRetryFailed() {
   }
 }
 
+/** 「查看命中结果」：带上 job_id，日志分析页会直接按本作业查询 */
+function goMatches() {
+  router.push({ path: "/logharvest/matches", query: { job_id: String(jobId) } });
+}
+
 onMounted(async () => {
   if (!Number.isFinite(jobId)) {
     message("作业 ID 不合法", { type: "error" });
@@ -398,6 +421,7 @@ onMounted(async () => {
     return;
   }
   loading.value = false;
+  openAttemptFromQuery();
   // 终态作业也打开 SSE：服务端会立即发一个终态快照并结束，头部进度/行数才不会停在 0。
   startStream();
 });
@@ -413,7 +437,7 @@ onBeforeUnmount(stopAll);
           <span class="font-medium">
             作业 #{{ job?.id }} · {{ job?.name ?? "加载中" }}
           </span>
-          <div class="flex items-center gap-2">
+          <div class="flex flex-wrap items-center justify-end gap-2">
             <el-tag v-if="job" :type="statusTagType(job.status)" effect="light">
               {{ job.status }}
             </el-tag>
@@ -421,6 +445,9 @@ onBeforeUnmount(stopAll);
             <el-tag v-else-if="pollingFallback" type="warning" effect="plain">
               轮询降级
             </el-tag>
+            <el-button type="primary" plain @click="goMatches">
+              查看命中结果
+            </el-button>
             <el-button
               v-if="job && !terminal"
               v-perms="'jobs:operate'"

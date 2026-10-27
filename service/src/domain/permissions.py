@@ -47,6 +47,8 @@ class Permissions:
     MENUS_READ = "menus:read"
     MENUS_WRITE = "menus:write"
 
+    AUDIT_READ = "audit:read"
+
 
 def all_permission_codes() -> tuple[str, ...]:
     """除通配码以外的全部权限码；种子与测试可以按它做全量覆盖检查。"""

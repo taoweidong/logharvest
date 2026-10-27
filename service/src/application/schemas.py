@@ -1,3 +1,11 @@
+"""接口 DTO：请求体与响应模型的唯一定义处。
+
+历史上放在 ``src/api/v1/schemas.py``，但 ``application`` 层的四个服务
+（rbac/jobs/data_sources/analytics）同样消费这些模型——依赖方向倒置成
+application → api。移到本层后两个方向都合法：路由向下 import，
+服务用同层模型。路由仍从这里取 ``response_model``，OpenAPI 契约不变。
+"""
+
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
@@ -109,6 +117,18 @@ FileTaskStatus = Literal[
     "cancelled",
 ]
 
+# GET /api/jobs?status= 的入参校验，非法值由 FastAPI 直接 422。
+# 作业与文件任务共用同一套状态词表（pending/running/…/cancelled），
+# 但两者是各自独立推进的状态机，所以保留独立别名而不是复用 FileTaskStatus。
+JobStatusFilter = Literal[
+    "pending",
+    "running",
+    "succeeded",
+    "partial",
+    "failed",
+    "cancelled",
+]
+
 
 class FileTaskRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -177,6 +197,24 @@ class WorkerRead(BaseModel):
     last_heartbeat: datetime
     started_at: datetime
     last_error: str | None
+
+
+class WorkerActionRead(BaseModel):
+    """`POST /workers/{id}/drain|resume` 的响应：动作后的 Worker 状态快照。"""
+
+    id: str
+    drain_requested: bool
+    status: str
+
+
+class DrainVersionRead(BaseModel):
+    """`POST /workers/drain-version` 的响应：按版本排空的计数。
+
+    ``drained`` 是在线转 draining 的数量，``flagged`` 只是记录了标记的离线数量。
+    """
+
+    drained: int
+    flagged: int
 
 
 class SystemStatusRead(BaseModel):
@@ -345,3 +383,80 @@ class MenuUpdate(BaseModel):
 
 
 MenuRead.model_rebuild()
+
+
+# --- 操作日志 / 统计 / 规则索引 --------------------------------------------
+
+
+class OperationLogRead(BaseModel):
+    """`GET /api/operation-logs` 的一行。
+
+    `actor_name`/`role_hint` 是写入时的快照：账号删除后 `actor_id` 置空，
+    但日志仍要读得出"是谁、当时顶着哪个角色"。`detail` 只允许非敏感字段，
+    口令一类永不调用方写入。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    actor_id: int | None
+    actor_name: str
+    role_hint: str
+    action: str
+    resource_type: str
+    resource_id: str
+    summary: str
+    detail: dict[str, Any]
+    origin_ip: str
+    created_at: datetime
+
+
+class StatsTotalsRead(BaseModel):
+    jobs: int
+    succeeded: int
+    partial: int
+    failed: int
+    cancelled: int
+    running: int
+    files_total: int
+    bytes_total: int
+    matched_rows_total: int
+    file_succeeded: int
+    file_failed: int
+
+
+class StatsDailyRead(BaseModel):
+    date: str
+    jobs_created: int
+    files_succeeded: int
+    files_failed: int
+    matched_rows: int
+    bytes_total: int
+
+
+class TopRuleRead(BaseModel):
+    rule_id: str
+    rule_version: int
+    hits: int
+    jobs: int
+
+
+class JobStatsRead(BaseModel):
+    """`GET /api/stats/jobs` 的聚合结果；日期按 UTC 日界，前端已标注。"""
+
+    days: int
+    data_source_id: int | None
+    totals: StatsTotalsRead
+    daily: list[StatsDailyRead]
+    top_rules: list[TopRuleRead]
+
+
+class RuleIndexRead(BaseModel):
+    """跨版本规则索引的一行：规则仍活在 `rule_sets.config` 里，不落新表。"""
+
+    rule_set_id: int
+    rule_set_name: str
+    version: int
+    rule_id: str
+    type: str
+    severity: str
+    summary: str

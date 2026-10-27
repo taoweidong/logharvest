@@ -51,7 +51,7 @@ M2a/M2b 交付的是"单一管理员工具"：一个 `admin` 账号 + 前端静�
 | 术语 | 含义 |
 |---|---|
 | 菜单节点 | `menus` 表一行；`menu_type` 0=目录、1=页面、2=权限 |
-| 权限码 | `menu_type == 2` 节点的 `name`，形如 `jobs:read`；全库共 18 个 |
+| 权限码 | `menu_type == 2` 节点的 `name`，形如 `jobs:read`；现共 19 个（IA 重构轮新增 `audit:read`） |
 | 通配码 | `*:*:*`，只由 `admin` 角色在解析时合成，不入库 |
 | 有效角色 | 经 `user_roles` 关联且 `roles.is_active` 为真 |
 | 动态路由 | `GET /api/auth/routes` 返回目录/页面树，前端注册进 `router` |
@@ -81,7 +81,7 @@ PostgreSQL 立即检查外键，SQLite 默认不检查。三处删除必须"先�
 
 ## 5. 权限模型
 
-`src/domain/permissions.py` 是权限码的**唯一定义处**：`ALL_PERMISSION_CODE`、`Permissions` 的 18 个常量、`all_permission_codes()`。三处消费方必须共用它——路由的 `require_permission(code)`、种子的权限节点与默认角色授权、前端的按钮码与 `meta.auths`。
+`src/domain/permissions.py` 是权限码的**唯一定义处**：`ALL_PERMISSION_CODE`、`Permissions` 的 19 个常量、`all_permission_codes()`。三处消费方必须共用它——路由的 `require_permission(code)`、种子的权限节点与默认角色授权、前端的按钮码与 `meta.auths`。
 
 解析路径（`application/services/auth.py`）：
 
@@ -94,8 +94,8 @@ PostgreSQL 立即检查外键，SQLite 默认不检查。三处删除必须"先�
 
 `ensure_rbac_seed`（启动 `lifespan` 与 `ensure_admin` 前调用，幂等）：
 
-- 写入 **30 个菜单**：2 目录（`LogHarvest`、`System`）+ 10 页面 + 18 权限节点；权限节点的 `path` 继承父页面，`show_link=false`。
-- 内置角色：`admin`（`is_system=true`，通配）+ `operator`（18 个授权，含写/操作）+ `viewer`（14 个授权，全只读），共 32 条 `role_menus`。
+- 写入 **35 个菜单**：3 目录（`LogHarvest` 任务管理、`RuleCenter` 规则管理、`System` 系统管理）+ 13 页面 + 19 权限节点；权限节点的 `path` 继承父页面，`show_link=false`。（初版为 2 目录 + 10 页面 + 18 权限 = 30 行，IA 重构轮扩到 35。）
+- 内置角色：`admin`（`is_system=true`，通配）+ `operator`（23 个授权，含写/操作与 `audit:read`）+ `viewer`（17 个授权，全只读且**不含**操作日志），共 40 条 `role_menus`。
 - **`operator`/`viewer` 只在首次种子（`menus` 为空）创建**。管理员删掉默认角色后，重启不得悄悄把它建回来——这条由 `test_deleted_default_role_is_not_recreated_on_restart` 锁定。
 - 只补缺失，不覆盖已有行的 `title`/`rank`/授权，管理端的修改不会被启动流程冲掉；唯一例外是把旧库 `admin.is_system` 强制置真。
 - `admin` 账号本身由 `scripts/seed_admin.py`（读 `LOGHARVEST_ADMIN_USERNAME/PASSWORD`）创建；登录路径不建账号。`ensure_admin` 不再自带"兜底建角色"分支——种子已保证角色存在，重复一份只会造出缺 `is_system` 的第二定义。
@@ -140,6 +140,8 @@ PostgreSQL 立即检查外键，SQLite 默认不检查。三处删除必须"先�
 
 保护矩阵（服务层 `application/services/rbac.py` 抛 `RbacError` 子类，路由映射 400/404/409；路由再兜底 `IntegrityError` → 409）：
 
+> 注：「内置菜单不可改父节点」约束的是**管理端 API**。信息架构升级时由种子按声明重塑（`2026-10-27-logharvest-menu-ia-and-operation-log-design.md` §4）：强制字段 `parent_id/menu_type/path/component` 归位，可编辑字段 `title/rank/icon` 只在现值仍等于旧默认（`LEGACY_DEFAULTS`）时才更新，因此不会冲掉管理员的定制。
+
 | 规则 | 结果 |
 |---|---|
 | 停用/删除自己、删除自己 | 400（`cannot disable/delete yourself`） |
@@ -158,7 +160,7 @@ PostgreSQL 立即检查外键，SQLite 默认不检查。三处删除必须"先�
 |---|---|---|
 | 授权数据 | 复用 `users/roles/user_roles`，只加 `menus/role_menus` | 项目已有这三张表；引入 classy-fastapi 那套多用户表会形成第二套用户体系 |
 | 权限载体 | 菜单即权限（`menu_type=2` 的 `name`） | 一份数据同时驱动侧边栏、路由与按钮；代价是"权限"必须挂在某个页面上 |
-| 权限解析 | 通配码 + 常量单一来源，不接 Casbin/表达式引擎 | 18 个码的规则用一句 `in` 就判完，引规则引擎是纯负债 |
+| 权限解析 | 通配码 + 常量单一来源，不接 Casbin/表达式引擎 | 19 个码的规则用一句 `in` 就判完，引规则引擎是纯负债 |
 | 角色权限树 | `check-strictly`（勾选父节点不联动子节点） | 联动树会让"只给读、不给操作"这种常见诉求无法表达；页面已把这条规则写在提示里 |
 | 分页 | 管理列表沿用裸数组 + `limit/offset`，不返回 `total` | 守住既有契约；前端用窗口式翻页并显式写明"后端不返回总数" |
 
@@ -223,7 +225,7 @@ PostgreSQL 立即检查外键，SQLite 默认不检查。三处删除必须"先�
 
 ## 14. 后续扩展
 
-1. **RBAC 变更审计**：谁给谁授了什么码、改了哪个菜单——目前只能从应用日志推断。
+1. **RBAC 变更审计**：~~目前只能从应用日志推断~~ **已交付**（2026-10-27 IA 重构轮）：`operation_logs` 表 + `GET /api/operation-logs`，`user.*`/`role.*`/`menu.*` 等写操作全部留痕，见 [菜单 IA 与操作日志设计](2026-10-27-logharvest-menu-ia-and-operation-log-design.md) §5–§7。仍然没有的是"变更前后的字段级 diff 报表"与保留期清理。
 2. **服务端会话/吊销**：口令重置与账号停用后让旧 token 立即失效（依赖 Redis 或 `jti` 黑名单，属独立里程碑）。
 3. **按页面收窄 `meta.auths`**：现为"用户权限全集"；若要做"这页只暴露这几个码"，需后端按父页面聚合。
 4. **组件精确映射**：`findPageComponent` 的 `includes` 兜底改为显式注册表（上一轮有意推迟，涉及后端种子与前端注册同改）。

@@ -1,12 +1,11 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import HTTPException
 from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from src.api.v1.schemas import JobCreate, JobFileFilter
+from src.application.schemas import JobCreate, JobFileFilter
 from src.config.settings import settings
 from src.domain.archive.models import ScanLimitError
 from src.domain.archive.reader import (
@@ -22,6 +21,19 @@ TERMINAL_JOB_STATUSES = frozenset({"succeeded", "partial", "failed", "cancelled"
 
 class RetryNotPermitted(RuntimeError):
     """作业已取消：重新入队的任务永远不会再被领取，只会永久滞留。"""
+
+
+class JobCreateError(RuntimeError):
+    """作业创建/幂等校验的业务错误；``status_code`` 由路由映射到 HTTP。
+
+    与 ``RbacError`` 同一范式：服务层不 import FastAPI，错误语义（状态码 +
+    detail 文案）在这里声明，``routes_jobs`` 统一翻译成 ``HTTPException``。
+    """
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
 
 
 SCAN_DEADLINE_SECONDS = 10.0
@@ -54,9 +66,9 @@ def _ensure_idempotent_match(existing: Job, payload: JobCreate) -> None:
         and existing_filter == payload.file_filter
     )
     if not request_body_matches:
-        raise HTTPException(
-            status_code=409,
-            detail="Idempotency-Key was already used with a different request body",
+        raise JobCreateError(
+            409,
+            "Idempotency-Key was already used with a different request body",
         )
 
 
@@ -66,9 +78,9 @@ def _effective_suffixes(filters: JobFileFilter) -> set[str] | None:
     effective = normalize_suffixes(filters.suffixes) & ARCHIVE_SUFFIXES
     if not effective:
         supported = ", ".join(sorted(ARCHIVE_SUFFIXES))
-        raise HTTPException(
-            status_code=400,
-            detail=(
+        raise JobCreateError(
+            400,
+            (
                 "file_filter.suffixes must contain at least one compressed archive "
                 f"suffix ({supported})"
             ),
@@ -84,7 +96,7 @@ def create_job(
 ) -> tuple[Job, bool]:
     normalized_key = idempotency_key.strip() if idempotency_key is not None else None
     if normalized_key == "":
-        raise HTTPException(status_code=400, detail="Idempotency-Key must not be blank")
+        raise JobCreateError(400, "Idempotency-Key must not be blank")
     if normalized_key:
         existing = _find_job_by_idempotency_key(session, created_by, normalized_key)
         if existing is not None:
@@ -93,17 +105,17 @@ def create_job(
 
     source = session.get(DataSource, payload.data_source_id)
     if source is None or not source.enabled:
-        raise HTTPException(status_code=404, detail="data source not found or disabled")
+        raise JobCreateError(404, "data source not found or disabled")
     rule_set = session.get(RuleSet, payload.rule_set_id)
     if rule_set is None:
-        raise HTTPException(status_code=404, detail="rule set not found")
+        raise JobCreateError(404, "rule set not found")
 
     root = Path(source.root_path).resolve()
     source_path = Path(payload.source_path).resolve()
     if not source_path.is_relative_to(root):
-        raise HTTPException(status_code=400, detail="source_path is outside data source root")
+        raise JobCreateError(400, "source_path is outside data source root")
     if not source_path.is_dir():
-        raise HTTPException(status_code=400, detail="source_path is not a directory")
+        raise JobCreateError(400, "source_path is not a directory")
 
     # 只读校验必须在扫描之前完成：一旦挂载被判定可写，后面的规划与执行都不该发生
     # （规格 §7.2）。按真正要扫描的目录判定，嵌套挂载可以各自不同。
@@ -130,18 +142,15 @@ def create_job(
         file_stats = [(path, path.stat()) for path in files]
     except ScanLimitError as exc:
         if exc.reason == "deadline":
-            raise HTTPException(
-                status_code=503,
-                detail="source_path scan timed out; narrow the directory or filters",
+            raise JobCreateError(
+                503,
+                "source_path scan timed out; narrow the directory or filters",
             ) from exc
-        raise HTTPException(
-            status_code=400,
-            detail="too many files in source directory",
-        ) from exc
+        raise JobCreateError(400, "too many files in source directory") from exc
     except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"cannot scan source_path: {exc}") from exc
+        raise JobCreateError(400, f"cannot scan source_path: {exc}") from exc
 
-    now = datetime.now(UTC)
+    now = utcnow()
     job = Job(
         name=payload.name,
         data_source_id=source_id,
@@ -188,7 +197,7 @@ def cancel_job(session: Session, job: Job) -> Job:
     if job.status in TERMINAL_JOB_STATUSES:
         return job
 
-    now = datetime.now(UTC)
+    now = utcnow()
     job.cancel_requested = True
     session.execute(
         update(FileTask)

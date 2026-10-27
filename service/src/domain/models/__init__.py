@@ -1,3 +1,4 @@
+from src.domain.models.audit import OperationLog
 from src.domain.models.auth import ADMIN_ROLE_CODE, Role, User, UserRole
 from src.domain.models.entities import (
     DataSource,
@@ -18,6 +19,7 @@ __all__ = [
     "Job",
     "Match",
     "Menu",
+    "OperationLog",
     "Role",
     "RoleMenu",
     "RuleSet",

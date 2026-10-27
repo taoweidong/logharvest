@@ -1,23 +1,34 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
+import { useRouter } from "vue-router";
 import type { FormInstance, FormRules } from "element-plus";
-import { PureTableBar } from "@/components/RePureTableBar";
 import { message } from "@/utils/message";
 import { apiErrorDetail } from "@/api/logharvest";
-import { createDataSource, listDataSources, testDataSource } from "@/api/logharvestAdmin";
+import {
+  createDataSource,
+  listDataSources,
+  testDataSource
+} from "@/api/logharvestAdmin";
 import type { DataSource, DataSourceTestResult } from "@/api/logharvestTypes";
 import { formatDateTime } from "../format";
+import { useAppStoreHook } from "@/store/modules/app";
 
 defineOptions({ name: "DataSources" });
 
+const router = useRouter();
+const appStore = useAppStoreHook();
+const isMobile = computed(() => appStore.device === "mobile");
+
 const loading = ref(false);
 const rows = ref<DataSource[]>([]);
-/** 每行“测试路径”的最近一次结果，按数据源 id 存 */
+/** 每个数据源“测试路径”的最近一次结果，按 id 存（后端没有查询历史接口） */
 const testResults = ref<Record<number, DataSourceTestResult>>({});
 const testing = ref<number | null>(null);
 
+/** 后端列表接口是裸数组且没有 total：窗口式 limit/offset 翻页 */
 const page = reactive({ limit: 50, offset: 0 });
 const hasNext = computed(() => rows.value.length === page.limit);
+const pageIndex = computed(() => Math.floor(page.offset / page.limit) + 1);
 
 const createVisible = ref(false);
 const creating = ref(false);
@@ -49,6 +60,8 @@ async function onTest(row: DataSource) {
   try {
     testResults.value[row.id] = await testDataSource(row.id);
   } catch (error) {
+    // 测试失败就把上一次结果丢掉：留着旧徽章会被读成“这次也通过了”
+    delete testResults.value[row.id];
     message(apiErrorDetail(error, "路径测试失败"), { type: "error" });
   } finally {
     testing.value = null;
@@ -103,24 +116,32 @@ async function onCreate() {
   }
 }
 
-const columns: TableColumnList = [
-  { label: "ID", prop: "id", width: 80 },
-  { label: "名称", prop: "name", minWidth: 160, showOverflowTooltip: true },
-  { label: "根路径", prop: "root_path", minWidth: 240, showOverflowTooltip: true },
-  { label: "只读", prop: "read_only", slot: "read_only", width: 90 },
-  { label: "启用", prop: "enabled", slot: "enabled", width: 90 },
-  { label: "创建时间", prop: "created_at", slot: "created_at", width: 190 },
-  { label: "路径测试", prop: "test", slot: "test", minWidth: 260 },
-  { label: "操作", prop: "operation", slot: "operation", width: 120, fixed: "right" }
-];
+/** 带上 data_source_id 跳任务页，创建向导第①步会预填 */
+function useForJob(row: DataSource) {
+  router.push({
+    path: "/logharvest/jobs",
+    query: { data_source_id: String(row.id) }
+  });
+}
+
+const cardClass = computed(() =>
+  isMobile.value ? "w-full" : "w-[calc(50%-0.5rem)] xl:w-[calc(33.333%-0.7rem)]"
+);
 
 onMounted(load);
 </script>
 
 <template>
   <div class="p-4">
-    <PureTableBar title="数据源" :columns="columns" @refresh="load">
-      <template #buttons>
+    <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div>
+        <span class="text-base font-medium">数据源</span>
+        <span class="ml-2 text-xs text-gray-500">
+          企业磁盘挂载点登记；后端强制只读，处理时不会回写源目录
+        </span>
+      </div>
+      <div class="flex items-center gap-2">
+        <el-button :disabled="loading" @click="load">刷新</el-button>
         <el-button
           v-perms="'datasources:write'"
           type="primary"
@@ -128,53 +149,70 @@ onMounted(load);
         >
           新建数据源
         </el-button>
-      </template>
-      <template v-slot="{ size }">
-        <pure-table
-          :size="size"
-          row-key="id"
-          adaptive
-          :loading="loading"
-          :data="rows"
-          :columns="columns"
-        >
-          <template #read_only="{ row }">
-            <el-tag :size="size" :type="row.read_only ? 'success' : 'danger'" effect="plain">
-              {{ row.read_only ? "是" : "否" }}
-            </el-tag>
-          </template>
-          <template #enabled="{ row }">
-            <el-tag :size="size" :type="row.enabled ? 'success' : 'info'" effect="plain">
+      </div>
+    </div>
+
+    <div v-loading="loading" class="flex flex-wrap gap-4">
+      <el-card
+        v-for="row in rows"
+        :key="row.id"
+        shadow="never"
+        :class="cardClass"
+      >
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="truncate text-sm font-medium">
+              {{ row.name }}
+              <span class="text-xs text-gray-400">#{{ row.id }}</span>
+            </div>
+            <div class="mt-1 break-all font-mono text-xs text-gray-600 dark:text-gray-300">
+              {{ row.root_path }}
+            </div>
+          </div>
+          <div class="flex shrink-0 flex-col items-end gap-1">
+            <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="plain">
               {{ row.enabled ? "启用" : "停用" }}
             </el-tag>
-          </template>
-          <template #created_at="{ row }">
-            {{ formatDateTime(row.created_at) }}
-          </template>
-          <template #test="{ row }">
-            <div v-if="testResults[row.id]" class="flex flex-wrap gap-1">
-              <el-tag
-                v-for="flag in (['exists', 'is_dir', 'readable'] as const)"
-                :key="flag"
-                :size="size"
-                :type="testResults[row.id][flag] ? 'success' : 'danger'"
-                effect="plain"
-              >
-                {{ TEST_FLAG_LABELS[flag] }}: {{ testResults[row.id][flag] ? "✓" : "✗" }}
-              </el-tag>
-              <el-tag
-                :size="size"
-                :type="readonlyVerdict(testResults[row.id]).type"
-                effect="plain"
-              >
-                {{ readonlyVerdict(testResults[row.id]).text }}
-              </el-tag>
-            </div>
-            <span v-else class="text-gray-400">未测试</span>
-          </template>
-          <template #operation="{ row }">
+            <el-tag
+              :type="row.read_only ? 'success' : 'danger'"
+              size="small"
+              effect="plain"
+            >
+              登记只读：{{ row.read_only ? "是" : "否" }}
+            </el-tag>
+          </div>
+        </div>
+
+        <p v-if="row.description" class="mt-2 text-xs text-gray-500">
+          {{ row.description }}
+        </p>
+
+        <div class="mt-2 min-h-[1.75rem]">
+          <div v-if="testResults[row.id]" class="flex flex-wrap gap-1">
+            <el-tag
+              v-for="flag in (['exists', 'is_dir', 'readable'] as const)"
+              :key="flag"
+              size="small"
+              :type="testResults[row.id][flag] ? 'success' : 'danger'"
+              effect="plain"
+            >
+              {{ TEST_FLAG_LABELS[flag] }}: {{ testResults[row.id][flag] ? "✓" : "✗" }}
+            </el-tag>
+            <el-tag
+              size="small"
+              :type="readonlyVerdict(testResults[row.id]).type"
+              effect="plain"
+            >
+              {{ readonlyVerdict(testResults[row.id]).text }}
+            </el-tag>
+          </div>
+          <span v-else class="text-xs text-gray-400">路径未测试</span>
+        </div>
+
+        <div class="mt-3 flex items-center justify-between">
+          <span class="text-xs text-gray-400">{{ formatDateTime(row.created_at) }}</span>
+          <div class="flex gap-2">
             <el-button
-              :size="size"
               link
               type="primary"
               :loading="testing === row.id"
@@ -182,29 +220,44 @@ onMounted(load);
             >
               测试路径
             </el-button>
-          </template>
-        </pure-table>
-        <div class="mt-3 flex items-center justify-between text-sm">
-          <span class="text-gray-500">
-            后端列表接口不返回总数；第 {{ Math.floor(page.offset / page.limit) + 1 }}
-            页，本页 {{ rows.length }} 条
-          </span>
-          <div class="flex gap-2">
-            <el-button :disabled="page.offset === 0 || loading" @click="(page.offset -= page.limit), load()">
-              上一页
-            </el-button>
-            <el-button :disabled="!hasNext || loading" @click="(page.offset += page.limit), load()">
-              下一页
+            <el-button v-perms="'jobs:write'" link type="primary" @click="useForJob(row)">
+              用它建任务
             </el-button>
           </div>
         </div>
-      </template>
-    </PureTableBar>
+      </el-card>
+
+      <el-empty
+        v-if="!loading && rows.length === 0"
+        description="还没有登记任何数据源：先新建一个挂载点"
+        class="w-full"
+      />
+    </div>
+
+    <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
+      <span class="text-gray-500">
+        后端列表接口不返回总数；第 {{ pageIndex }} 页，本页 {{ rows.length }} 条
+      </span>
+      <div class="flex gap-2">
+        <el-button
+          :disabled="page.offset === 0 || loading"
+          @click="(page.offset -= page.limit), load()"
+        >
+          上一页
+        </el-button>
+        <el-button
+          :disabled="!hasNext || loading"
+          @click="(page.offset += page.limit), load()"
+        >
+          下一页
+        </el-button>
+      </div>
+    </div>
 
     <el-dialog
       v-model="createVisible"
       title="新建数据源"
-      width="560px"
+      width="min(560px, 92vw)"
       :close-on-click-modal="false"
       append-to-body
     >

@@ -13,6 +13,24 @@ import EpLollipop from "~icons/ep/lollipop?raw";
 import EpHistogram from "~icons/ep/histogram?raw";
 import EpHomeFilled from "~icons/ep/home-filled?raw";
 
+/*
+ * 后端 menus 表实际下发的菜单图标。这里必须逐个本地注册：清单里没有的名字
+ * 会退化为 IconifyIconOnline，运行时去 api.iconify.design 拉数据，内网/弱网下
+ * 侧边栏首屏会被拖慢甚至挂起。新增菜单图标时同步 offlineIconNames.ts。
+ */
+import EpOperation from "~icons/ep/operation?raw";
+import EpDocument from "~icons/ep/document?raw";
+import EpDataLine from "~icons/ep/data-line?raw";
+import EpAim from "~icons/ep/aim?raw";
+import EpFolderOpened from "~icons/ep/folder-opened?raw";
+import EpCpu from "~icons/ep/cpu?raw";
+import EpTickets from "~icons/ep/tickets?raw";
+import EpSetting from "~icons/ep/setting?raw";
+import EpUser from "~icons/ep/user?raw";
+import EpAvatar from "~icons/ep/avatar?raw";
+import EpEditPen from "~icons/ep/edit-pen?raw";
+import EpMemo from "~icons/ep/memo?raw";
+
 // https://icon-sets.iconify.design/ri/?keyword=ri
 import RiMindMap from "~icons/ri/mind-map?raw";
 import RiAdminFill from "~icons/ri/admin-fill?raw";
@@ -70,6 +88,18 @@ const icons = [
   ["ep/lollipop", EpLollipop],
   ["ep/histogram", EpHistogram],
   ["ep/home-filled", EpHomeFilled],
+  ["ep/operation", EpOperation],
+  ["ep/document", EpDocument],
+  ["ep/data-line", EpDataLine],
+  ["ep/aim", EpAim],
+  ["ep/folder-opened", EpFolderOpened],
+  ["ep/cpu", EpCpu],
+  ["ep/tickets", EpTickets],
+  ["ep/setting", EpSetting],
+  ["ep/user", EpUser],
+  ["ep/avatar", EpAvatar],
+  ["ep/edit-pen", EpEditPen],
+  ["ep/memo", EpMemo],
   // Remix Icon: https://github.com/Remix-Design/RemixIcon
   ["ri/mind-map", RiMindMap],
   ["ri/admin-fill", RiAdminFill],

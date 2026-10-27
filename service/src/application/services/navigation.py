@@ -12,10 +12,10 @@ from sqlmodel import Session, select
 from src.application.services.auth import (
     accessible_menu_ids,
     all_permission_codes,
-    is_admin,
-    permission_codes,
+    permission_codes_from_roles,
+    role_codes,
 )
-from src.domain.models.auth import User
+from src.domain.models.auth import ADMIN_ROLE_CODE, User
 from src.domain.models.rbac import Menu
 from src.domain.permissions import ALL_PERMISSION_CODE
 
@@ -70,17 +70,24 @@ def _render(
 
 def build_user_routes(session: Session, user: User) -> list[Route]:
     """Return the dynamic route list for ``user`` in the frontend envelope shape."""
-    if is_admin(session, user):
+    # 角色只查一次：admin 判定与权限解析共用这一份结果，否则同一请求里
+    # 会有两条一模一样的角色查询（is_admin 与 permission_codes 各查各的）。
+    codes = role_codes(session, user)
+    if ADMIN_ROLE_CODE in codes:
         menus = session.exec(select(Menu).where(Menu.is_active.is_(True))).all()
         auths = all_permission_codes(session)
     else:
-        ids = accessible_menu_ids(session, user)
+        ids = accessible_menu_ids(session, user, admin=False)
         menus = (
             session.exec(select(Menu).where(Menu.is_active.is_(True), Menu.id.in_(ids))).all()
             if ids
             else []
         )
-        auths = [code for code in permission_codes(session, user) if code != ALL_PERMISSION_CODE]
+        auths = [
+            code
+            for code in permission_codes_from_roles(session, user, codes)
+            if code != ALL_PERMISSION_CODE
+        ]
 
     visible = [menu for menu in menus if menu.menu_type in (0, 1) and menu.id is not None]
     visible_ids = {menu.id for menu in visible}

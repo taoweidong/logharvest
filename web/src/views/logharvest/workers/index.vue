@@ -20,8 +20,12 @@ import {
   fromNow,
   workerStatusTagType
 } from "../format";
+import { useAppStoreHook } from "@/store/modules/app";
 
 defineOptions({ name: "Workers" });
+
+const appStore = useAppStoreHook();
+const isMobile = computed(() => appStore.device === "mobile");
 
 const loading = ref(false);
 const rows = ref<WorkerInfo[]>([]);
@@ -39,6 +43,7 @@ const WORKER_STATUS_OPTIONS: WorkerStatus[] = [
 /** 后端 `GET /api/workers` 的 `limit` 上限是 200 */
 const page = reactive({ limit: 100, offset: 0 });
 const hasNext = computed(() => rows.value.length === page.limit);
+const pageIndex = computed(() => Math.floor(page.offset / page.limit) + 1);
 
 /** 与后端 `system_status` 同一定义：未离线即视为存活（含 draining） */
 const alive = computed(
@@ -57,6 +62,28 @@ const filteredRows = computed(() =>
     ? rows.value.filter(item => item.status === statusFilter.value)
     : rows.value
 );
+
+/**
+ * 按 `worker_version`（接口字段 `version`）分组：滚动升级时一眼看出哪些版本还在跑、
+ * 每台的状态如何，比平铺一列版本号好读。版本排序按出现顺序倒序即可（无 semver 语义保证）。
+ */
+const groups = computed(() => {
+  const byVersion = new Map<string, WorkerInfo[]>();
+  filteredRows.value.forEach(item => {
+    const list = byVersion.get(item.version);
+    if (list) list.push(item);
+    else byVersion.set(item.version, [item]);
+  });
+  return Array.from(byVersion.entries())
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([version, items]) => ({
+      version,
+      items,
+      alive: items.filter(
+        item => (["online", "busy", "draining"] as WorkerStatus[]).includes(item.status)
+      ).length
+    }));
+});
 
 async function load() {
   loading.value = true;
@@ -152,11 +179,25 @@ async function onDrainVersion() {
 /**
  * `@pureadmin/table` 3.3.0 只认列定义里的 `slot` 字段（不写 `slot` 时，与 `prop` 同名的
  * 插槽模板会被静默忽略，单元格退回裸文本），所以每一列都要显式写 `slot`。
+ * 版本已经提到分组头上，组内表不再重复显示。
  */
-const columns: TableColumnList = [
-  { label: "Worker", prop: "id", minWidth: 200, showOverflowTooltip: true },
-  { label: "主机名", prop: "hostname", minWidth: 160, showOverflowTooltip: true },
-  { label: "版本", prop: "version", width: 130 },
+const columns = computed<TableColumnList>(() => [
+  {
+    label: "Worker",
+    prop: "id",
+    minWidth: isMobile.value ? 140 : 200,
+    showOverflowTooltip: true
+  },
+  ...(isMobile.value
+    ? []
+    : ([
+        {
+          label: "主机名",
+          prop: "hostname",
+          minWidth: 160,
+          showOverflowTooltip: true
+        }
+      ] as TableColumnList)),
   { label: "状态", prop: "status", slot: "status", width: 110 },
   {
     label: "当前文件任务",
@@ -164,15 +205,19 @@ const columns: TableColumnList = [
     slot: "current_task_id",
     width: 130
   },
-  { label: "并发上限", prop: "max_concurrent_copies", width: 110 },
-  { label: "CPU", prop: "cpu_percent", slot: "cpu_percent", width: 100 },
-  { label: "内存", prop: "memory_bytes", slot: "memory_bytes", width: 120 },
-  {
-    label: "临时盘空闲",
-    prop: "temp_disk_free_bytes",
-    slot: "temp_disk_free_bytes",
-    width: 140
-  },
+  ...(isMobile.value
+    ? []
+    : ([
+        { label: "并发上限", prop: "max_concurrent_copies", width: 110 },
+        { label: "CPU", prop: "cpu_percent", slot: "cpu_percent", width: 100 },
+        { label: "内存", prop: "memory_bytes", slot: "memory_bytes", width: 120 },
+        {
+          label: "临时盘空闲",
+          prop: "temp_disk_free_bytes",
+          slot: "temp_disk_free_bytes",
+          width: 140
+        }
+      ] as TableColumnList)),
   { label: "心跳", prop: "last_heartbeat", slot: "last_heartbeat", width: 190 },
   {
     label: "排空标记",
@@ -180,21 +225,25 @@ const columns: TableColumnList = [
     slot: "drain_requested",
     width: 110
   },
-  {
-    label: "最近错误",
-    prop: "last_error",
-    slot: "last_error",
-    minWidth: 180,
-    showOverflowTooltip: true
-  },
+  ...(isMobile.value
+    ? []
+    : ([
+        {
+          label: "最近错误",
+          prop: "last_error",
+          slot: "last_error",
+          minWidth: 180,
+          showOverflowTooltip: true
+        }
+      ] as TableColumnList)),
   {
     label: "操作",
     prop: "operation",
     slot: "operation",
-    width: 170,
-    fixed: "right"
+    width: isMobile.value ? 120 : 170,
+    fixed: isMobile.value ? undefined : "right"
   }
-];
+]);
 
 /**
  * 资源三列与 `last_error` 都是可空列（见 `WorkerRead`）：M2c Task 4 之前心跳语句
@@ -239,10 +288,15 @@ onMounted(load);
         数值来自 Worker 自身采样（进程 CPU/内存 RSS、临时目录所在盘的剩余空间），不是 NAS 侧指标。"
     />
 
-    <PureTableBar title="Worker" :columns="columns" @refresh="load">
+    <PureTableBar title="Worker（按版本分组）" :columns="columns" @refresh="load">
       <template #buttons>
-        <div class="flex items-center gap-2">
-          <el-select v-model="statusFilter" clearable placeholder="状态筛选" class="w-36">
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <el-select
+            v-model="statusFilter"
+            clearable
+            placeholder="状态筛选"
+            class="w-32 sm:w-36"
+          >
             <el-option
               v-for="item in WORKER_STATUS_OPTIONS"
               :key="item"
@@ -257,7 +311,7 @@ onMounted(load);
             default-first-option
             clearable
             placeholder="版本号"
-            class="w-40"
+            class="w-36 sm:w-40"
           >
             <el-option v-for="v in versions" :key="v" :label="v" :value="v" />
           </el-select>
@@ -273,103 +327,138 @@ onMounted(load);
         </div>
       </template>
       <template v-slot="{ size }">
-        <pure-table
-          :size="size"
-          row-key="id"
-          adaptive
-          :loading="loading"
-          :data="filteredRows"
-          :columns="columns"
-          :border="true"
+        <el-empty
+          v-if="!loading && groups.length === 0"
+          description="没有可见的 Worker：请先启动 Worker 进程（python -m src.worker.main）"
+          :image-size="80"
+        />
+        <el-card
+          v-for="group in groups"
+          :key="group.version"
+          class="mb-3"
+          shadow="never"
         >
-          <template #status="{ row }">
-            <el-tag
-              :type="workerStatusTagType(row.status)"
-              :size="size"
-              effect="light"
-            >
-              {{ row.status }}
-            </el-tag>
-          </template>
-          <template #current_task_id="{ row }">
-            {{ row.current_task_id ?? "-" }}
-          </template>
-          <template #cpu_percent="{ row }">
-            {{ formatCpuPercent(row.cpu_percent) }}
-          </template>
-          <template #memory_bytes="{ row }">
-            {{ formatMemoryMB(row.memory_bytes) }}
-          </template>
-          <template #temp_disk_free_bytes="{ row }">
-            {{ formatDiskFreeGB(row.temp_disk_free_bytes) }}
-          </template>
-          <template #last_error="{ row }">
-            <el-tooltip v-if="row.last_error" :content="row.last_error" placement="top">
-              <span class="text-red-500">{{ row.last_error }}</span>
-            </el-tooltip>
-            <span v-else>{{ UNKNOWN_TEXT }}</span>
-          </template>
-          <template #last_heartbeat="{ row }">
-            <el-tooltip :content="formatDateTime(row.last_heartbeat)" placement="top">
-              <span>{{ fromNow(row.last_heartbeat) }}</span>
-            </el-tooltip>
-          </template>
-          <template #drain_requested="{ row }">
-            <el-tag
-              :size="size"
-              :type="row.drain_requested ? 'warning' : 'info'"
-              effect="plain"
-            >
-              {{ row.drain_requested ? "已标记" : "无" }}
-            </el-tag>
-          </template>
-          <template #operation="{ row }">
-            <el-button
-              v-perms="'workers:operate'"
-              :size="size"
-              link
-              type="warning"
-              :loading="busyId === row.id"
-              :disabled="row.drain_requested"
-              @click="onDrain(row)"
-            >
-              排空
-            </el-button>
-            <el-tooltip
-              v-if="row.status === 'offline'"
-              content="Worker 已离线，后端对离线机器恢复领取返回 409"
-              placement="top"
-            >
-              <span>
+          <template #header>
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="text-sm font-medium">
+                版本 {{ group.version }}
+                <el-tag :size="size" effect="plain" type="info">
+                  {{ group.items.length }} 台
+                </el-tag>
+              </span>
+              <span class="text-xs text-gray-500">
+                存活（online/busy/draining）{{ group.alive }} 台 · 离线
+                {{ group.items.length - group.alive }} 台
                 <el-button
                   v-perms="'workers:operate'"
-                  :size="size"
                   link
-                  type="primary"
-                  disabled
+                  type="warning"
+                  :size="size"
+                  @click="(versionInput = group.version), onDrainVersion()"
                 >
-                  恢复
+                  排空该版本
                 </el-button>
               </span>
-            </el-tooltip>
-            <el-button
-              v-else
-              v-perms="'workers:operate'"
-              :size="size"
-              link
-              type="primary"
-              :loading="busyId === row.id"
-              @click="onResume(row)"
-            >
-              恢复
-            </el-button>
+            </div>
           </template>
-        </pure-table>
-        <div class="mt-3 flex items-center justify-between text-sm">
+          <pure-table
+            :size="size"
+            row-key="id"
+            adaptive
+            :loading="loading"
+            :data="group.items"
+            :columns="columns"
+            :border="true"
+          >
+            <template #status="{ row }">
+              <el-tag
+                :type="workerStatusTagType(row.status)"
+                :size="size"
+                effect="light"
+              >
+                {{ row.status }}
+              </el-tag>
+            </template>
+            <template #current_task_id="{ row }">
+              {{ row.current_task_id ?? "-" }}
+            </template>
+            <template #cpu_percent="{ row }">
+              {{ formatCpuPercent(row.cpu_percent) }}
+            </template>
+            <template #memory_bytes="{ row }">
+              {{ formatMemoryMB(row.memory_bytes) }}
+            </template>
+            <template #temp_disk_free_bytes="{ row }">
+              {{ formatDiskFreeGB(row.temp_disk_free_bytes) }}
+            </template>
+            <template #last_error="{ row }">
+              <el-tooltip v-if="row.last_error" :content="row.last_error" placement="top">
+                <span class="text-red-500">{{ row.last_error }}</span>
+              </el-tooltip>
+              <span v-else>{{ UNKNOWN_TEXT }}</span>
+            </template>
+            <template #last_heartbeat="{ row }">
+              <el-tooltip :content="formatDateTime(row.last_heartbeat)" placement="top">
+                <span>{{ fromNow(row.last_heartbeat) }}</span>
+              </el-tooltip>
+            </template>
+            <template #drain_requested="{ row }">
+              <el-tag
+                :size="size"
+                :type="row.drain_requested ? 'warning' : 'info'"
+                effect="plain"
+              >
+                {{ row.drain_requested ? "已标记" : "无" }}
+              </el-tag>
+            </template>
+            <template #operation="{ row }">
+              <el-button
+                v-perms="'workers:operate'"
+                :size="size"
+                link
+                type="warning"
+                :loading="busyId === row.id"
+                :disabled="row.drain_requested"
+                @click="onDrain(row)"
+              >
+                排空
+              </el-button>
+              <el-tooltip
+                v-if="row.status === 'offline'"
+                content="Worker 已离线，后端对离线机器恢复领取返回 409"
+                placement="top"
+              >
+                <span>
+                  <el-button
+                    v-perms="'workers:operate'"
+                    :size="size"
+                    link
+                    type="primary"
+                    disabled
+                  >
+                    恢复
+                  </el-button>
+                </span>
+              </el-tooltip>
+              <el-button
+                v-else
+                v-perms="'workers:operate'"
+                :size="size"
+                link
+                type="primary"
+                :loading="busyId === row.id"
+                @click="onResume(row)"
+              >
+                恢复
+              </el-button>
+            </template>
+          </pure-table>
+        </el-card>
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
           <span class="text-gray-500">
             后端列表接口不返回总数：状态筛选只作用于本页；第
-            {{ Math.floor(page.offset / page.limit) + 1 }} 页，本页
-            {{ rows.length }} 条，其中存活（online/busy/draining）{{ alive }} 台；至少上报过一项资源的
+            {{ pageIndex }} 页，本页 {{ rows.length }} 条，共 {{ groups.length }}
+            个版本，存活（online/busy/draining）{{ alive }} 台；至少上报过一项资源的
             {{ metricReported }} 台（其余显示「{{ UNKNOWN_TEXT }}」= 该 Worker
             尚未上报，需升级到 M2c Task 4 的 Worker 并重启后才有数据）
           </span>

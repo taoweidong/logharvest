@@ -10,8 +10,8 @@ VIEWER_PASSWORD = "Viewer-Pass-123"
 OPERATOR_PASSWORD = "Operator-Pass-123"
 NO_ROLE_PASSWORD = "No-Role-Pass-1"
 
-# 2 个目录 + 10 个页面 + 18 个权限节点。
-SEED_MENU_COUNT = 30
+# 3 个目录 + 13 个页面 + 19 个权限节点。
+SEED_MENU_COUNT = 35
 
 
 def _count(session: Session, model: type) -> int:
@@ -106,12 +106,13 @@ def test_viewer_routes_hide_system_and_admin_sees_it(client, viewer_headers, aut
 
     admin_data = client.get("/api/auth/routes", headers=auth_headers).json()["data"]
     admin_paths = {route["path"] for route in admin_data}
-    assert {"/logharvest", "/system"} <= admin_paths
+    assert {"/logharvest", "/rules", "/system"} <= admin_paths
     system = next(route for route in admin_data if route["path"] == "/system")
     assert {child["path"] for child in system["children"]} == {
         "/system/users",
         "/system/roles",
         "/system/menus",
+        "/system/audit-logs",
     }
 
 
@@ -135,6 +136,145 @@ def test_every_declared_permission_code_is_seeded(session: Session) -> None:
     ensure_rbac_seed(session)
     seeded = {menu.name for menu in session.exec(select(Menu).where(Menu.menu_type == 2)).all()}
     assert set(all_permission_codes()) <= seeded
+
+
+def test_seed_reshapes_builtin_menus(session: Session) -> None:
+    """老库升级：强制字段（parent/path）归位，可编辑字段按旧默认守卫式更新。"""
+    ensure_rbac_seed(session)
+
+    # 模拟上一版种子的库：旧目录标题/图标/排序，规则集还挂在任务目录下
+    logharvest = session.exec(select(Menu).where(Menu.name == "LogHarvest")).one()
+    logharvest.title = "日志分析"
+    logharvest.icon = "ep/search"
+    logharvest.rank = 2
+    rulesets = session.exec(select(Menu).where(Menu.name == "RuleSets")).one()
+    rulesets.title = "规则集"
+    rulesets.rank = 3
+    rulesets.parent_id = logharvest.id
+    matches = session.exec(select(Menu).where(Menu.name == "Matches")).one()
+    matches.title = "命中结果"
+    matches.rank = 5
+    session.add_all([logharvest, rulesets, matches])
+    session.commit()
+
+    ensure_rbac_seed(session)
+    session.expire_all()
+
+    center = session.exec(select(Menu).where(Menu.name == "RuleCenter")).one()
+    rulesets = session.exec(select(Menu).where(Menu.name == "RuleSets")).one()
+    assert rulesets.parent_id == center.id  # 强制字段：管理端改不了，必须归位
+    assert rulesets.path == "/logharvest/rulesets"  # 绝对 path 不随父目录变，旧书签不破
+    assert (rulesets.title, rulesets.rank) == ("规则集维护", 2)
+
+    logharvest = session.exec(select(Menu).where(Menu.name == "LogHarvest")).one()
+    assert (logharvest.title, logharvest.icon, logharvest.rank) == ("任务管理", "ep/operation", 1)
+    matches = session.exec(select(Menu).where(Menu.name == "Matches")).one()
+    assert (matches.title, matches.rank) == ("日志分析", 4)
+
+
+def test_seed_keeps_customised_builtin_fields(session: Session) -> None:
+    """守卫字段：管理员定制过的 title/rank/icon 不能被种子覆盖。"""
+    ensure_rbac_seed(session)
+    matches = session.exec(select(Menu).where(Menu.name == "Matches")).one()
+    matches.title = "线上排查视图"
+    matches.rank = 77
+    logharvest = session.exec(select(Menu).where(Menu.name == "LogHarvest")).one()
+    logharvest.icon = "ep/star"
+    session.add_all([matches, logharvest])
+    session.commit()
+
+    ensure_rbac_seed(session)
+    session.expire_all()
+
+    matches = session.exec(select(Menu).where(Menu.name == "Matches")).one()
+    assert (matches.title, matches.rank) == ("线上排查视图", 77)
+    logharvest = session.exec(select(Menu).where(Menu.name == "LogHarvest")).one()
+    assert logharvest.icon == "ep/star"
+    assert logharvest.title == "任务管理"  # 未被定制的字段照常更新
+
+
+def test_seed_grants_new_menus_to_existing_default_roles(session: Session) -> None:
+    """老库升级：默认角色只补新增条目，viewer 拿不到操作日志。"""
+    ensure_rbac_seed(session)
+
+    def granted_names(code: str) -> set[str]:
+        role = session.exec(select(Role).where(Role.code == code)).one()
+        rows = session.exec(
+            select(Menu.name)
+            .join(RoleMenu, RoleMenu.menu_id == Menu.id)
+            .where(RoleMenu.role_id == role.id)
+        ).all()
+        return {str(name) for name in rows}
+
+    added = {"TaskStats", "RuleCenter", "RuleMaintenance", "AuditLogs", "audit:read"}
+    operator_role = session.exec(select(Role).where(Role.code == "operator")).one()
+    for name in added:
+        menu = session.exec(select(Menu).where(Menu.name == name)).one()
+        link = session.exec(
+            select(RoleMenu).where(
+                RoleMenu.role_id == operator_role.id, RoleMenu.menu_id == menu.id
+            )
+        ).first()
+        if link is not None:
+            session.delete(link)
+    session.commit()
+
+    ensure_rbac_seed(session)
+
+    assert added <= granted_names("operator")
+    viewer_names = granted_names("viewer")
+    assert {"TaskStats", "RuleCenter", "RuleMaintenance"} <= viewer_names
+    assert not ({"AuditLogs", "audit:read"} & viewer_names)
+
+
+def test_auth_routes_tree_matches_new_information_architecture(client, auth_headers) -> None:
+    """admin 的动态路由树就是本轮 IA 的验收面：三个一级菜单、顺序与子项归属。"""
+    routes = client.get("/api/auth/routes", headers=auth_headers).json()["data"]
+
+    dirs = [route for route in routes if not route["component"]]
+    assert [d["name"] for d in dirs] == ["LogHarvest", "RuleCenter", "System"]
+    assert [d["meta"]["rank"] for d in dirs] == [1, 2, 3]
+    assert [d["meta"]["title"] for d in dirs] == ["任务管理", "规则管理", "系统管理"]
+    assert [d["path"] for d in dirs] == ["/logharvest", "/rules", "/system"]
+
+    children = {d["name"]: d["children"] for d in dirs}
+    assert [c["path"] for c in children["LogHarvest"]] == [
+        "/logharvest/jobs",
+        "/logharvest/jobs/:id",
+        "/logharvest/stats",
+        "/logharvest/matches",
+        "/logharvest/datasources",
+        "/logharvest/workers",
+        "/logharvest/overview",
+    ]
+    assert [c["path"] for c in children["RuleCenter"]] == [
+        "/rules/maintenance",
+        "/logharvest/rulesets",
+    ]
+    assert [c["path"] for c in children["System"]] == [
+        "/system/users",
+        "/system/roles",
+        "/system/menus",
+        "/system/audit-logs",
+    ]
+
+    # 页面组件字符串必须能在 src/views 下被 findPageComponent 精确命中
+    components = {
+        route["component"]
+        for child in routes
+        for route in ([child] if child["component"] else child["children"])
+    }
+    assert {
+        "logharvest/stats/index",
+        "rules/maintenance/index",
+        "system/audit-logs/index",
+    } <= components
+
+    titles = {c["meta"]["title"] for c in children["LogHarvest"]}
+    assert {"任务创建", "任务统计", "日志分析", "数据源管理"} <= titles
+    # 隐藏页不进侧边栏但必须注册路由
+    hidden = {c["path"] for c in children["LogHarvest"] if not c["meta"]["showLink"]}
+    assert {"/logharvest/jobs/:id", "/logharvest/overview"} == hidden
 
 
 def test_user_without_roles_gets_no_permissions_or_routes(client, session: Session) -> None:

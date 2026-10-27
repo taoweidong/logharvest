@@ -43,15 +43,31 @@ export function apiErrorStatus(error: unknown): number | undefined {
   return typeof status === "number" ? status : undefined;
 }
 
+/**
+ * 作业列表参数。
+ * `status` 由后端下推到 SQL `WHERE`（枚举校验，非法值 422）；前端只在当前页里过滤
+ * 会做出「假筛选」（第 2 页之后的匹配行永远看不到），所以必须带进请求。
+ * 后端仍只认 `limit`/`offset`，响应是裸数组，没有 total。
+ */
+export type JobListParams = ListParams & { status?: string };
+
 /** 作业列表（按创建时间倒序） */
-export const listJobs = (params: ListParams = {}) =>
+export const listJobs = (params: JobListParams = {}) =>
   http.request<Job[]>("get", "/jobs", { params });
 
-/** 创建作业（同步扫描目录；相同 Idempotency-Key 且请求体一致时回放已有作业） */
+/**
+ * 创建作业（同步扫描目录；相同 Idempotency-Key 且请求体一致时回放已有作业）。
+ *
+ * `timeout` 必须大于全局 10s：后端对目录扫描有 10 秒预算，扫描超限的降级路径是
+ * **503**（带"缩小目录"的提示），而不是网络失败。若沿用全局超时，慢扫描时客户端
+ * 会先于 503 中止连接，用户看到的是误导性的"网络连接失败"。这里给 60s：容纳
+ * 10s 扫描预算 + 任务规划落库 + 网络余量，只有真正失控的请求才会客户端超时。
+ */
 export const createJob = (data: JobCreatePayload, idempotencyKey: string) =>
   http.request<Job>("post", "/jobs", {
     data,
-    headers: { "Idempotency-Key": idempotencyKey }
+    headers: { "Idempotency-Key": idempotencyKey },
+    timeout: 60000
   });
 
 /** 作业详情 */

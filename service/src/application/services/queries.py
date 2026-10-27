@@ -25,10 +25,14 @@ def _age_seconds_since(value: datetime | None) -> int | None:
     return max(0, int((datetime.now(UTC) - value).total_seconds()))
 
 
-def list_jobs(session: Session, limit: int = 50, offset: int = 0) -> list[Job]:
-    statement = (
-        select(Job).order_by(Job.created_at.desc(), Job.id.desc()).offset(offset).limit(limit)
-    )
+def list_jobs(
+    session: Session, limit: int = 50, offset: int = 0, status: str | None = None
+) -> list[Job]:
+    # status 下推到 SQL：前端原先在内存里过滤当前页，会得到"筛了但没筛全"的假结果。
+    statement = select(Job)
+    if status is not None:
+        statement = statement.where(Job.status == status)
+    statement = statement.order_by(Job.created_at.desc(), Job.id.desc()).offset(offset).limit(limit)
     return list(session.exec(statement).all())
 
 

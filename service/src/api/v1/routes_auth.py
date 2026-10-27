@@ -3,7 +3,7 @@ from typing import Annotated, Any
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from src.api.dependencies import (
     CurrentUser,
@@ -11,7 +11,9 @@ from src.api.dependencies import (
     SessionDep,
     get_token_service,
 )
-from src.application.services.auth import permission_codes, role_codes
+from src.api.v1.helpers import client_ip
+from src.application.services.audit import commit_operation, record_operation
+from src.application.services.auth import roles_and_permissions
 from src.application.services.navigation import build_user_routes
 from src.domain.models.auth import User
 from src.domain.services.passwords import verify_password
@@ -25,6 +27,33 @@ _login_logger = structlog.get_logger(__name__)
 def ok(data: Any) -> dict[str, Any]:
     """Baseline frontend envelope: the Pure Admin store gates on ``data.code === 0``."""
     return {"code": 0, "message": "ok", "data": data}
+
+
+def _record_login_failure(
+    session: Session,
+    request: Request,
+    username: str,
+    reason: str,
+    user: User | None,
+) -> None:
+    """登录失败也留痕，但 ``actor_id`` 留空。
+
+    失败的账号可能压根不存在，把用户名硬绑成外键会写出一条指向虚无的记录；
+    用户名快照进 ``actor_name``，来源 IP 与失败原因一起构成爆破画像。
+    口令本身绝不入库——原因只写"凭据不符"或"账号停用"。
+    """
+    record_operation(
+        session,
+        actor=None,
+        actor_name=username,
+        action="auth.login_failed",
+        resource_type="user",
+        resource_id=user.id if user is not None else None,
+        summary=f"登录失败：{reason}",
+        detail={"username": username, "reason": reason},
+        ip=client_ip(request),
+    )
+    commit_operation(session)
 
 
 class LoginRequest(BaseModel):
@@ -77,10 +106,12 @@ def login(
     )
     if user is None or not password_ok:
         limiter.record_failure(key)
+        _record_login_failure(session, request, payload.username, "口令不符", user)
         raise HTTPException(status_code=401, detail="invalid credentials")
     if not user.is_active:
         # 口令是对的，只是账号停用了：这不算一次凭据失败。计进去等于给"停用账号"
         # 配一把反向的锁——任何人拿错口令都能把这个账号在限流里按住。
+        _record_login_failure(session, request, payload.username, "账号停用", user)
         raise HTTPException(status_code=403, detail="user is disabled")
     # 登录成功即清空该来源的失败记录，免得用户被自己早先的输错挡在门外。
     limiter.reset(key)
@@ -91,13 +122,28 @@ def login(
     refresh_token, _ = service.create_refresh_token(
         {"sub": str(user.id), "username": user.username}
     )
+    codes, permissions = roles_and_permissions(session, user)
+    # 登录是"读+一次留痕"，没有业务事务可搭，所以自己收尾；role_hint 存当时的角色码
+    # 快照，事后角色改了也读得出"他当时是以什么身份进来的"。
+    record_operation(
+        session,
+        actor=user,
+        action="auth.login_success",
+        resource_type="user",
+        resource_id=user.id,
+        summary="登录成功",
+        detail={"username": user.username},
+        ip=client_ip(request),
+        role_hint=",".join(codes),
+    )
+    commit_operation(session)
     return ok(
         {
             "avatar": None,
             "username": user.username,
             "nickname": user.nickname,
-            "roles": role_codes(session, user),
-            "permissions": permission_codes(session, user),
+            "roles": codes,
+            "permissions": permissions,
             "accessToken": access_token,
             "refreshToken": refresh_token,
             "expires": int(expires_at.timestamp() * 1000),
@@ -141,6 +187,17 @@ def auth_routes(user: CurrentUser, session: SessionDep):
 
 
 @router.post("/logout")
-def logout(_: CurrentUser):
-    # 无服务端会话；JWT 自然过期。
+def logout(request: Request, user: CurrentUser, session: SessionDep):
+    # 无服务端会话；JWT 自然过期。留痕只为回答"谁在什么时候收工"。
+    record_operation(
+        session,
+        actor=user,
+        action="auth.logout",
+        resource_type="user",
+        resource_id=user.id,
+        summary="登出",
+        detail={},
+        ip=client_ip(request),
+    )
+    commit_operation(session)
     return ok(None)

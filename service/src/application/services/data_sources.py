@@ -2,7 +2,7 @@ from pathlib import Path
 
 from sqlmodel import Session, select
 
-from src.api.v1.schemas import DataSourceCreate
+from src.application.schemas import DataSourceCreate
 from src.domain.models.entities import DataSource
 from src.domain.source_guard import READ_ONLY, detect_writability
 

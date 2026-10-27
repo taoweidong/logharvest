@@ -3,7 +3,7 @@ import zipfile
 import pytest
 from sqlmodel import select
 
-from src.api.v1.schemas import JobCreate
+from src.application.schemas import JobCreate
 from src.application.services import jobs as jobs_service
 from src.config.settings import settings
 from src.domain import source_guard

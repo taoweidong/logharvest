@@ -3,7 +3,7 @@ from typing import get_args
 import pytest
 from pydantic import ValidationError
 
-from src.api.v1.schemas import DataSourceTestResult
+from src.application.schemas import DataSourceTestResult
 from src.application.services import data_sources as data_sources_service
 from src.domain.source_guard import READ_ONLY, UNKNOWN, WRITABLE
 

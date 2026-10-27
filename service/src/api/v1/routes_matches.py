@@ -1,21 +1,16 @@
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.api.dependencies import SessionDep, require_permission
-from src.api.v1.schemas import MatchRead
+from src.api.v1.helpers import as_utc
+from src.application.schemas import MatchRead
 from src.application.services.queries import list_matches
 from src.domain.models.auth import User
 from src.domain.permissions import Permissions
 
 router = APIRouter(prefix="/matches", tags=["matches"])
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 @router.get("", response_model=list[MatchRead])
@@ -38,8 +33,8 @@ def get_matches(
             detail="either job_id or both created_from and created_to are required",
         )
     if created_from is not None and created_to is not None:
-        created_from = _as_utc(created_from)
-        created_to = _as_utc(created_to)
+        created_from = as_utc(created_from)
+        created_to = as_utc(created_to)
         if created_from > created_to:
             raise HTTPException(
                 status_code=422,
@@ -58,7 +53,7 @@ def get_matches(
         severity=severity,
         created_from=created_from,
         created_to=created_to,
-        created_before=_as_utc(created_before) if created_before is not None else None,
+        created_before=as_utc(created_before) if created_before is not None else None,
         id_before=id_before,
         limit=limit,
     )

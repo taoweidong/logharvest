@@ -35,6 +35,8 @@ CORE_TABLES = {
     # RBAC：菜单即权限，角色与菜单多对多。
     "menus",
     "role_menus",
+    # 操作日志：只追加的写操作留痕（设计 §5）。
+    "operation_logs",
 }
 
 

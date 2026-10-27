@@ -56,22 +56,27 @@ def test_menu_tree_contains_seed_branches(client, auth_headers) -> None:
     response = client.get("/api/menus/tree", headers=auth_headers)
     assert response.status_code == 200
     roots = {node["name"]: node for node in response.json()}
-    assert {"LogHarvest", "System"} <= set(roots)
+    assert {"LogHarvest", "RuleCenter", "System"} <= set(roots)
 
     logharvest_children = {child["name"] for child in roots["LogHarvest"]["children"]}
     assert {
         "Jobs",
         "JobDetail",
-        "RuleSets",
-        "DataSources",
+        "TaskStats",
         "Matches",
+        "DataSources",
         "Workers",
         "Overview",
     } <= logharvest_children
+    assert {child["name"] for child in roots["RuleCenter"]["children"]} == {
+        "RuleMaintenance",
+        "RuleSets",
+    }
     assert {child["name"] for child in roots["System"]["children"]} == {
         "Users",
         "Roles",
         "Menus",
+        "AuditLogs",
     }
 
     jobs = next(child for child in roots["LogHarvest"]["children"] if child["name"] == "Jobs")
@@ -86,9 +91,9 @@ def test_menu_tree_contains_seed_branches(client, auth_headers) -> None:
 
 def test_flat_menu_list_is_stable_and_leafless(client, auth_headers) -> None:
     menus = _flat(client, auth_headers)
-    assert len(menus) == 30
+    assert len(menus) == 35
     assert all(menu["children"] == [] for menu in menus)
-    assert len({menu["name"] for menu in menus}) == 30
+    assert len({menu["name"] for menu in menus}) == 35
 
     page = client.get("/api/menus", headers=auth_headers, params={"limit": 5, "offset": 0})
     assert page.status_code == 200

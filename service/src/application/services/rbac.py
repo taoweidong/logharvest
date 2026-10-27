@@ -13,10 +13,10 @@
 from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import case, or_
+from sqlalchemy import case, func, or_
 from sqlmodel import Session, select
 
-from src.api.v1.schemas import (
+from src.application.schemas import (
     MenuCreate,
     MenuRead,
     MenuUpdate,
@@ -31,6 +31,7 @@ from src.api.v1.schemas import (
 from src.domain.models.auth import ADMIN_ROLE_CODE, Role, User, UserRole
 from src.domain.models.rbac import Menu, RoleMenu
 from src.domain.services.passwords import hash_password
+from src.domain.text import escape_like
 
 DIRECTORY = 0
 PAGE = 1
@@ -52,10 +53,6 @@ class RbacConflictError(RbacError):
 
 
 # --- 用户 -------------------------------------------------------------------
-
-
-def _escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _username_taken(session: Session, username: str) -> bool:
@@ -118,7 +115,7 @@ def list_users(
     statement = select(User).order_by(User.id)
     term = (keyword or "").strip()
     if term:
-        pattern = f"%{_escape_like(term)}%"
+        pattern = f"%{escape_like(term)}%"
         statement = statement.where(
             or_(
                 User.username.ilike(pattern, escape="\\"),
@@ -308,8 +305,11 @@ def delete_role(session: Session, role_id: int) -> None:
     if role.is_system:
         raise RbacConflictError("system role cannot be deleted")
 
-    user_count = len(
-        session.exec(select(UserRole.user_id).where(UserRole.role_id == role_id)).all()
+    user_count = int(
+        session.exec(
+            select(func.count()).select_from(UserRole).where(UserRole.role_id == role_id)
+        ).one()
+        or 0
     )
     if user_count:
         raise RbacConflictError(f"role is assigned to {user_count} user(s)")

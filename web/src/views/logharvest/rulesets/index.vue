@@ -1,14 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
+import { useRouter } from "vue-router";
 import { PureTableBar } from "@/components/RePureTableBar";
 import { message } from "@/utils/message";
 import { apiErrorDetail } from "@/api/logharvest";
 import { getRuleSet, listRuleSets } from "@/api/logharvestAdmin";
 import type { RuleSet } from "@/api/logharvestTypes";
 import { formatDateTime } from "../format";
+import { useAppStoreHook } from "@/store/modules/app";
 import EditDrawer from "./edit-drawer.vue";
 
 defineOptions({ name: "RuleSets" });
+
+const router = useRouter();
+const appStore = useAppStoreHook();
+const isMobile = computed(() => appStore.device === "mobile");
 
 const loading = ref(false);
 const rows = ref<RuleSet[]>([]);
@@ -20,7 +26,7 @@ const page = reactive({ limit: 20, offset: 0 });
 const hasNext = computed(() => rows.value.length === page.limit);
 
 const drawerVisible = ref(false);
-const editingSourceId = ref<number | null>(null);
+const detailId = ref<number | null>(null);
 
 async function load() {
   loading.value = true;
@@ -44,24 +50,47 @@ async function load() {
   }
 }
 
-function openCreate() {
-  editingSourceId.value = null;
+function openDetail(row: RuleSet) {
+  detailId.value = row.id;
   drawerVisible.value = true;
 }
 
-function openVersionBase(row: RuleSet) {
-  editingSourceId.value = row.id;
-  drawerVisible.value = true;
+/**
+ * 规则的重活（增删改、另存新版本）在「规则维护」页做：那里是整页表格，
+ * 比抽屉里塞一套完整编辑器更好用，也避免同一个编辑表单在两处各写一份。
+ */
+function goMaintenance(row?: RuleSet) {
+  router.push({
+    path: "/rules/maintenance",
+    query: row
+      ? { rule_set_id: String(row.id), version: String(row.version) }
+      : undefined
+  });
 }
 
-const columns: TableColumnList = [
-  { label: "ID", prop: "id", width: 90 },
-  { label: "名称", prop: "name", minWidth: 200, showOverflowTooltip: true },
+const columns = computed<TableColumnList>(() => [
+  { label: "ID", prop: "id", width: isMobile.value ? 70 : 90 },
+  {
+    label: "名称",
+    prop: "name",
+    minWidth: isMobile.value ? 160 : 200,
+    showOverflowTooltip: true
+  },
   { label: "版本", prop: "version", width: 90 },
   { label: "规则数", prop: "rule_count", slot: "rule_count", width: 100 },
-  { label: "创建时间", prop: "created_at", slot: "created_at", width: 190 },
-  { label: "操作", prop: "operation", slot: "operation", width: 180, fixed: "right" }
-];
+  ...(isMobile.value
+    ? []
+    : ([
+        { label: "创建时间", prop: "created_at", slot: "created_at", width: 190 }
+      ] as TableColumnList)),
+  {
+    label: "操作",
+    prop: "operation",
+    slot: "operation",
+    width: isMobile.value ? 130 : 200,
+    fixed: isMobile.value ? undefined : "right"
+  }
+]);
 
 onMounted(load);
 </script>
@@ -70,13 +99,11 @@ onMounted(load);
   <div class="p-4">
     <PureTableBar title="规则集" :columns="columns" @refresh="load">
       <template #buttons>
-        <el-button
-          v-perms="'rulesets:write'"
-          type="primary"
-          @click="openCreate"
-        >
-          新建规则集
-        </el-button>
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <el-button v-perms="'rulesets:write'" @click="goMaintenance()">
+            新建规则集
+          </el-button>
+        </div>
       </template>
       <template v-slot="{ size }">
         <pure-table
@@ -97,20 +124,25 @@ onMounted(load);
             {{ formatDateTime(row.created_at) }}
           </template>
           <template #operation="{ row }">
+            <el-button :size="size" link type="primary" @click="openDetail(row)">
+              详情
+            </el-button>
             <el-button
+              v-perms="'rulesets:write'"
               :size="size"
               link
               type="primary"
-              @click="openVersionBase(row)"
+              @click="goMaintenance(row)"
             >
-              查看/另存新版本
+              编辑规则
             </el-button>
           </template>
         </pure-table>
-        <div class="mt-3 flex items-center justify-between text-sm">
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
           <span class="text-gray-500">
             后端列表接口不返回总数与规则内容；同名规则集以版本递增共存，第
-            {{ Math.floor(page.offset / page.limit) + 1 }} 页
+            {{ Math.floor(page.offset / page.limit) + 1 }} 页。规则的增删改与「另存新版本」在
+            「规则管理 → 规则维护」整页完成。
           </span>
           <div class="flex gap-2">
             <el-button :disabled="page.offset === 0 || loading" @click="(page.offset -= page.limit), load()">
@@ -124,6 +156,6 @@ onMounted(load);
       </template>
     </PureTableBar>
 
-    <EditDrawer v-model="drawerVisible" :source-id="editingSourceId" @created="load" />
+    <EditDrawer v-model="drawerVisible" :source-id="detailId" />
   </div>
 </template>

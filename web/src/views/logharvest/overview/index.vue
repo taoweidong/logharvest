@@ -12,8 +12,7 @@ import {
   JOB_STATUS_OPTIONS,
   type MaintenanceResult,
   type Overview,
-  type SystemStatus,
-  type TaskStatus
+  type SystemStatus
 } from "@/api/logharvestTypes";
 import { formatDuration, statusTagType } from "../format";
 
@@ -35,14 +34,8 @@ const maintaining = ref(false);
 const maintenanceResult = ref<MaintenanceResult | null>(null);
 const loadedAt = ref("");
 
-const TASK_STATUS_OPTIONS: TaskStatus[] = [
-  "pending",
-  "running",
-  "succeeded",
-  "partial",
-  "failed",
-  "cancelled"
-];
+// 文件任务与作业共用同一套状态词表（后端两个 Literal 同值），直接复用作业侧常量。
+const TASK_STATUS_OPTIONS = JOB_STATUS_OPTIONS;
 
 function sum(counts: Record<string, number | undefined> | undefined): number {
   if (!counts) return 0;
