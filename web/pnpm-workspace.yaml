@@ -28,3 +28,5 @@ allowBuilds:
   es5-ext: true
   core-js: true
   typeit: true
+patchedDependencies:
+  '@pureadmin/table@3.3.0': patches/@pureadmin__table@3.3.0.patch
