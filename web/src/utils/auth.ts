@@ -32,11 +32,20 @@ export const TokenKey = "authorized-token";
 export const multipleTabsKey = "multiple-tabs";
 
 /** 获取`token` */
-export function getToken(): DataInfo<number> {
+export function getToken(): DataInfo<number> | undefined {
   // 此处与`TokenKey`相同，此写法解决初始化时`Cookies`中不存在`TokenKey`报错
-  return Cookies.get(TokenKey)
-    ? JSON.parse(Cookies.get(TokenKey))
-    : storageLocal().getItem(userKey);
+  const raw = Cookies.get(TokenKey);
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // cookie 可能被截断或写坏（旧版本残留、手工编辑、超出容量被截断）：
+      // 此时 JSON.parse 会在"读 token"这条启动必经之路上抛异常，页面直接白屏。
+      // 清掉坏 cookie 让调用方退回 localStorage 或未登录态，登录后自愈。
+      Cookies.remove(TokenKey);
+    }
+  }
+  return storageLocal().getItem<DataInfo<number>>(userKey) ?? undefined;
 }
 
 /**
@@ -134,7 +143,9 @@ export const hasPerms = (value: string | Array<string>): boolean => {
   const allPerms = "*:*:*";
   const { permissions } = useUserStoreHook();
   if (!permissions) return false;
-  if (permissions.length === 1 && permissions[0] === allPerms) return true;
+  // 通配权限不必是唯一条目：后端权限解析可能同时返回通配与显式码，
+  // 只要含通配就放行（与 require_permission 的 ALL_PERMISSION_CODE 短路语义一致）。
+  if (permissions.includes(allPerms)) return true;
   const isAuths = isString(value)
     ? permissions.includes(value)
     : isIncludeAllChildren(value, permissions);

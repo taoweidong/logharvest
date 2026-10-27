@@ -14,6 +14,11 @@ import { message } from "@/utils/message";
 import { $t, transformI18n } from "@/plugins/i18n";
 import { getToken, formatToken } from "@/utils/auth";
 import { useUserStoreHook } from "@/store/modules/user";
+import {
+  enqueuePendingRequest,
+  flushPendingRequests,
+  rejectPendingRequests
+} from "./pendingRequests";
 
 // 相关配置请参考：www.axios-js.com/zh-cn/docs/#axios-request-config-1
 const defaultConfig: AxiosRequestConfig = {
@@ -39,9 +44,6 @@ class PureHttp {
     this.httpInterceptorsResponse();
   }
 
-  /** `token`过期后，暂存待执行的请求 */
-  private static requests = [];
-
   /** 防止重复刷新`token` */
   private static isRefreshing = false;
 
@@ -56,11 +58,10 @@ class PureHttp {
 
   /** 重连原始请求 */
   private static retryOriginalRequest(config: PureHttpRequestConfig) {
-    return new Promise(resolve => {
-      PureHttp.requests.push((token: string) => {
-        config.headers["Authorization"] = formatToken(token);
-        resolve(config);
-      });
+    // 队列行为（重放/失败 reject）抽在 pendingRequests 模块，见其文件头注释。
+    return enqueuePendingRequest((token: string) => {
+      config.headers["Authorization"] = formatToken(token);
+      return config;
     });
   }
 
@@ -95,11 +96,12 @@ class PureHttp {
                       .then(res => {
                         const token = res.data.accessToken;
                         config.headers["Authorization"] = formatToken(token);
-                        PureHttp.requests.forEach(cb => cb(token));
-                        PureHttp.requests = [];
+                        flushPendingRequests(token);
                       })
                       .catch(_err => {
-                        PureHttp.requests = [];
+                        // 逐个 reject 排队中的请求（让调用方走各自的 catch/finally），
+                        // 再登出；只清空不 reject 会让它们永久 pending。
+                        rejectPendingRequests(_err);
                         useUserStoreHook().logOut();
                         message(transformI18n($t("login.pureLoginExpired")), {
                           type: "warning"
