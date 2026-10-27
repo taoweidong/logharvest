@@ -137,7 +137,7 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` 已从认证路径与
 
 **响应信封**：只有 `POST /api/login`、`POST /api/refresh-token`、`GET /api/auth/routes`、`POST /api/logout` 返回 `{"code": 0, "message": "ok", "data": ...}`（前端基座按 `data.code === 0` 判定）；其余业务接口保持纯 REST 对象与 `{"detail": ...}` 错误体，不包信封。
 
-**RBAC（菜单即权限）**：`menus` 表同时承载目录、页面与权限节点（`menu_type` 0/1/2），权限码是 `menu_type=2` 的 `name`（如 `jobs:read`）。`roles` 增加 `description`/`is_active`/`is_system`，`role_menus`、`user_roles` 建立角色-菜单与用户-角色多对多。启动时幂等种子写入 2 个目录、10 个页面、18 个权限节点和 admin/operator/viewer 三个默认角色；已存在的数据不会被覆盖。admin 是内置保护角色（`is_system`），operator/viewer 是可编辑的默认角色（仅在首次种子创建，删除后重启不会重建）。admin 不依赖授权表，权限解析返回通配 `*:*:*`；其他用户只拿到 active 角色关联的 active 权限节点。登录返回 `roles`/`permissions`；`GET /api/auth/routes` 按当前用户生成动态菜单/路由（没有可见子页面的目录会被剔除），页面 `meta.auths` 携带有效权限码供前端按钮级控制。业务接口按细粒度权限码校验（如 `jobs:read`/`jobs:write`/`jobs:operate`），SSE 使用短会话的流式权限依赖，不在连接期间占用请求级 Session。内置 admin 角色不可删除、不可停用、菜单授权只读；用户/角色/菜单管理接口见下表。设计与验收记录（范围扩大评审、边界保护矩阵、真实 PG 与真实浏览器证据、已知限制）见 [`docs/superpowers/specs/2026-10-27-logharvest-rbac-menus-permissions-design.md`](../docs/superpowers/specs/2026-10-27-logharvest-rbac-menus-permissions-design.md)。
+**RBAC（菜单即权限）**：`menus` 表同时承载目录、页面与权限节点（`menu_type` 0/1/2），权限码是 `menu_type=2` 的 `name`（如 `jobs:read`）。`roles` 增加 `description`/`is_active`/`is_system`，`role_menus`、`user_roles` 建立角色-菜单与用户-角色多对多。启动时幂等种子写入 **3 个目录（任务管理 `/logharvest`、规则管理 `/rules`、系统管理 `/system`）、13 个页面、19 个权限节点**和 admin/operator/viewer 三个默认角色；已存在的数据不会被覆盖。内置菜单行按 IA 声明**重塑**：`parent_id`/`menu_type`/`path`/`component` 归位（管理端本来就改不了这些），`title`/`rank`/`icon` 只在现值仍等于旧默认时才更新，因此管理员的定制不会被冲掉；用户自建菜单只做补缺失。admin 是内置保护角色（`is_system`），operator/viewer 是可编辑的默认角色（仅在首次种子创建，删除后重启不会重建）。admin 不依赖授权表，权限解析返回通配 `*:*:*`；其他用户只拿到 active 角色关联的 active 权限节点。登录返回 `roles`/`permissions`；`GET /api/auth/routes` 按当前用户生成动态菜单/路由（没有可见子页面的目录会被剔除），页面 `meta.auths` 携带有效权限码供前端按钮级控制。业务接口按细粒度权限码校验（如 `jobs:read`/`jobs:write`/`jobs:operate`），SSE 使用短会话的流式权限依赖，不在连接期间占用请求级 Session。内置 admin 角色不可删除、不可停用、菜单授权只读；用户/角色/菜单管理接口见下表。设计与验收记录（范围扩大评审、边界保护矩阵、真实 PG 与真实浏览器证据、已知限制）见 [`docs/superpowers/specs/2026-10-27-logharvest-rbac-menus-permissions-design.md`](../docs/superpowers/specs/2026-10-27-logharvest-rbac-menus-permissions-design.md)，本轮 IA 重构与操作日志见 [`docs/superpowers/specs/2026-10-27-logharvest-menu-ia-and-operation-log-design.md`](../docs/superpowers/specs/2026-10-27-logharvest-menu-ia-and-operation-log-design.md)。
 
 ### 用户 / 角色 / 菜单管理
 
@@ -160,6 +160,7 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` 已从认证路径与
 | `POST` | `/api/menus` | 新建自定义菜单；校验目录→页面→权限的父子关系 |
 | `PUT` | `/api/menus/{id}` | 更新菜单；名称/标题传空白返回 `422`；内置菜单只允许改标题/图标/排序/显示/启用 |
 | `DELETE` | `/api/menus/{id}` | 删除自定义叶子菜单（204）；内置菜单或有子节点时 `409` |
+| `GET` | `/api/operation-logs` | 操作日志（需 `audit:read`，operator 有、viewer 没有）：`actor_id`/`action` 前缀/`resource_type`/`resource_id`/`created_from`+`created_to`（成对，否则 `422`）+ `limit`/`offset`，按时间倒序返回裸数组。表只追加，没有写接口也没有删除接口 |
 
 管理接口全部要求对应的 `users:*` / `roles:*` / `menus:*` 权限；未授权返回 `403`。权限变更在重新登录后反映到前端菜单与 `permissions` 快照，后端接口权限实时生效。
 
@@ -182,13 +183,15 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` 已从认证路径与
 | `GET` | `/api/rule-sets` | 规则集轻量列表（不含 `config`/`created_by`），按名称、版本排序，`limit`/`offset` 分页 |
 | `GET` | `/api/rule-sets/{id}` | 规则集详情，返回完整 `config` 与 `created_by`；不存在返回 `404` |
 | `POST` | `/api/rule-sets` | 创建规则集新版本（同名 `max(version)+1`），不覆盖旧版本；配置校验失败返回 `422` |
-| `GET` | `/api/jobs` | 作业列表，`limit`/`offset` 分页 |
+| `GET` | `/api/jobs` | 作业列表，`limit`/`offset` 分页；`status` 下推到 SQL（非法状态值 `422`） |
 | `POST` | `/api/jobs` | 创建作业并同步扫描规划；可选 `Idempotency-Key` |
 | `GET` | `/api/jobs/{id}` | 作业详情 |
 | `GET` | `/api/jobs/{id}/files` | 作业的文件任务，`limit`/`offset` 分页；可选 `status` 精确筛选（`pending`/`running`/`succeeded`/`partial`/`failed`/`cancelled`），值不在枚举内返回 `422`；条目含 `status`、`attempts`、`max_attempts`、`worker_id`、`heartbeat_at`、`error` |
 | `POST` | `/api/jobs/{id}/cancel` | 请求取消作业 |
 | `POST` | `/api/jobs/{id}/files/retry-failed` | 把该作业处于 `failed` 的文件任务放回队列（置 `pending`、清 `error`/`worker_id`/`finished_at`、`scheduled_at=now()`），`attempts` 历史保留、不重置；返回 `{retried: n, remaining_failed: m}`（单次最多 200 条，`remaining_failed` 是本次未取走的剩余数）；确有任务入队且作业处于终态时，作业被拉回 `running` 并清 `finished_at`，否则终态汇总看不到它；作业不存在 `404`，**已取消**（`cancel_requested` 或 `cancelled`）返回 `409` —— `CLAIM_SQL` 永不再领取取消作业的任务，重新入队会让它永久滞留 |
 | `GET` | `/api/matches` | 命中结果；必须提供 `job_id` 或 `created_from` + `created_to`，支持 `rule_id`、`file_name`、`severity`、`(created_at,id)` 游标与 `limit` |
+| `GET` | `/api/stats/jobs` | 任务统计（需 `jobs:read`）：`days` 1–90、可选 `data_source_id`；返回 `totals` / `daily`（UTC 日界）/ `top_rules`（带 `rule_version`），单对象非数组 |
+| `GET` | `/api/rules` | 跨版本规则索引（需 `rulesets:read`）：查询期展开 `rule_sets.config`，支持 `keyword`（字面量匹配，`%`/`_` 不当通配）、`type=keyword|regex`、`rule_set_name`、`limit`/`offset`，返回裸数组 |
 | `GET` | `/api/workers` | Worker 列表，`limit`/`offset` 分页（不包含心跳/管理写接口） |
 | `POST` | `/api/workers/{id}/drain` | 请求排空；返回 `{id, drain_requested, status}`，离线 Worker 只记录标记、状态保持 `offline` |
 | `POST` | `/api/workers/{id}/resume` | 取消排空并置为 `online`；对 `offline` Worker 返回 `409` |
@@ -326,7 +329,22 @@ uv run --with coverage coverage run -m pytest -q
 uv run --with coverage coverage report --include="src/*"
 ```
 
-`mypy` 当前只覆盖 `src/domain`、`src/worker`、`src/application/worker`、`src/config`（见 `pyproject.toml` 的 `[tool.mypy].files`）：`src/api` 与 `src/application/services` 大量使用 SQLModel，mypy 无法正确推断主键 `int | None` 与列表达式，全量检查会产生成片假阳性。前端门禁为 `pnpm typecheck` 与 `pnpm build`，见 [`../web/README.md`](../web/README.md)。
+`mypy` 当前只覆盖 `src/domain`、`src/worker`、`src/application/worker`、`src/config`（见 `pyproject.toml` 的 `[tool.mypy].files`）：`src/api` 与 `src/application/services` 大量使用 SQLModel，mypy 无法正确推断主键 `int | None` 与列表达式，全量检查会产生成片假阳性。前端门禁为 `pnpm test`（vitest 单测）、`pnpm typecheck` 与 `pnpm build`，见 [`../web/README.md`](../web/README.md)。
+
+### 协作测试门禁（2026-10-28 起）
+
+每一次 AI 交互在允许提交代码前，必须执行前后端全部单元测试并全部通过；测试未通过不得提交，先定位修复再重跑验证。完整规范见仓库根目录 [`agent.md`](../agent.md)：
+
+```bash
+cd service && .venv/Scripts/python.exe -m pytest tests -q   # 后端全量（Windows/Git Bash）
+cd web && pnpm test && pnpm typecheck                        # 前端单测 + 类型检查
+```
+
+覆盖率工具已入 venv（pytest-cov）：`pytest tests -q --cov=src --cov-report=term` 直接可用（2026-10-28 起，总覆盖 97%）。
+
+### 边界/异常分支专项测试（2026-10-28 补全）
+
+`tests/application/test_audit_service.py`（审计吞异常三分支 + 过滤矩阵）、`tests/application/test_analytics_edges.py`（日期归一/脏配置/摘要截断）、`tests/application/test_rbac_edges.py`（RBAC 保护规则/环防护/显式 None）、`tests/application/test_auth_navigation_edges.py`（无 id User 的退化输入、动态路由空目录）、`tests/domain/test_evaluator_edges.py`（regex 标志/阈值退化/防御分支）、`tests/domain/test_source_guard_edges.py`（挂载表退化/三态映射/非法策略）、`tests/domain/archive/test_reader_edges.py`（损坏容器/预算成员错误/源大小退化）、`tests/worker/test_runtime_edges.py`（失败结果日志/维护吞错/孤儿目录 stat 失败）、`tests/test_app_lifespan.py`（启动迁移 + 种子接线）。
 
 ## 范围
 

@@ -35,6 +35,7 @@ data/manifest.json
 .coverage
 .coverage.*
 htmlcov/
+service/coverage.json
 
 # Node / frontend
 node_modules/

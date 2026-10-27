@@ -125,3 +125,24 @@ def test_maintenance_endpoint_reports_unavailable_without_postgresql(client, aut
 
 def test_maintenance_requires_admin(client) -> None:
     assert client.post("/api/system/maintenance").status_code == 401
+
+
+def test_maintenance_success_records_audit(client, auth_headers, monkeypatch) -> None:
+    """维护入口的 200 主路径（SQLite 套件里真实清扫需要 PG，这里注入结果）。"""
+    from src.api.v1 import routes_system
+
+    calls: dict[str, object] = {}
+
+    def fake_run_maintenance(engine, stale_seconds=120):
+        calls["engine"] = engine
+        return {"recovered": 2, "workers_demoted": 1, "jobs_finalized": 3}
+
+    monkeypatch.setattr(routes_system, "run_maintenance", fake_run_maintenance)
+    response = client.post("/api/system/maintenance", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json() == {
+        "recovered": 2,
+        "workers_demoted": 1,
+        "jobs_finalized": 3,
+    }
+    assert calls["engine"] is not None

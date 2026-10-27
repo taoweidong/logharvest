@@ -71,6 +71,9 @@ cd ../web && pnpm dev
 | `/logharvest/rulesets` | 规则集列表与结构化新建 | `GET/POST /api/rule-sets`、`GET /api/rule-sets/{id}` |
 | `/logharvest/datasources` | 数据源列表与新建、路径测试 | `GET/POST /api/data-sources`、`POST /api/data-sources/{id}/test` |
 | `/logharvest/matches` | 命中结果游标浏览 | `GET /api/matches` |
+| `/logharvest/stats` | 任务统计（totals / 每日条形 / Top 规则） | `GET /api/stats/jobs`、`GET /api/data-sources` |
+| `/rules/maintenance` | 规则维护（某版本整页编辑 + 跨版本检索） | `GET /api/rules`、`GET /api/rule-sets`、`POST /api/rule-sets`（另存新版本） |
+| `/system/audit-logs` | 操作日志检索与详情 | `GET /api/operation-logs`、`GET /api/users` |
 | `/logharvest/workers` | Worker 管理（按版本排空）+ **CPU / 内存 / 临时盘空闲 / 最近错误四列** | `GET /api/workers`、`POST /api/workers/{id}/drain\|resume`、`POST /api/workers/drain-version?version=` |
 
 ### 尝试历史抽屉（M2c Task 5）
@@ -161,6 +164,11 @@ Worker 都会显示 `—`。界面把 `NULL` 一律渲染成 `—`（未知）�
 - `src/views/system/users`：用户列表、新建/编辑、分配角色、重置密码、删除、启停；
 - `src/views/system/roles`：角色 CRUD、菜单/权限树精确授权（`check-strictly`）、系统角色 admin 只读；
 - `src/views/system/menus`：目录/页面/权限三级菜单树管理，内置菜单仅允许修改展示字段；
+- `src/views/system/audit-logs`：操作日志（需 `audit:read`），时间/用户/动作族/对象类型筛选 + 详情抽屉看 `detail`；
+- `src/views/logharvest/stats`：任务统计（`/api/stats/jobs`），**没有图表库**，用统计卡 + `el-progress` 自绘每日条形 + Top 规则表；
+- `src/views/rules/maintenance`：规则维护（整页编辑某版本的规则 + 跨版本检索），规则集页的"编辑规则"跳到这里；
+
+菜单结构由后端 `menus` 表下发为三个一级目录：**任务管理**（任务创建/任务统计/日志分析/数据源管理/Worker 管理）、**规则管理**（规则维护/规则集维护）、**系统管理**（用户/角色/菜单/操作日志）。新增页面时后端种子的 `component` 必须与 `src/views` 下的相对路径精确对应（`logharvest/stats/index` 等），菜单 `icon` 用的 `ep/*` 名称必须同时登记进 `src/components/ReIcon/src/offlineIconNames.ts` 与 `offlineIcon.ts`，否则会退化成运行时去 api.iconify.design 拉图标。
 - `src/api/rbac.ts` / `rbacTypes.ts`：上述页面的纯 REST API 与类型；
 - 登录返回的 `permissions`（admin 为 `*:*:*`）驱动 `v-perms`；动态路由的 `meta.auths`
   同时可用于 `v-auth`。既有业务页面的写/操作按钮已按 `jobs:write`、`jobs:operate`、
@@ -186,3 +194,20 @@ Worker 都会显示 `—`。界面把 `NULL` 一律渲染成 `—`（未知）�
   `main.ts` 启动报错或 typecheck 失败。
 - 本 fork 未复制上游的 eslint/stylelint/husky/playwright 配置与依赖，因此没有 `pnpm lint`；
   质量门槛为 `pnpm typecheck` 与 `pnpm build`。
+
+
+## 测试
+
+单元测试使用 vitest 5 + jsdom（配置见 `vitest.config.ts`，用例位于 `tests/`）：
+
+```bash
+pnpm test        # 全量单测（CI 门禁）
+pnpm test:watch  # watch 模式
+pnpm typecheck   # vue-tsc 类型检查（CI 门禁）
+```
+
+覆盖范围（2026-10-28）：`utils/sse.ts`（SSE 帧解析边界与流收尾）、`utils/auth.ts`（`hasPerms` 通配语义、`getToken` 损坏 cookie 自愈）、`utils/http/pendingRequests.ts`（token 刷新队列的重放/失败 reject 契约）、`views/logharvest/format.ts`（UTC 补 Z、未知占位、422 展开等全站显示契约）、`views/rules/maintenance/rule-form.ts`（判别联合往返转换与前端校验闸门）、`api/logharvest.ts`（错误详情/状态码提取）、`views/system/filters.ts`（角色/菜单树过滤）。
+
+纯逻辑请继续放在 `.ts` 模块（而非 `.vue` 内联），这是可测性的前提；组件级测试需要 Element Plus 全量挂载，暂不纳入门禁。
+
+协作测试门禁（AI 提交前必须全绿）见仓库根 [`agent.md`](../agent.md)。
