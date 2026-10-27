@@ -127,6 +127,57 @@ export const appendFieldByUniqueId = (
 };
 
 /**
+ * @description 过滤树，保留命中节点及其整条祖先链（不修改入参）
+ * @param tree 树
+ * @param predicate 节点命中判断
+ * @returns 新的树；命中节点的**完整子树**一并保留，未命中的叶子被剔除
+ */
+export const filterTree = <T extends { children?: T[] }>(
+  tree: T[],
+  predicate: (node: T) => boolean
+): T[] => {
+  if (!Array.isArray(tree)) return [];
+  const result: T[] = [];
+  for (const node of tree) {
+    if (!node) continue;
+    if (predicate(node)) {
+      // 目录命中时保留整棵子树，否则“搜目录”只能看到目录本身
+      result.push({ ...node });
+      continue;
+    }
+    const children = Array.isArray(node.children)
+      ? filterTree(node.children, predicate)
+      : [];
+    if (children.length === 0) continue;
+    result.push({ ...node, children });
+  }
+  return result;
+};
+
+/**
+ * @description 深度优先收集树中所有节点的 id（含根）
+ * @param tree 树
+ * @returns id 数组
+ */
+export const collectTreeIds = <T extends { id: number; children?: T[] }>(
+  tree: T[]
+): number[] => {
+  if (!Array.isArray(tree)) return [];
+  const ids: number[] = [];
+  const walk = (nodes: T[]) => {
+    for (const node of nodes) {
+      if (!node) continue;
+      ids.push(node.id);
+      if (Array.isArray(node.children) && node.children.length) {
+        walk(node.children);
+      }
+    }
+  };
+  walk(tree);
+  return ids;
+};
+
+/**
  * @description 构造树型结构数据
  * @param data 数据源
  * @param id id字段 默认id

@@ -3,31 +3,41 @@ import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import type { FormInstance, FormRules } from "element-plus";
 import { ElMessageBox } from "element-plus";
 import { PureTableBar } from "@/components/RePureTableBar";
+import { useRenderIcon } from "@/components/ReIcon/src/hooks";
 import { message } from "@/utils/message";
 import { apiErrorDetail } from "@/api/logharvest";
 import { createMenu, deleteMenu, menuTree, updateMenu } from "@/api/rbac";
 import type { MenuPayload, MenuRecord, MenuType } from "@/api/rbacTypes";
 import { useAppStoreHook } from "@/store/modules/app";
+import { filterMenus, menuTypeMeta } from "../filters";
+import { ADAPTIVE_OFFSET_BOTTOM, TABLE_HEADER_CELL_STYLE } from "../table";
+
+import Refresh from "~icons/ep/refresh";
+import AddFill from "~icons/ri/add-circle-line";
+import EditPen from "~icons/ep/edit-pen";
+import Delete from "~icons/ep/delete";
 
 defineOptions({ name: "Menus" });
-
-type TagType = "primary" | "success" | "warning" | "info" | "danger";
-
-const MENU_TYPE_META: Record<MenuType, { label: string; tag: TagType }> = {
-  0: { label: "目录", tag: "info" },
-  1: { label: "页面", tag: "primary" },
-  2: { label: "权限", tag: "warning" }
-};
-
-function menuTypeMeta(type: MenuType | number) {
-  return MENU_TYPE_META[type as MenuType] ?? { label: "未知", tag: "info" as TagType };
-}
 
 const ROOT_VALUE = 0;
 
 const loading = ref(false);
 const tree = ref<MenuRecord[]>([]);
 const tableRef = ref();
+
+/** 菜单树一次取全量，关键字筛选在客户端对整棵树做（保留命中节点的祖先链） */
+const filters = reactive({ keyword: "" });
+const appliedKeyword = ref("");
+const filteredTree = computed(() => filterMenus(tree.value, appliedKeyword.value));
+
+function onSearch() {
+  appliedKeyword.value = filters.keyword;
+}
+
+function onResetSearch() {
+  filters.keyword = "";
+  appliedKeyword.value = "";
+}
 
 async function load() {
   loading.value = true;
@@ -300,18 +310,19 @@ const appStore = useAppStoreHook();
 const isMobile = computed(() => appStore.device === "mobile");
 
 const columns = computed<TableColumnList>(() => [
-  { label: "标题", prop: "title", minWidth: 150 },
-  { label: "类型", prop: "menu_type", width: 72 },
-  { label: "名称/权限码", prop: "name", minWidth: 130 },
-  { label: "路径", prop: "path", minWidth: 150 },
-  { label: "组件", prop: "component", minWidth: 150 },
-  { label: "排序", prop: "rank", width: 60 },
-  { label: "显示", prop: "show_link", width: 60 },
-  { label: "状态", prop: "is_active", width: 60 },
+  { label: "标题", prop: "title", minWidth: 180, showOverflowTooltip: true },
+  { label: "类型", prop: "menu_type", slot: "menu_type", width: 90 },
+  { label: "名称/权限码", prop: "name", minWidth: 140, showOverflowTooltip: true },
+  { label: "路径", prop: "path", minWidth: 160, showOverflowTooltip: true },
+  { label: "组件", prop: "component", slot: "component", minWidth: 170 },
+  { label: "排序", prop: "rank", width: 70 },
+  { label: "显示", prop: "show_link", slot: "show_link", width: 80 },
+  { label: "状态", prop: "is_active", slot: "is_active", width: 80 },
   {
     label: "操作",
     prop: "operation",
-    width: 140,
+    slot: "operation",
+    width: 170,
     fixed: isMobile.value ? undefined : "right"
   }
 ]);
@@ -321,6 +332,37 @@ onMounted(load);
 
 <template>
   <div class="p-4">
+    <el-form
+      :inline="true"
+      :model="filters"
+      class="search-form bg-bg_color mb-2"
+      @submit.prevent
+    >
+      <el-form-item label="菜单名称：" prop="keyword">
+        <el-input
+          v-model="filters.keyword"
+          placeholder="搜索标题 / 权限码 / 路径"
+          clearable
+          class="w-45!"
+          @keyup.enter="onSearch"
+          @clear="onResetSearch"
+        />
+      </el-form-item>
+      <el-form-item>
+        <el-button
+          type="primary"
+          :icon="useRenderIcon('ri/search-line')"
+          :loading="loading"
+          @click="onSearch"
+        >
+          搜索
+        </el-button>
+        <el-button :icon="useRenderIcon(Refresh)" @click="onResetSearch">
+          重置
+        </el-button>
+      </el-form-item>
+    </el-form>
+
     <PureTableBar
       title="菜单管理"
       :columns="columns"
@@ -328,117 +370,94 @@ onMounted(load);
       @refresh="load"
     >
       <template #buttons>
-        <div class="flex items-center gap-2">
-          <el-button :disabled="loading" @click="load">刷新</el-button>
-          <el-button v-perms="'menus:write'" type="primary" @click="openCreate">
-            新建菜单
-          </el-button>
-        </div>
-      </template>
-      <template v-slot="{ size }">
-        <el-table
-          ref="tableRef"
-          v-loading="loading"
-          :size="size"
-          row-key="id"
-          border
-          default-expand-all
-          :data="tree"
-          :tree-props="{ children: 'children' }"
+        <el-button
+          v-perms="'menus:write'"
+          type="primary"
+          :icon="useRenderIcon(AddFill)"
+          @click="openCreate"
         >
-          <el-table-column
-            prop="title"
-            label="标题"
-            min-width="150"
-            show-overflow-tooltip
-          />
-          <el-table-column label="类型" width="72">
-            <template #default="{ row }">
-              <el-tag
-                :size="size"
-                :type="menuTypeMeta(row.menu_type).tag"
-                effect="plain"
-              >
-                {{ menuTypeMeta(row.menu_type).label }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column
-            prop="name"
-            label="名称/权限码"
-            min-width="130"
-            show-overflow-tooltip
-          />
-          <el-table-column
-            prop="path"
-            label="路径"
-            min-width="150"
-            show-overflow-tooltip
-          />
-          <el-table-column
-            prop="component"
-            label="组件"
-            min-width="150"
-            show-overflow-tooltip
-          >
-            <template #default="{ row }">
-              {{ row.component || "—" }}
-            </template>
-          </el-table-column>
-          <el-table-column prop="rank" label="排序" width="60" />
-          <el-table-column label="显示" width="60">
-            <template #default="{ row }">
-              <el-tag
-                :size="size"
-                :type="row.show_link ? 'success' : 'info'"
-                effect="plain"
-              >
-                {{ row.show_link ? "是" : "否" }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" width="60">
-            <template #default="{ row }">
-              <el-tag
-                :size="size"
-                :type="row.is_active ? 'success' : 'info'"
-                effect="plain"
-              >
-                {{ row.is_active ? "启用" : "停用" }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="操作"
-            width="140"
-            :fixed="isMobile ? false : 'right'"
-          >
-            <template #default="{ row }">
-              <el-button
-                v-perms="'menus:write'"
-                :size="size"
-                link
-                type="primary"
-                @click="openEdit(row)"
-              >
-                编辑
-              </el-button>
-              <el-button
-                v-if="!row.is_system"
-                v-perms="'menus:write'"
-                :size="size"
-                link
-                type="danger"
-                @click="onDelete(row)"
-              >
-                删除
-              </el-button>
-              <el-tag v-else :size="size" type="warning" effect="plain">
-                内置
-              </el-tag>
-            </template>
-          </el-table-column>
-        </el-table>
+          新建菜单
+        </el-button>
+      </template>
+      <template v-slot="{ size, dynamicColumns }">
+        <pure-table
+          ref="tableRef"
+          row-key="id"
+          adaptive
+          :adaptiveConfig="{ offsetBottom: ADAPTIVE_OFFSET_BOTTOM }"
+          align-whole="center"
+          table-layout="auto"
+          default-expand-all
+          :tree-props="{
+            hasChildren: 'hasChildren',
+            children: 'children',
+            checkStrictly: false
+          }"
+          :loading="loading"
+          :size="size"
+          :data="filteredTree"
+          :columns="dynamicColumns"
+          :header-cell-style="TABLE_HEADER_CELL_STYLE"
+        >
+          <template #menu_type="{ row }">
+            <el-tag
+              :size="size"
+              :type="menuTypeMeta(row.menu_type).tag"
+              effect="plain"
+            >
+              {{ menuTypeMeta(row.menu_type).label }}
+            </el-tag>
+          </template>
+          <template #component="{ row }">
+            {{ row.component || "—" }}
+          </template>
+          <template #show_link="{ row }">
+            <el-tag
+              :size="size"
+              :type="row.show_link ? 'success' : 'info'"
+              effect="plain"
+            >
+              {{ row.show_link ? "是" : "否" }}
+            </el-tag>
+          </template>
+          <template #is_active="{ row }">
+            <el-tag
+              :size="size"
+              :type="row.is_active ? 'success' : 'info'"
+              effect="plain"
+            >
+              {{ row.is_active ? "启用" : "停用" }}
+            </el-tag>
+          </template>
+          <template #operation="{ row }">
+            <el-button
+              v-perms="'menus:write'"
+              class="reset-margin"
+              :size="size"
+              link
+              type="primary"
+              :icon="useRenderIcon(EditPen)"
+              @click="openEdit(row)"
+            >
+              修改
+            </el-button>
+            <el-button
+              v-if="!row.is_system"
+              v-perms="'menus:write'"
+              class="reset-margin"
+              :size="size"
+              link
+              type="danger"
+              :icon="useRenderIcon(Delete)"
+              @click="onDelete(row)"
+            >
+              删除
+            </el-button>
+            <el-tag v-else :size="size" type="warning" effect="plain">
+              内置
+            </el-tag>
+          </template>
+        </pure-table>
         <p class="mt-3 text-sm text-gray-500">
           内置菜单由系统维护，不能删除；名称、类型、上级、路径、组件不可修改，仅可调整标题、图标、排序与显示状态。
         </p>

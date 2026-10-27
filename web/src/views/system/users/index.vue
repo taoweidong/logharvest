@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import type { FormInstance, FormRules } from "element-plus";
 import { ElMessageBox } from "element-plus";
 import { PureTableBar } from "@/components/RePureTableBar";
+import { useRenderIcon } from "@/components/ReIcon/src/hooks";
 import { message } from "@/utils/message";
 import { apiErrorDetail } from "@/api/logharvest";
 import {
@@ -17,6 +18,15 @@ import {
 import type { RoleRecord, UserRecord } from "@/api/rbacTypes";
 import { formatDateTime } from "@/views/logharvest/format";
 import { useAppStoreHook } from "@/store/modules/app";
+import { ADAPTIVE_OFFSET_BOTTOM, TABLE_HEADER_CELL_STYLE } from "../table";
+
+import Refresh from "~icons/ep/refresh";
+import AddFill from "~icons/ri/add-circle-line";
+import EditPen from "~icons/ep/edit-pen";
+import Delete from "~icons/ep/delete";
+import Key from "~icons/ri/key-2-line";
+import Role from "~icons/ri/admin-line";
+import More from "~icons/ep/more-filled";
 
 defineOptions({ name: "Users" });
 
@@ -24,10 +34,10 @@ const loading = ref(false);
 const rows = ref<UserRecord[]>([]);
 const roles = ref<RoleRecord[]>([]);
 
-const keyword = ref("");
+/** 关键字下推给后端（`?keyword=`），列表接口本身不支持状态筛选 */
+const filters = reactive({ keyword: "" });
 /** 后端列表接口是裸数组且没有 total，沿用窗口式 limit/offset 翻页 */
-const page = reactive({ limit: 20, offset: 0 });
-const hasNext = computed(() => rows.value.length === page.limit);
+const page = reactive({ limit: 20, offset: 0 });const hasNext = computed(() => rows.value.length === page.limit);
 const pageIndex = computed(() => Math.floor(page.offset / page.limit) + 1);
 
 async function load() {
@@ -36,7 +46,7 @@ async function load() {
     rows.value = await listUsers({
       limit: page.limit,
       offset: page.offset,
-      keyword: keyword.value.trim() || undefined
+      keyword: filters.keyword.trim() || undefined
     });
   } catch (error) {
     rows.value = [];
@@ -56,6 +66,12 @@ async function loadRoles() {
 }
 
 function onSearch() {
+  page.offset = 0;
+  load();
+}
+
+function onResetSearch() {
+  filters.keyword = "";
   page.offset = 0;
   load();
 }
@@ -299,7 +315,7 @@ const columns = computed<TableColumnList>(() => [
     label: "操作",
     prop: "operation",
     slot: "operation",
-    width: 260,
+    width: 250,
     fixed: isMobile.value ? undefined : "right"
   }
 ]);
@@ -312,35 +328,61 @@ onMounted(() => {
 
 <template>
   <div class="p-4">
+    <el-form
+      :inline="true"
+      :model="filters"
+      class="search-form bg-bg_color mb-2"
+      @submit.prevent
+    >
+      <el-form-item label="用户名称：" prop="keyword">
+        <el-input
+          v-model="filters.keyword"
+          placeholder="搜索用户名 / 昵称"
+          clearable
+          class="w-45!"
+          @keyup.enter="onSearch"
+          @clear="onSearch"
+        />
+      </el-form-item>
+      <el-form-item>
+        <el-button
+          type="primary"
+          :icon="useRenderIcon('ri/search-line')"
+          :loading="loading"
+          @click="onSearch"
+        >
+          搜索
+        </el-button>
+        <el-button :icon="useRenderIcon(Refresh)" @click="onResetSearch">
+          重置
+        </el-button>
+      </el-form-item>
+    </el-form>
+
     <PureTableBar title="用户管理" :columns="columns" @refresh="load">
       <template #buttons>
-        <div class="flex items-center gap-2">
-          <div class="hidden items-center gap-2 sm:flex">
-            <div class="w-[220px]">
-              <el-input
-                v-model="keyword"
-                clearable
-                placeholder="搜索用户名 / 昵称"
-                @keyup.enter="onSearch"
-                @clear="onSearch"
-              />
-            </div>
-            <el-button @click="onSearch">搜索</el-button>
-          </div>
-          <el-button :disabled="loading" @click="load">刷新</el-button>
-          <el-button v-perms="'users:write'" type="primary" @click="openCreate">
-            新建用户
-          </el-button>
-        </div>
+        <el-button
+          v-perms="'users:write'"
+          type="primary"
+          :icon="useRenderIcon(AddFill)"
+          @click="openCreate"
+        >
+          新建用户
+        </el-button>
       </template>
-      <template v-slot="{ size }">
+      <template v-slot="{ size, dynamicColumns }">
         <pure-table
-          :size="size"
           row-key="id"
           adaptive
+          :adaptiveConfig="{ offsetBottom: ADAPTIVE_OFFSET_BOTTOM }"
+          align-whole="center"
+          showOverflowTooltip
+          table-layout="auto"
           :loading="loading"
+          :size="size"
           :data="rows"
-          :columns="columns"
+          :columns="dynamicColumns"
+          :header-cell-style="TABLE_HEADER_CELL_STYLE"
         >
           <template #roles="{ row }">
             <div v-if="row.roles.length" class="flex flex-wrap gap-1">
@@ -370,40 +412,65 @@ onMounted(() => {
           <template #operation="{ row }">
             <el-button
               v-perms="'users:write'"
+              class="reset-margin"
               :size="size"
               link
               type="primary"
+              :icon="useRenderIcon(EditPen)"
               @click="openEdit(row)"
             >
-              编辑
+              修改
             </el-button>
             <el-button
               v-perms="'users:write'"
+              class="reset-margin"
               :size="size"
               link
               type="primary"
+              :icon="useRenderIcon(Role)"
               @click="openAssign(row)"
             >
               分配角色
             </el-button>
-            <el-button
-              v-perms="'users:write'"
-              :size="size"
-              link
-              type="primary"
-              @click="openReset(row)"
-            >
-              重置密码
-            </el-button>
-            <el-button
-              v-perms="'users:write'"
-              :size="size"
-              link
-              type="danger"
-              @click="onDelete(row)"
-            >
-              删除
-            </el-button>
+            <el-dropdown trigger="click">
+              <el-button
+                class="ml-2! mt-0.5!"
+                link
+                type="primary"
+                :size="size"
+                :icon="useRenderIcon(More)"
+              />
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item>
+                    <el-button
+                      v-perms="'users:write'"
+                      class="reset-margin"
+                      :size="size"
+                      link
+                      type="primary"
+                      :icon="useRenderIcon(Key)"
+                      @click="openReset(row)"
+                    >
+                      重置密码
+                    </el-button>
+                  </el-dropdown-item>
+                  <el-dropdown-item>
+                    <el-button
+                      v-perms="'users:write'"
+                      class="reset-margin"
+                      :size="size"
+                      link
+                      type="danger"
+                      :icon="useRenderIcon(Delete)"
+                      @click="onDelete(row)"
+                    >
+                      删除
+                    </el-button>
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
         </pure-table>
         <div class="mt-3 flex items-center justify-between text-sm">
@@ -411,7 +478,10 @@ onMounted(() => {
             后端列表接口不返回总数；第 {{ pageIndex }} 页，本页 {{ rows.length }} 条
           </span>
           <div class="flex gap-2">
-            <el-button :disabled="page.offset === 0 || loading" @click="goPrev">
+            <el-button
+              :disabled="page.offset === 0 || loading"
+              @click="goPrev"
+            >
               上一页
             </el-button>
             <el-button :disabled="!hasNext || loading" @click="goNext">

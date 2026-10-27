@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from "vue";
-import type { FormInstance, FormRules, TreeInstance } from "element-plus";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
+import type { FormInstance, FormRules, TreeV2Instance } from "element-plus";
 import { ElMessageBox } from "element-plus";
+import { useWindowSize } from "@vueuse/core";
 import { PureTableBar } from "@/components/RePureTableBar";
+import { useRenderIcon } from "@/components/ReIcon/src/hooks";
 import { message } from "@/utils/message";
 import { apiErrorDetail } from "@/api/logharvest";
 import {
@@ -14,25 +16,37 @@ import {
   menuTree,
   updateRole
 } from "@/api/rbac";
-import type { MenuRecord, MenuType, RoleRecord } from "@/api/rbacTypes";
+import type { MenuRecord, RoleRecord } from "@/api/rbacTypes";
+import { collectTreeIds } from "@/utils/tree";
 import { useAppStoreHook } from "@/store/modules/app";
+import {
+  EMPTY_ROLE_FILTERS,
+  filterRoles,
+  menuTypeMeta,
+  type RoleFilters
+} from "../filters";
+import { ADAPTIVE_OFFSET_BOTTOM, TABLE_HEADER_CELL_STYLE } from "../table";
+
+import Refresh from "~icons/ep/refresh";
+import AddFill from "~icons/ri/add-circle-line";
+import EditPen from "~icons/ep/edit-pen";
+import Delete from "~icons/ep/delete";
+import Menu from "~icons/ep/menu";
+import Close from "~icons/ep/close";
+import Check from "~icons/ep/check";
 
 defineOptions({ name: "Roles" });
 
-type TagType = "primary" | "success" | "warning" | "info" | "danger";
-
-const MENU_TYPE_META: Record<MenuType, { label: string; tag: TagType }> = {
-  0: { label: "目录", tag: "info" },
-  1: { label: "页面", tag: "primary" },
-  2: { label: "权限", tag: "warning" }
-};
-
-function menuTypeMeta(type: MenuType | number) {
-  return MENU_TYPE_META[type as MenuType] ?? { label: "未知", tag: "info" as TagType };
-}
+const appStore = useAppStoreHook();
+const isMobile = computed(() => appStore.device === "mobile");
 
 const loading = ref(false);
 const rows = ref<RoleRecord[]>([]);
+
+/** 表单值与“已应用”值分开：点搜索才生效，与上游交互一致 */
+const filters = reactive<RoleFilters>({ ...EMPTY_ROLE_FILTERS });
+const appliedFilters = ref<RoleFilters>({ ...EMPTY_ROLE_FILTERS });
+const filteredRows = computed(() => filterRoles(rows.value, appliedFilters.value));
 
 async function load() {
   loading.value = true;
@@ -44,6 +58,15 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+function onSearch() {
+  appliedFilters.value = { ...filters };
+}
+
+function onResetSearch() {
+  Object.assign(filters, EMPTY_ROLE_FILTERS);
+  appliedFilters.value = { ...EMPTY_ROLE_FILTERS };
 }
 
 // ---------------------------------------------------------------- 新建 / 编辑
@@ -136,83 +159,120 @@ async function onSubmit() {
   }
 }
 
-// ---------------------------------------------------------------- 分配权限
+// ---------------------------------------------------------------- 菜单权限面板
 
-const permVisible = ref(false);
-const permLoading = ref(false);
-const permSaving = ref(false);
-const permRole = ref<RoleRecord | null>(null);
-const treeRef = ref<TreeInstance>();
-const treeData = ref<MenuRecord[]>([]);
-const pendingCheckedIds = ref<number[]>([]);
+const panelVisible = ref(false);
+const panelLoading = ref(false);
+const panelSaving = ref(false);
+const currentRole = ref<RoleRecord | null>(null);
+const treeRef = ref<TreeV2Instance>();
+const rawTree = ref<MenuRecord[]>([]);
+const grantedIds = ref<number[]>([]);
+const treeKeyword = ref("");
+const isExpandAll = ref(true);
+const isSelectAll = ref(false);
+const isLinkage = ref(false);
 
-const permTitle = computed(() =>
-  permRole.value ? `分配权限 - ${permRole.value.name}` : "分配权限"
-);
+const isReadonlyRole = computed(() => !!currentRole.value?.is_system);
+const grantedIdSet = computed(() => new Set(grantedIds.value));
+const allMenuIds = computed(() => collectTreeIds(rawTree.value));
 
-const treeProps = { label: "title", children: "children" };
+/** el-tree-v2 需要 value 键名；label/children 与后端菜单树字段对齐 */
+const treeProps = { value: "id", label: "title", children: "children" };
 
-function collectMenuIds(nodes: MenuRecord[]): number[] {
-  return nodes.flatMap(node => [
-    node.id,
-    ...collectMenuIds(node.children ?? [])
-  ]);
+const { height: windowHeight } = useWindowSize();
+const panelRef = ref<HTMLElement>();
+/** el-tree-v2 只接受像素高度：按面板实际位置算，避免把提示行/页脚顶出视口 */
+const treeHeight = ref(360);
+
+function recalcTreeHeight() {
+  const el = panelRef.value;
+  if (!el) return;
+  const top = el.getBoundingClientRect().top;
+  treeHeight.value = Math.max(
+    240,
+    Math.min(720, window.innerHeight - top - 258)
+  );
 }
 
-const allMenuIds = computed(() => collectMenuIds(treeData.value));
+watch([windowHeight, panelVisible], async () => {
+  await nextTick();
+  recalcTreeHeight();
+});
 
-function applyCheckedKeys() {
-  treeRef.value?.setCheckedKeys(pendingCheckedIds.value);
+function resetPanelState() {
+  treeKeyword.value = "";
+  isExpandAll.value = true;
+  isSelectAll.value = false;
+  isLinkage.value = false;
 }
 
-function onPermissionsOpened() {
-  // 弹窗动画结束后再回填，确保 el-tree 已完成渲染
-  applyCheckedKeys();
+function applyExpanded() {
+  treeRef.value?.setExpandedKeys(isExpandAll.value ? allMenuIds.value : []);
+}
+
+function applyChecked() {
+  if (isReadonlyRole.value) return;
+  treeRef.value?.setCheckedKeys(isSelectAll.value ? allMenuIds.value : []);
 }
 
 async function openPermissions(row: RoleRecord) {
-  permRole.value = row;
-  treeData.value = [];
-  pendingCheckedIds.value = [];
-  permVisible.value = true;
-  permLoading.value = true;
+  currentRole.value = row;
+  rawTree.value = [];
+  grantedIds.value = [];
+  resetPanelState();
+  panelVisible.value = true;
+  panelLoading.value = true;
   try {
     const [tree, checkedIds] = await Promise.all([
       menuTree(),
       listRoleMenus(row.id)
     ]);
-    treeData.value = tree;
-    pendingCheckedIds.value = checkedIds;
+    rawTree.value = tree;
+    grantedIds.value = checkedIds;
     await nextTick();
-    applyCheckedKeys();
+    recalcTreeHeight();
+    treeRef.value?.setCheckedKeys(checkedIds);
+    applyExpanded();
   } catch (error) {
     message(apiErrorDetail(error, "角色权限加载失败"), { type: "error" });
   } finally {
-    permLoading.value = false;
+    panelLoading.value = false;
   }
 }
 
-function checkAllMenus() {
-  treeRef.value?.setCheckedKeys(allMenuIds.value);
+function closePanel() {
+  panelVisible.value = false;
+  currentRole.value = null;
+  rawTree.value = [];
+  grantedIds.value = [];
 }
 
-function clearAllMenus() {
-  treeRef.value?.setCheckedKeys([]);
+function onTreeQueryChanged(query: string) {
+  treeRef.value?.filter(query);
+}
+
+function filterMethod(query: string, data: MenuRecord) {
+  const kw = String(query ?? "").trim().toLowerCase();
+  if (!kw) return true;
+  return [data.title, data.name, data.path]
+    .filter(Boolean)
+    .some(text => String(text).toLowerCase().includes(kw));
 }
 
 async function onSavePermissions() {
-  if (!permRole.value || permRole.value.is_system) return;
-  const checked = treeRef.value?.getCheckedKeys() ?? [];
-  permSaving.value = true;
+  if (!currentRole.value || isReadonlyRole.value || panelSaving.value) return;
+  const checked = (treeRef.value?.getCheckedKeys() ?? []).map(Number);
+  panelSaving.value = true;
   try {
-    await assignRoleMenus(permRole.value.id, checked.map(Number));
-    message(`角色“${permRole.value.name}”的权限已更新`, { type: "success" });
-    permVisible.value = false;
+    await assignRoleMenus(currentRole.value.id, checked);
+    message(`角色“${currentRole.value.name}”的权限已更新`, { type: "success" });
+    closePanel();
     await load();
   } catch (error) {
     message(apiErrorDetail(error, "保存角色权限失败"), { type: "error" });
   } finally {
-    permSaving.value = false;
+    panelSaving.value = false;
   }
 }
 
@@ -236,108 +296,322 @@ async function onDelete(row: RoleRecord) {
   try {
     await deleteRole(row.id);
     message(`角色“${row.name}”已删除`, { type: "success" });
+    if (currentRole.value?.id === row.id) closePanel();
     await load();
   } catch (error) {
     message(apiErrorDetail(error, "删除角色失败"), { type: "error" });
   }
 }
 
-const appStore = useAppStoreHook();
-const isMobile = computed(() => appStore.device === "mobile");
+// ---------------------------------------------------------------- 表格
 
-const columns = computed<TableColumnList>(() => [
-  { label: "ID", prop: "id", width: 70 },
-  { label: "角色名", prop: "name", minWidth: 150, showOverflowTooltip: true },
-  { label: "code", prop: "code", minWidth: 150, showOverflowTooltip: true },
-  { label: "描述", prop: "description", minWidth: 220, showOverflowTooltip: true },
-  { label: "类型", prop: "is_system", slot: "is_system", width: 80 },
-  { label: "状态", prop: "is_active", slot: "is_active", width: 80 },
-  {
-    label: "操作",
-    prop: "operation",
-    slot: "operation",
-    width: 220,
-    fixed: isMobile.value ? undefined : "right"
+const columns = computed<TableColumnList>(() => {
+  const list: TableColumnList = [];
+  // 面板打开时表格只剩 62% 宽：省掉内部 ID 列，五列才排得下、操作按钮不被裁切
+  if (!panelVisible.value || isMobile.value) {
+    list.push({ label: "ID", prop: "id", width: 60 });
   }
-]);
+  list.push(
+    {
+      label: "角色名",
+      prop: "name",
+      slot: "name",
+      minWidth: 200,
+      showOverflowTooltip: true
+    },
+    { label: "角色标识", prop: "code", minWidth: 140, showOverflowTooltip: true },
+    { label: "状态", prop: "is_active", slot: "is_active", width: 80 },
+    {
+      label: "操作",
+      prop: "operation",
+      slot: "operation",
+      width: 220,
+      // 面板打开时表格被压窄，固定列会盖住相邻列，改为可横向滚动
+      fixed: isMobile.value || panelVisible.value ? undefined : "right"
+    }
+  );
+  return list;
+});
+
+function rowStyle({ row }: { row: RoleRecord }) {
+  return {
+    background:
+      row.id === currentRole.value?.id ? "var(--el-fill-color-light)" : ""
+  };
+}
 
 onMounted(load);
 </script>
 
 <template>
   <div class="p-4">
-    <PureTableBar title="角色管理" :columns="columns" @refresh="load">
-      <template #buttons>
-        <div class="flex items-center gap-2">
-          <el-button :disabled="loading" @click="load">刷新</el-button>
-          <el-button v-perms="'roles:write'" type="primary" @click="openCreate">
-            新建角色
-          </el-button>
-        </div>
-      </template>
-      <template v-slot="{ size }">
-        <pure-table
-          :size="size"
-          row-key="id"
-          adaptive
-          :loading="loading"
-          :data="rows"
-          :columns="columns"
+    <el-form
+      :inline="true"
+      :model="filters"
+      class="search-form bg-bg_color mb-2"
+      @submit.prevent
+    >
+      <el-form-item label="角色名称：" prop="name">
+        <el-input
+          v-model="filters.name"
+          placeholder="请输入角色名称"
+          clearable
+          class="w-45!"
+          @keyup.enter="onSearch"
+        />
+      </el-form-item>
+      <el-form-item label="角色标识：" prop="code">
+        <el-input
+          v-model="filters.code"
+          placeholder="请输入角色标识"
+          clearable
+          class="w-45!"
+          @keyup.enter="onSearch"
+        />
+      </el-form-item>
+      <el-form-item label="状态：" prop="status">
+        <el-select
+          v-model="filters.status"
+          placeholder="请选择状态"
+          clearable
+          class="w-45!"
         >
-          <template #is_system="{ row }">
-            <el-tag
-              :size="size"
-              :type="row.is_system ? 'warning' : 'info'"
-              effect="plain"
-            >
-              {{ row.is_system ? "内置" : "自定义" }}
-            </el-tag>
-          </template>
-          <template #is_active="{ row }">
-            <el-tag
-              :size="size"
-              :type="row.is_active ? 'success' : 'info'"
-              effect="plain"
-            >
-              {{ row.is_active ? "启用" : "停用" }}
-            </el-tag>
-          </template>
-          <template #operation="{ row }">
+          <el-option label="已启用" value="active" />
+          <el-option label="已停用" value="inactive" />
+        </el-select>
+      </el-form-item>
+      <el-form-item>
+        <el-button
+          type="primary"
+          :icon="useRenderIcon('ri/search-line')"
+          :loading="loading"
+          @click="onSearch"
+        >
+          搜索
+        </el-button>
+        <el-button :icon="useRenderIcon(Refresh)" @click="onResetSearch">
+          重置
+        </el-button>
+      </el-form-item>
+    </el-form>
+
+    <div :class="['flex', isMobile ? 'flex-wrap' : '']">
+      <div
+        :style="{
+          width: panelVisible && !isMobile ? '62%' : '100%',
+          transition: 'width 220ms cubic-bezier(0.4, 0, 0.2, 1)'
+        }"
+      >
+        <PureTableBar title="角色管理" :columns="columns" @refresh="load">
+          <template #buttons>
             <el-button
               v-perms="'roles:write'"
-              :size="size"
-              link
               type="primary"
-              @click="openEdit(row)"
+              :icon="useRenderIcon(AddFill)"
+              @click="openCreate"
             >
-              编辑
-            </el-button>
-            <el-button
-              v-perms="'roles:write'"
-              :size="size"
-              link
-              type="primary"
-              @click="openPermissions(row)"
-            >
-              分配权限
-            </el-button>
-            <el-button
-              v-if="!row.is_system"
-              v-perms="'roles:write'"
-              :size="size"
-              link
-              type="danger"
-              @click="onDelete(row)"
-            >
-              删除
+              新建角色
             </el-button>
           </template>
-        </pure-table>
-        <p class="mt-3 text-sm text-gray-500">
-          内置角色由系统维护：不可删除，角色代码与启用状态不可修改。
+          <template v-slot="{ size, dynamicColumns }">
+            <pure-table
+              row-key="id"
+              adaptive
+              :adaptiveConfig="{ offsetBottom: ADAPTIVE_OFFSET_BOTTOM }"
+              align-whole="center"
+              showOverflowTooltip
+              table-layout="auto"
+              :loading="loading"
+              :size="size"
+              :data="filteredRows"
+              :columns="dynamicColumns"
+              :row-style="rowStyle"
+              :header-cell-style="TABLE_HEADER_CELL_STYLE"
+            >
+              <template #name="{ row }">
+                <div class="flex flex-col items-center gap-0.5 leading-5">
+                  <span class="flex items-center gap-1">
+                    <span>{{ row.name }}</span>
+                    <el-tag
+                      :size="size"
+                      :type="row.is_system ? 'warning' : 'info'"
+                      effect="plain"
+                    >
+                      {{ row.is_system ? "内置" : "自定义" }}
+                    </el-tag>
+                  </span>
+                  <span
+                    v-if="row.description"
+                    class="max-w-45 truncate text-xs text-gray-400"
+                    :title="row.description"
+                  >
+                    {{ row.description }}
+                  </span>
+                </div>
+              </template>
+              <template #is_active="{ row }">
+                <el-tag
+                  :size="size"
+                  :type="row.is_active ? 'success' : 'info'"
+                  effect="plain"
+                >
+                  {{ row.is_active ? "启用" : "停用" }}
+                </el-tag>
+              </template>
+              <template #operation="{ row }">
+                <el-button
+                  v-perms="'roles:write'"
+                  class="reset-margin"
+                  link
+                  type="primary"
+                  :size="size"
+                  :icon="useRenderIcon(EditPen)"
+                  @click="openEdit(row)"
+                >
+                  修改
+                </el-button>
+                <el-button
+                  v-perms="'roles:write'"
+                  class="reset-margin"
+                  link
+                  type="primary"
+                  :size="size"
+                  :icon="useRenderIcon(Menu)"
+                  @click="openPermissions(row)"
+                >
+                  权限
+                </el-button>
+                <el-button
+                  v-if="!row.is_system"
+                  v-perms="'roles:write'"
+                  class="reset-margin"
+                  link
+                  type="danger"
+                  :size="size"
+                  :icon="useRenderIcon(Delete)"
+                  @click="onDelete(row)"
+                >
+                  删除
+                </el-button>
+              </template>
+            </pure-table>
+            <div class="mt-3 flex items-center justify-between text-sm">
+              <span class="text-gray-500">
+                内置角色由系统维护：不可删除，角色代码、启用状态与菜单权限均只读。
+              </span>
+              <span class="text-gray-500">共 {{ filteredRows.length }} 条</span>
+            </div>
+          </template>
+        </PureTableBar>
+      </div>
+
+      <div
+        v-if="panelVisible"
+        ref="panelRef"
+        v-loading="panelLoading"
+        class="bg-bg_color px-2 pb-2"
+        :class="isMobile ? 'mt-2 w-full' : 'ml-2 min-w-0 flex-1'"
+      >
+        <div class="flex w-full items-center justify-between px-3 pt-5 pb-4">
+          <div class="flex items-center">
+            <span
+              class="panel-icon"
+              role="button"
+              aria-label="关闭菜单权限面板"
+              v-tippy="{ content: '关闭' }"
+              @click="closePanel"
+            >
+              <IconifyIconOffline :icon="Close" width="18" height="18" />
+            </span>
+            <span
+              v-if="!isReadonlyRole"
+              class="panel-icon ml-2"
+              :class="panelSaving ? 'pointer-events-none opacity-50' : ''"
+              role="button"
+              aria-label="保存菜单权限"
+              v-tippy="{ content: '保存菜单权限' }"
+              @click="onSavePermissions"
+            >
+              <IconifyIconOffline :icon="Check" width="18" height="18" />
+            </span>
+          </div>
+          <p class="truncate font-bold">
+            菜单权限{{ currentRole ? `（${currentRole.name}）` : "" }}
+          </p>
+        </div>
+
+        <el-alert
+          v-if="isReadonlyRole"
+          type="info"
+          :closable="false"
+          show-icon
+          title="内置角色的菜单权限由系统维护，此处只读查看。"
+          class="mb-2"
+        />
+
+        <el-input
+          v-model="treeKeyword"
+          placeholder="请输入菜单名称、权限码或路径进行搜索"
+          class="mb-1"
+          clearable
+          @input="onTreeQueryChanged"
+        />
+
+        <div class="flex flex-wrap">
+          <el-checkbox v-model="isExpandAll" @change="applyExpanded">
+            展开/折叠
+          </el-checkbox>
+          <template v-if="!isReadonlyRole">
+            <el-checkbox v-model="isSelectAll" @change="applyChecked">
+              全选/全不选
+            </el-checkbox>
+            <el-checkbox v-model="isLinkage" v-tippy="{ content: '开启后勾选父级会联动勾选子级；后端按精确授权存储' }">
+              父子联动
+            </el-checkbox>
+          </template>
+        </div>
+
+        <el-tree-v2
+          ref="treeRef"
+          :data="rawTree"
+          :props="treeProps"
+          :height="treeHeight"
+          :show-checkbox="!isReadonlyRole"
+          :check-strictly="!isLinkage"
+          :filter-method="filterMethod"
+          :expand-on-click-node="false"
+        >
+          <template #default="{ node }">
+            <span class="flex items-center gap-2">
+              <span>{{ node.data.title }}</span>
+              <el-tag
+                size="small"
+                :type="menuTypeMeta(node.data.menu_type).tag"
+                effect="plain"
+              >
+                {{ menuTypeMeta(node.data.menu_type).label }}
+              </el-tag>
+              <el-tag v-if="!node.data.is_active" size="small" type="info" effect="plain">
+                停用
+              </el-tag>
+              <el-tag
+                v-if="isReadonlyRole && grantedIdSet.has(node.data.id)"
+                size="small"
+                type="success"
+                effect="plain"
+              >
+                已授权
+              </el-tag>
+              <span class="text-xs text-gray-400">{{ node.data.name || "—" }}</span>
+            </span>
+          </template>
+        </el-tree-v2>
+
+        <p v-if="!isReadonlyRole" class="mt-2 text-xs text-gray-500">
+          精确授权：默认不联动，勾选父级不会自动勾选子级；目录、页面与权限码需分别勾选。
         </p>
-      </template>
-    </PureTableBar>
+      </div>
+    </div>
 
     <el-dialog
       v-model="dialogVisible"
@@ -381,74 +655,24 @@ onMounted(load);
         </el-button>
       </template>
     </el-dialog>
-
-    <el-dialog
-      v-model="permVisible"
-      :title="permTitle"
-      width="min(680px, 94vw)"
-      :close-on-click-modal="false"
-      append-to-body
-      @opened="onPermissionsOpened"
-    >
-      <div v-loading="permLoading">
-        <el-alert
-          v-if="permRole?.is_system"
-          type="info"
-          :closable="false"
-          show-icon
-          title="内置角色由系统维护，权限只读查看，不能在此修改。"
-          class="mb-3"
-        />
-        <div class="mb-2 flex items-center justify-between gap-3">
-          <span class="text-xs text-gray-500">
-            精确授权：勾选父节点不会自动勾选子节点；目录、页面与权限码需分别勾选。
-          </span>
-          <div v-if="!permRole?.is_system" class="flex gap-2">
-            <el-button size="small" @click="checkAllMenus">全选</el-button>
-            <el-button size="small" @click="clearAllMenus">清空</el-button>
-          </div>
-        </div>
-        <el-tree
-          ref="treeRef"
-          :data="treeData"
-          node-key="id"
-          :props="treeProps"
-          :show-checkbox="!permRole?.is_system"
-          check-strictly
-          default-expand-all
-          :expand-on-click-node="false"
-          class="max-h-[55vh] overflow-auto"
-        >
-          <template #default="{ data }">
-            <span class="flex items-center gap-2">
-              <span>{{ data.title }}</span>
-              <el-tag
-                size="small"
-                :type="menuTypeMeta(data.menu_type).tag"
-                effect="plain"
-              >
-                {{ menuTypeMeta(data.menu_type).label }}
-              </el-tag>
-              <el-tag v-if="!data.is_active" size="small" type="info" effect="plain">
-                停用
-              </el-tag>
-              <span class="text-xs text-gray-400">{{ data.name || "—" }}</span>
-            </span>
-          </template>
-        </el-tree>
-      </div>
-      <template #footer>
-        <el-button @click="permVisible = false">关闭</el-button>
-        <el-button
-          v-if="!permRole?.is_system"
-          type="primary"
-          :loading="permSaving"
-          :disabled="permLoading"
-          @click="onSavePermissions"
-        >
-          保存
-        </el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
+
+<style lang="scss" scoped>
+.panel-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  border-radius: 4px;
+  outline: none;
+  transition: background-color var(--pure-duration-fast, 0.15s)
+    var(--pure-ease-standard, ease);
+
+  &:hover {
+    background-color: var(--el-fill-color);
+  }
+}
+</style>

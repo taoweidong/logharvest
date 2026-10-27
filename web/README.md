@@ -101,6 +101,30 @@ Worker 都会显示 `—`。界面把 `NULL` 一律渲染成 `—`（未知）�
 新增或改列时，凡是有 `<template #xxx="{ row }">` 的列都要同时写 `slot: "xxx"`
 （`jobs/detail.vue`、`workers/index.vue` 已按此补齐）。
 
+### `patches/@pureadmin__table@3.3.0.patch`
+
+给组件库的自适应高度补了空引用保护：窗口缩放与路由切换同时发生时，表格已经卸载而
+`resize` 回调仍在读 `$refs`，控制台报 `TypeError: Cannot read properties of null
+(reading '$refs')`。上游 3.3.0 尚未修复，补丁只加判空、不改变正常路径的行为，由
+`pnpm-workspace.yaml` 的 `patchedDependencies` 在 `pnpm install` 时自动应用。
+升级 `@pureadmin/table` 后需要重新生成补丁，否则安装时会提示补丁未匹配。
+
+### 列表页统一写法（对齐上游 vue-pure-admin）
+
+系统管理各列表页与上游共用一套结构，新增列表页照此写：
+
+- 表格上方是 `form.search-form.bg-bg_color` 搜索卡片，输入框 `class="w-45!"`，
+  搜索/重置按钮带 `useRenderIcon` 图标；
+- 表头样式取 `src/views/system/table.ts` 的 `TABLE_HEADER_CELL_STYLE`，
+  表格加 `align-whole="center"`、`table-layout="auto"`、`adaptive`；
+- `pure-table` 必须绑定插槽给的 `dynamicColumns`（`v-slot="{ size, dynamicColumns }"`）。
+  直接用 `columns` 会让「列设置」的显隐、拖拽排序、左右固定全部空转；
+- 行内操作按钮加 `class="reset-margin"`；按钮超过 3 个时把低频动作收进「更多」下拉，
+  否则窄屏会把操作列裁切到看不见；
+- 角色页的菜单授权是右侧面板（表格收窄到 62%，面板内是 `el-tree-v2` + 搜索 +
+  展开/全选/父子联动），不是弹窗。默认不联动、勾选父级不会自动勾选子级——
+  后端按精确授权存 `menu_ids`，内置角色只读。
+
 接口约定：业务接口是纯 REST 对象（错误体 `{"detail": "..."}`），列表接口返回**裸数组、没有总数**，
 所以所有分页都是窗口式「上一页 / 下一页」（本页不足 `limit` 即视为末段）或游标式
 「下一页 / 回到第一屏」，没有页码跳转；只有认证接口
