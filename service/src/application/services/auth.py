@@ -10,7 +10,8 @@ from src.domain.services.passwords import hash_password
 def ensure_admin(session: Session, username: str, password: str) -> User:
     """Idempotently create the admin user plus its role link."""
     # 先补齐 RBAC 种子：admin 角色由种子统一创建（含 is_system/description），
-    # 旧库升级后也能直接拿到完整菜单树。
+    # 旧库升级后也能直接拿到完整菜单树。这里不再自己兜底建角色——种子已经保证
+    # admin 角色存在，重复一份只会造出缺少 is_system 的第二个定义。
     ensure_rbac_seed(session)
 
     user = session.exec(select(User).where(User.username == username)).first()
@@ -20,13 +21,7 @@ def ensure_admin(session: Session, username: str, password: str) -> User:
         session.commit()
         session.refresh(user)
 
-    role = session.exec(select(Role).where(Role.code == ADMIN_ROLE_CODE)).first()
-    if role is None:
-        role = Role(code=ADMIN_ROLE_CODE, name="管理员")
-        session.add(role)
-        session.commit()
-        session.refresh(role)
-
+    role = session.exec(select(Role).where(Role.code == ADMIN_ROLE_CODE)).one()
     link = session.exec(
         select(UserRole).where(UserRole.user_id == user.id, UserRole.role_id == role.id)
     ).first()

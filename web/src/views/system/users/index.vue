@@ -16,6 +16,7 @@ import {
 } from "@/api/rbac";
 import type { RoleRecord, UserRecord } from "@/api/rbacTypes";
 import { formatDateTime } from "@/views/logharvest/format";
+import { useAppStoreHook } from "@/store/modules/app";
 
 defineOptions({ name: "Users" });
 
@@ -88,7 +89,13 @@ const form = reactive({
 
 const rules = computed<FormRules>(() => ({
   username: [
-    { required: true, message: "请填写用户名", trigger: "blur" }
+    { required: true, message: "请填写用户名", trigger: "blur" },
+    {
+      // 与后端 UserCreate 的同名约束一致，避免把 422 当成接口错误弹出来。
+      pattern: /^[A-Za-z0-9][A-Za-z0-9_.@-]{1,49}$/,
+      message: "以字母或数字开头，仅含字母、数字、. _ @ -，长度 2-50",
+      trigger: "blur"
+    }
   ],
   password: isCreate.value
     ? [
@@ -278,21 +285,24 @@ async function onDelete(row: UserRecord) {
   }
 }
 
-const columns: TableColumnList = [
-  { label: "ID", prop: "id", width: 80 },
-  { label: "用户名", prop: "username", minWidth: 140, showOverflowTooltip: true },
-  { label: "昵称", prop: "nickname", minWidth: 140, showOverflowTooltip: true },
-  { label: "角色", prop: "roles", slot: "roles", minWidth: 220 },
-  { label: "状态", prop: "is_active", slot: "is_active", width: 90 },
-  { label: "创建时间", prop: "created_at", slot: "created_at", width: 190 },
+const appStore = useAppStoreHook();
+const isMobile = computed(() => appStore.device === "mobile");
+
+const columns = computed<TableColumnList>(() => [
+  { label: "ID", prop: "id", width: 70 },
+  { label: "用户名", prop: "username", minWidth: 130, showOverflowTooltip: true },
+  { label: "昵称", prop: "nickname", minWidth: 130, showOverflowTooltip: true },
+  { label: "角色", prop: "roles", slot: "roles", minWidth: 150 },
+  { label: "状态", prop: "is_active", slot: "is_active", width: 80 },
+  { label: "创建时间", prop: "created_at", slot: "created_at", width: 160 },
   {
     label: "操作",
     prop: "operation",
     slot: "operation",
-    width: 300,
-    fixed: "right"
+    width: 260,
+    fixed: isMobile.value ? undefined : "right"
   }
-];
+]);
 
 onMounted(() => {
   load();
@@ -304,16 +314,19 @@ onMounted(() => {
   <div class="p-4">
     <PureTableBar title="用户管理" :columns="columns" @refresh="load">
       <template #buttons>
-        <div class="flex flex-wrap items-center gap-2">
-          <el-input
-            v-model="keyword"
-            clearable
-            placeholder="搜索用户名 / 昵称"
-            class="w-56"
-            @keyup.enter="onSearch"
-            @clear="onSearch"
-          />
-          <el-button @click="onSearch">搜索</el-button>
+        <div class="flex items-center gap-2">
+          <div class="hidden items-center gap-2 sm:flex">
+            <div class="w-[220px]">
+              <el-input
+                v-model="keyword"
+                clearable
+                placeholder="搜索用户名 / 昵称"
+                @keyup.enter="onSearch"
+                @clear="onSearch"
+              />
+            </div>
+            <el-button @click="onSearch">搜索</el-button>
+          </div>
           <el-button :disabled="loading" @click="load">刷新</el-button>
           <el-button v-perms="'users:write'" type="primary" @click="openCreate">
             新建用户
@@ -412,7 +425,7 @@ onMounted(() => {
     <el-dialog
       v-model="dialogVisible"
       :title="isCreate ? '新建用户' : '编辑用户'"
-      width="560px"
+      width="min(560px, 92vw)"
       :close-on-click-modal="false"
       append-to-body
     >
@@ -469,7 +482,7 @@ onMounted(() => {
     <el-dialog
       v-model="assignVisible"
       :title="`分配角色${assignTarget ? ` - ${assignTarget.username}` : ''}`"
-      width="520px"
+      width="min(520px, 92vw)"
       :close-on-click-modal="false"
       append-to-body
     >
@@ -502,7 +515,7 @@ onMounted(() => {
     <el-dialog
       v-model="resetVisible"
       :title="`重置密码${resetTarget ? ` - ${resetTarget.username}` : ''}`"
-      width="480px"
+      width="min(480px, 92vw)"
       :close-on-click-modal="false"
       append-to-body
     >

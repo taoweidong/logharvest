@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.domain.rules.models import RuleSetConfig
 
@@ -227,7 +227,9 @@ class UserRead(BaseModel):
 
 
 class UserCreate(BaseModel):
-    username: str = Field(min_length=1, max_length=150)
+    # 登录是按用户名精确匹配的：允许首尾空格或不可见字符会造出看起来重复、
+    # 但在登录框里几乎敲不出来的账号，所以这里限定成可输入的安全字符集。
+    username: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.@-]{1,49}$")
     password: str = Field(min_length=8, max_length=256)
     nickname: str = ""
     is_active: bool = True
@@ -268,6 +270,14 @@ class RoleUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     is_active: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, value: str | None) -> str | None:
+        # 与 RoleCreate 的 min_length=1 对齐：整字段可选，但显式传值就不能是空白。
+        if value is not None and not value.strip():
+            raise ValueError("name must not be blank")
+        return value
 
 
 class RoleMenusUpdate(BaseModel):
@@ -323,6 +333,15 @@ class MenuUpdate(BaseModel):
     show_link: bool | None = None
     keep_alive: bool | None = None
     is_active: bool | None = None
+
+    @field_validator("name", "title")
+    @classmethod
+    def _not_blank(cls, value: str | None) -> str | None:
+        # MenuCreate 用 min_length=1 卡住了空标题/空名称，Update 的可选语义
+        # （None=不改）等价于「传了就不能是空白」；path/component 的合法空串留给服务层判。
+        if value is not None and not value.strip():
+            raise ValueError("must not be blank")
+        return value
 
 
 MenuRead.model_rebuild()

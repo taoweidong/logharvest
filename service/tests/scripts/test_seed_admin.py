@@ -18,6 +18,13 @@ def test_ensure_admin_is_idempotent(engine) -> None:
         assert len(session.exec(select(User)).all()) == 1
 
 
+def _isolate_migrations(monkeypatch) -> None:
+    # main() 里的 run_migrations 读的是 settings.database_url，不是被 monkeypatch
+    # 换掉的 engine。开发者本地把 .env 指向 PostgreSQL 时，这一步会真的去连库并
+    # 在容器没起时超时。夹具已经建好表，这里只需要把迁移这一步跳过。
+    monkeypatch.setattr("scripts.seed_admin.run_migrations", lambda url: None)
+
+
 def test_seed_cli_refuses_weak_password(engine, monkeypatch) -> None:
     monkeypatch.setattr("scripts.seed_admin.engine", engine)
     monkeypatch.setenv("LOGHARVEST_ADMIN_PASSWORD", "short")
@@ -27,6 +34,7 @@ def test_seed_cli_refuses_weak_password(engine, monkeypatch) -> None:
 
 
 def test_seed_cli_creates_admin(engine, monkeypatch) -> None:
+    _isolate_migrations(monkeypatch)
     monkeypatch.setattr("scripts.seed_admin.engine", engine)
     monkeypatch.setenv("LOGHARVEST_ADMIN_PASSWORD", "Strong-Pass-1")
     from scripts.seed_admin import main

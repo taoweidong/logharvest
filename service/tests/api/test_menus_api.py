@@ -328,3 +328,21 @@ def test_menu_delete_guards_and_role_menu_cleanup(client, auth_headers) -> None:
     # 子节点清空后父目录可删。
     assert client.delete(f"/api/menus/{page['id']}", headers=auth_headers).status_code == 204
     assert client.delete(f"/api/menus/{leaf_dir['id']}", headers=auth_headers).status_code == 204
+
+
+def test_update_menu_rejects_blank_name_and_title(client, auth_headers) -> None:
+    # name 是路由 name / 权限码，title 是侧边栏文案：留空会让菜单点不到也读不懂，
+    # 但字段本身在 PATCH 式更新里是可选的，所以只拒绝「显式传了空白」。
+    menus = client.get("/api/menus", headers=auth_headers, params={"limit": 500}).json()
+    jobs = next(menu for menu in menus if menu["name"] == "Jobs")
+
+    for field in ("name", "title"):
+        for blank in ("", "  "):
+            response = client.put(
+                f"/api/menus/{jobs['id']}", headers=auth_headers, json={field: blank}
+            )
+            assert response.status_code == 422, (field, repr(blank))
+
+    refreshed = client.get("/api/menus", headers=auth_headers, params={"limit": 500}).json()
+    current = next(menu for menu in refreshed if menu["id"] == jobs["id"])
+    assert (current["name"], current["title"]) == ("Jobs", jobs["title"])

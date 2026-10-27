@@ -78,9 +78,6 @@ export const assignRoleMenus = (id: number, menu_ids: number[]) =>
 
 // ---------------------------------------------------------------- 菜单
 
-/** 菜单列表（裸数组；平铺，前端自行组树） */
-export const listMenus = () => http.request<MenuRecord[]>("get", "/menus");
-
 /** 菜单树（裸数组，节点自带 children） */
 export const menuTree = () => http.request<MenuRecord[]>("get", "/menus/tree");
 

@@ -167,3 +167,17 @@ def test_role_menus_unknown_role_returns_404(client, auth_headers) -> None:
         client.put("/api/roles/999999", headers=auth_headers, json={"name": "x"}).status_code == 404
     )
     assert client.delete("/api/roles/999999", headers=auth_headers).status_code == 404
+
+
+def test_update_role_rejects_blank_name(client, auth_headers) -> None:
+    # RoleCreate 用 min_length=1 卡住空名，Update 的可选语义是「传了就不能是空白」，
+    # 否则一个空名字的角色会在用户列表的标签里彻底隐身。
+    created = client.post("/api/roles", headers=auth_headers, json={"code": "qa", "name": "质检"})
+    assert created.status_code == 201
+    role_id = created.json()["id"]
+
+    for blank in ("", "   "):
+        response = client.put(f"/api/roles/{role_id}", headers=auth_headers, json={"name": blank})
+        assert response.status_code == 422, repr(blank)
+
+    assert _roles(client, auth_headers)["qa"]["name"] == "质检"

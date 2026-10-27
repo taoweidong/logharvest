@@ -7,6 +7,7 @@ import { message } from "@/utils/message";
 import { apiErrorDetail } from "@/api/logharvest";
 import { createMenu, deleteMenu, menuTree, updateMenu } from "@/api/rbac";
 import type { MenuPayload, MenuRecord, MenuType } from "@/api/rbacTypes";
+import { useAppStoreHook } from "@/store/modules/app";
 
 defineOptions({ name: "Menus" });
 
@@ -85,7 +86,9 @@ const excludedIds = computed(() =>
 /** 父节点合法性：目录挂在根或目录下；页面挂在目录下；权限挂在页面下。 */
 const parentOptions = computed(() => {
   const options: Array<{ value: number; label: string }> = [];
-  if (form.menu_type !== 2) {
+  // 只有目录能挂在根下：页面挂根会被后端拒绝（root menu must be a directory），
+  // 把「根目录」放进页面/权限的可选项等于给出一个必然报错的选择。
+  if (form.menu_type === 0) {
     options.push({ value: ROOT_VALUE, label: "根目录" });
   }
   walkMenus(tree.value, 0, (node, depth) => {
@@ -293,17 +296,25 @@ async function onDelete(row: any) {
   }
 }
 
-const columns: TableColumnList = [
-  { label: "标题", prop: "title", minWidth: 180 },
-  { label: "类型", prop: "menu_type", width: 90 },
-  { label: "名称/权限码", prop: "name", minWidth: 160 },
-  { label: "路径", prop: "path", minWidth: 200 },
-  { label: "组件", prop: "component", minWidth: 200 },
-  { label: "排序", prop: "rank", width: 80 },
-  { label: "显示", prop: "show_link", width: 80 },
-  { label: "状态", prop: "is_active", width: 80 },
-  { label: "操作", prop: "operation", width: 180, fixed: "right" }
-];
+const appStore = useAppStoreHook();
+const isMobile = computed(() => appStore.device === "mobile");
+
+const columns = computed<TableColumnList>(() => [
+  { label: "标题", prop: "title", minWidth: 150 },
+  { label: "类型", prop: "menu_type", width: 72 },
+  { label: "名称/权限码", prop: "name", minWidth: 130 },
+  { label: "路径", prop: "path", minWidth: 150 },
+  { label: "组件", prop: "component", minWidth: 150 },
+  { label: "排序", prop: "rank", width: 60 },
+  { label: "显示", prop: "show_link", width: 60 },
+  { label: "状态", prop: "is_active", width: 60 },
+  {
+    label: "操作",
+    prop: "operation",
+    width: 140,
+    fixed: isMobile.value ? undefined : "right"
+  }
+]);
 
 onMounted(load);
 </script>
@@ -335,8 +346,13 @@ onMounted(load);
           :data="tree"
           :tree-props="{ children: 'children' }"
         >
-          <el-table-column prop="title" label="标题" min-width="180" />
-          <el-table-column label="类型" width="90">
+          <el-table-column
+            prop="title"
+            label="标题"
+            min-width="150"
+            show-overflow-tooltip
+          />
+          <el-table-column label="类型" width="72">
             <template #default="{ row }">
               <el-tag
                 :size="size"
@@ -350,27 +366,27 @@ onMounted(load);
           <el-table-column
             prop="name"
             label="名称/权限码"
-            min-width="160"
+            min-width="130"
             show-overflow-tooltip
           />
           <el-table-column
             prop="path"
             label="路径"
-            min-width="200"
+            min-width="150"
             show-overflow-tooltip
           />
           <el-table-column
             prop="component"
             label="组件"
-            min-width="200"
+            min-width="150"
             show-overflow-tooltip
           >
             <template #default="{ row }">
               {{ row.component || "—" }}
             </template>
           </el-table-column>
-          <el-table-column prop="rank" label="排序" width="80" />
-          <el-table-column label="显示" width="80">
+          <el-table-column prop="rank" label="排序" width="60" />
+          <el-table-column label="显示" width="60">
             <template #default="{ row }">
               <el-tag
                 :size="size"
@@ -381,7 +397,7 @@ onMounted(load);
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="80">
+          <el-table-column label="状态" width="60">
             <template #default="{ row }">
               <el-tag
                 :size="size"
@@ -392,7 +408,11 @@ onMounted(load);
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="180" fixed="right">
+          <el-table-column
+            label="操作"
+            width="140"
+            :fixed="isMobile ? false : 'right'"
+          >
             <template #default="{ row }">
               <el-button
                 v-perms="'menus:write'"
@@ -428,7 +448,7 @@ onMounted(load);
     <el-dialog
       v-model="dialogVisible"
       :title="isEdit ? '编辑菜单' : '新建菜单'"
-      width="620px"
+      width="min(620px, 94vw)"
       :close-on-click-modal="false"
       append-to-body
     >

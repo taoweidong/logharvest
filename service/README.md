@@ -144,21 +144,21 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` 已从认证路径与
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `GET` | `/api/users` | 用户列表（裸数组），支持 `keyword`（用户名/昵称）与 `limit`/`offset`；每行带 `roles` |
-| `POST` | `/api/users` | 创建用户（用户名唯一，口令至少 8 位，可带 `role_ids`） |
+| `POST` | `/api/users` | 创建用户（用户名唯一且限 `[A-Za-z0-9][A-Za-z0-9_.@-]{1,49}`，口令至少 8 位，可带 `role_ids`） |
 | `PUT` | `/api/users/{id}` | 修改昵称/启用状态；禁止停用自己 |
 | `PUT` | `/api/users/{id}/roles` | 覆盖用户角色集合；移除最后一名 active admin 的 admin 角色返回 `409` |
 | `POST` | `/api/users/{id}/reset-password` | 重置口令（204） |
 | `DELETE` | `/api/users/{id}` | 删除用户（204）；禁止删除自己或最后一名 active admin |
 | `GET` | `/api/roles` | 角色列表（裸数组） |
 | `POST` | `/api/roles` | 创建角色；`code` 唯一且不可修改 |
-| `PUT` | `/api/roles/{id}` | 修改名称/描述/启用状态；系统角色（admin）不可停用 |
+| `PUT` | `/api/roles/{id}` | 修改名称/描述/启用状态；名称传空白返回 `422`；系统角色（admin）不可停用 |
 | `DELETE` | `/api/roles/{id}` | 删除角色（204）；系统角色或仍被用户引用时 `409` |
 | `GET` | `/api/roles/{id}/menus` | 角色已授权菜单 id；admin 返回全部菜单 id |
 | `PUT` | `/api/roles/{id}/menus` | 覆盖角色菜单授权（204）；系统角色 `409` |
 | `GET` | `/api/menus` | 菜单平铺列表（裸数组） |
 | `GET` | `/api/menus/tree` | 菜单树（目录/页面/权限节点） |
 | `POST` | `/api/menus` | 新建自定义菜单；校验目录→页面→权限的父子关系 |
-| `PUT` | `/api/menus/{id}` | 更新菜单；内置菜单只允许改标题/图标/排序/显示/启用 |
+| `PUT` | `/api/menus/{id}` | 更新菜单；名称/标题传空白返回 `422`；内置菜单只允许改标题/图标/排序/显示/启用 |
 | `DELETE` | `/api/menus/{id}` | 删除自定义叶子菜单（204）；内置菜单或有子节点时 `409` |
 
 管理接口全部要求对应的 `users:*` / `roles:*` / `menus:*` 权限；未授权返回 `403`。权限变更在重新登录后反映到前端菜单与 `permissions` 快照，后端接口权限实时生效。

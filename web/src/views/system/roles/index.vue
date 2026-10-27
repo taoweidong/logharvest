@@ -15,6 +15,7 @@ import {
   updateRole
 } from "@/api/rbac";
 import type { MenuRecord, MenuType, RoleRecord } from "@/api/rbacTypes";
+import { useAppStoreHook } from "@/store/modules/app";
 
 defineOptions({ name: "Roles" });
 
@@ -241,21 +242,24 @@ async function onDelete(row: RoleRecord) {
   }
 }
 
-const columns: TableColumnList = [
-  { label: "ID", prop: "id", width: 80 },
-  { label: "角色名", prop: "name", minWidth: 160, showOverflowTooltip: true },
-  { label: "code", prop: "code", minWidth: 160, showOverflowTooltip: true },
-  { label: "描述", prop: "description", minWidth: 240, showOverflowTooltip: true },
-  { label: "类型", prop: "is_system", slot: "is_system", width: 100 },
-  { label: "状态", prop: "is_active", slot: "is_active", width: 90 },
+const appStore = useAppStoreHook();
+const isMobile = computed(() => appStore.device === "mobile");
+
+const columns = computed<TableColumnList>(() => [
+  { label: "ID", prop: "id", width: 70 },
+  { label: "角色名", prop: "name", minWidth: 150, showOverflowTooltip: true },
+  { label: "code", prop: "code", minWidth: 150, showOverflowTooltip: true },
+  { label: "描述", prop: "description", minWidth: 220, showOverflowTooltip: true },
+  { label: "类型", prop: "is_system", slot: "is_system", width: 80 },
+  { label: "状态", prop: "is_active", slot: "is_active", width: 80 },
   {
     label: "操作",
     prop: "operation",
     slot: "operation",
-    width: 250,
-    fixed: "right"
+    width: 220,
+    fixed: isMobile.value ? undefined : "right"
   }
-];
+]);
 
 onMounted(load);
 </script>
@@ -338,7 +342,7 @@ onMounted(load);
     <el-dialog
       v-model="dialogVisible"
       :title="isCreate ? '新建角色' : '编辑角色'"
-      width="560px"
+      width="min(560px, 92vw)"
       :close-on-click-modal="false"
       append-to-body
     >
@@ -381,7 +385,7 @@ onMounted(load);
     <el-dialog
       v-model="permVisible"
       :title="permTitle"
-      width="680px"
+      width="min(680px, 94vw)"
       :close-on-click-modal="false"
       append-to-body
       @opened="onPermissionsOpened"

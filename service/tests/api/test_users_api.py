@@ -235,3 +235,17 @@ def test_viewer_is_forbidden_from_admin_read_endpoints(
     for path in ("/api/users", "/api/roles", "/api/menus"):
         assert client.get(path, headers=viewer_headers).status_code == 403
         assert client.get(path, headers=auth_headers).status_code == 200
+
+
+def test_create_user_rejects_unusable_username(client, auth_headers) -> None:
+    # 登录是按用户名精确匹配的：带空格或非 ASCII 的名字会造出「看起来重复、
+    # 但在登录框里几乎敲不出来」的账号，因此在入口就拒绝，而不是等到登录后。
+    before = len(client.get("/api/users", headers=auth_headers).json())
+    for username in (" admin", "admin ", "管理员", "a", "ops/admin"):
+        response = client.post(
+            "/api/users",
+            headers=auth_headers,
+            json={"username": username, "password": NEW_PASSWORD, "role_ids": []},
+        )
+        assert response.status_code == 422, username
+    assert len(client.get("/api/users", headers=auth_headers).json()) == before
