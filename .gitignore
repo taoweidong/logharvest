@@ -13,6 +13,12 @@ venv/
 *.db-shm
 service/*.db
 
+# 本地运行时产物（日志与 PID，不入库）
+service/*.log
+service/*.pid
+web/vite_out.txt
+web/vite_err.txt
+
 # 模拟数据生成物（脚本 data/generate_mock_logs.py 入库，产物不入库）
 data/logs/
 data/_smoke/
