@@ -33,6 +33,13 @@ _ALLOWED_REGEX_FLAGS = frozenset("ims")
 class CompiledRule:
     rule: Rule
     regex: regex.Pattern | None = None
+    # 编译期预计算的关键字对：(needle, 配置原词)，按配置顺序排列。
+    # needle = word（敏感）或 word.lower()（不敏感）；None 表示未经 compile_ruleset
+    # 预编译（外部手工构造 CompiledRule 的情形），求值时退回现算 needle 的路径。
+    keyword_needles: tuple[tuple[str, str], ...] | None = None
+    # any 模式返回第一个命中词的配置原词，all 模式返回首词；由 keyword_needles 一并在
+    # 编译期定下，避免每行每规则重复读取 match.any/match.all 并做 lower()。
+    keyword_is_any: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,6 +78,23 @@ def compile_ruleset(config: RuleSetConfig) -> CompiledRuleSet:
                     f"named group in pattern (available: {sorted(pattern.groupindex)})"
                 )
             compiled.append(CompiledRule(rule=rule, regex=pattern))
+        elif isinstance(rule.match, KeywordMatch):
+            keyword = rule.match
+            words = keyword.any or keyword.all
+            if words:
+                compiled.append(
+                    CompiledRule(
+                        rule=rule,
+                        keyword_needles=tuple(
+                            (word if keyword.case_sensitive else word.lower(), word)
+                            for word in words
+                        ),
+                        keyword_is_any=bool(keyword.any),
+                    )
+                )
+            else:
+                # 词表为空时（只有绕过校验才可能）保持求值期的既有行为。
+                compiled.append(CompiledRule(rule=rule))
         else:
             compiled.append(CompiledRule(rule=rule))
     return CompiledRuleSet(config=config, rules=tuple(compiled))
@@ -96,22 +120,35 @@ def _threshold_matches(
         return False, None
 
 
-def _keyword_hit(match: KeywordMatch, line: str) -> str | None:
-    haystack = line if match.case_sensitive else line.lower()
-    words = match.any or match.all
-    if match.any:
-        for word in words:
-            needle = word if match.case_sensitive else word.lower()
+def _keyword_hit(match: KeywordMatch, haystack: str, compiled: CompiledRule) -> str | None:
+    """在 haystack 上判定关键字命中，返回命中的配置原词。
+
+    haystack 由调用方决定：区分大小写时是原始行，否则是该行的小写副本。
+    needle 已在编译期归一化，这里只做子串判定。
+    """
+    needles = compiled.keyword_needles
+    if needles is None:
+        # 手工构造（未预编译）的条目：退回逐词现算 needle 的旧路径。
+        words = match.any or match.all
+        needles = tuple((word if match.case_sensitive else word.lower(), word) for word in words)
+        is_any = bool(match.any)
+    else:
+        is_any = compiled.keyword_is_any
+    if is_any:
+        for needle, word in needles:
             if needle in haystack:
                 return word
         return None
-    if all((word if match.case_sensitive else word.lower()) in haystack for word in words):
-        return words[0]
-    return None
+    for needle, _word in needles:
+        if needle not in haystack:
+            return None
+    return needles[0][1]
 
 
 def evaluate_line(compiled: CompiledRuleSet, line: str, line_no: int) -> list[RuleMatch]:
     matches: list[RuleMatch] = []
+    # 每行最多小写化一次，且只在真正需要不敏感 haystack 的关键字规则出现时才计算。
+    lower_line: str | None = None
     for item in compiled.rules:
         rule = item.rule
         if not rule.enabled:
@@ -121,7 +158,13 @@ def evaluate_line(compiled: CompiledRuleSet, line: str, line_no: int) -> list[Ru
         matched_text: str | None = None
 
         if isinstance(rule.match, KeywordMatch):
-            matched_text = _keyword_hit(rule.match, line)
+            if rule.match.case_sensitive:
+                haystack = line
+            else:
+                if lower_line is None:
+                    lower_line = line.lower()
+                haystack = lower_line
+            matched_text = _keyword_hit(rule.match, haystack, item)
             if matched_text is None:
                 continue
         elif isinstance(rule.match, RegexMatch):
