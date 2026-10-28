@@ -10,7 +10,7 @@
 ![Vue](https://img.shields.io/badge/Vue-3.5-4FC08D?logo=vuedotjs&logoColor=white)
 ![Element Plus](https://img.shields.io/badge/Element%20Plus-2.14-409EFF?logo=elementplus&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-500%20pass%20%2F%2077%20vitest-brightgreen)
+![Tests](https://img.shields.io/badge/tests-666%20pass%20%2F%20102%20vitest-brightgreen)
 
 </div>
 
@@ -25,7 +25,7 @@ LogHarvest 面向企业 NAS 上的海量压缩日志：管理员在 Web 上配�
 - **实时可观测**：SSE 作业进度（断流自动降级轮询）、尝试历史抽屉、任务统计（UTC 日界聚合 + Top 规则）、Worker 资源上报（CPU/内存/临时盘）
 - **命中分析**：`(created_at, id)` 游标分页、按规则/文件/严重度过滤、关键字与正则命名分组阈值规则、跨版本规则索引
 - **安全与权限**：JWT 双令牌 + bcrypt（超 72 字节先摘要）、登录限流（滑动窗口）、菜单即权限的 RBAC（3 角色 / 19 权限码 / 动态路由）、24 类写操作审计留痕
-- **工程化**：后端 500 条测试（覆盖率 97%）+ 前端 77 条 vitest、ruff/mypy/vue-tsc 门禁、Docker Compose 编排、Jenkins drain 滚动发布
+- **工程化**：后端 666 条测试（已跟踪模块覆盖率 97%）+ 前端 102 条 vitest、ruff/mypy/vue-tsc 门禁、Docker Compose 编排、Jenkins drain 滚动发布
 
 ## 🏗 架构总览
 
@@ -111,12 +111,12 @@ cd web && corepack enable && pnpm install && pnpm dev   # http://localhost:8848
 ## 🧪 开发与测试
 
 ```bash
-# 后端：500 条用例（无需 PostgreSQL）；ruff + mypy 静态门禁
+# 后端：666 条用例（无需 PostgreSQL）；ruff + mypy 静态门禁
 cd service
 uv run --python 3.12 pytest -q
 uv run --python 3.12 ruff check src tests && uv run --python 3.12 mypy
 
-# 前端：77 条 vitest 用例 + 类型检查
+# 前端：102 条 vitest 用例 + 类型检查
 cd web
 pnpm test && pnpm typecheck
 ```

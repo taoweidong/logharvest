@@ -63,9 +63,18 @@ pipeline {
         stage('后端单元测试') {
             steps {
                 dir('service') {
-                    // 单元套件不需要 PostgreSQL；集成套件由带 LOGHARVEST_TEST_PG_URL 的
-                    // 独立任务（或自置 PG 服务的节点）覆盖
+                    // 单元套件不需要真实 PostgreSQL；PG 专有 SQL 由下一阶段的一次性容器覆盖。
                     sh 'uv run pytest tests -q'
+                }
+            }
+        }
+
+        stage('PostgreSQL 集成测试') {
+            steps {
+                dir('service') {
+                    // 空库 alembic upgrade head + file_tasks 索引断言 + tests/integration；
+                    // 脚本自带一次性容器、端口探测与退出清理，不接触部署数据库。
+                    sh 'bash scripts/run_pg_integration.sh'
                 }
             }
         }

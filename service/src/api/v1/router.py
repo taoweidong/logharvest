@@ -1,5 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
+from sqlalchemy import text
 
+from src.api.dependencies import EngineDep
 from src.api.v1 import routes_auth
 from src.api.v1.routes_analytics import router as analytics_router
 from src.api.v1.routes_data_sources import router as data_sources_router
@@ -19,7 +21,27 @@ api_router = APIRouter()
 
 @api_router.get("/health")
 def health() -> dict[str, str]:
+    """Liveness only: the process is up, not necessarily able to serve data."""
     return {"status": "ok", "service": "logharvest"}
+
+
+@api_router.get("/health/ready")
+def readiness(engine: EngineDep) -> dict[str, str]:
+    """Readiness: the API can reach its database.
+
+    Kept separate from ``/health`` so a restart loop does not kill a process
+    that is merely waiting for PostgreSQL; orchestrators should gate traffic
+    on this endpoint instead.
+    """
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="database unavailable",
+        ) from exc
+    return {"status": "ready", "service": "logharvest"}
 
 
 api_router.include_router(routes_auth.router)

@@ -75,7 +75,7 @@ curl -s http://127.0.0.1:8000/api/jobs -H "Authorization: Bearer <accessToken>"
 | `LOGHARVEST_WORKER_POLL_SECONDS` | `1.0` | 队列为空时的轮询间隔 |
 | `LOGHARVEST_MATCHES_BATCH_SIZE` | `1000` | 命中结果批量写入条数，已接线到 `TaskProcessor.batch_size` |
 | `LOGHARVEST_MAX_CONCURRENT_COPIES` | `4` | 单机并发预算，仅作运维声明与展示；M1b 的并发由启动的 Worker 进程数实现（一个进程一次处理一个任务），进程内并发池未实现 |
-| `LOGHARVEST_MAX_MATCHES_PER_TASK` | `200_000` | 单任务命中上限，尚未强制执行 |
+| `LOGHARVEST_MAX_MATCHES_PER_TASK` | `200_000` | 单任务命中上限；达到上限后停止扫描，任务落 `failed` 且不自动重试，并删除本次尝试已写入的 `matches`，避免半截结果可见 |
 | `LOGHARVEST_NAS_READ_ONLY_POLICY` | `enforce` | NAS 只读守卫策略：`enforce`（判定为可写就拒绝处理）/ `warn`（只告警）/ `ignore`（完全沉默）。**Windows 上挂载表读不到，判定恒为 `unknown`**，此时 `enforce` 不会拦截（详见"PostgreSQL 依赖与验证边界"） |
 | `LOGHARVEST_ARCHIVE_MAX_MEMBER_BYTES` | `1073741824`（1 GiB） | 解压预算之一：单个成员的解压字节上限；超限只丢弃该成员，其余成员照常产出，任务落 `partial` |
 | `LOGHARVEST_ARCHIVE_MAX_TOTAL_BYTES` | `4294967296`（4 GiB） | 整包累计解压字节上限；超限停止扫描（`failed` 且不重试） |
@@ -83,6 +83,7 @@ curl -s http://127.0.0.1:8000/api/jobs -H "Authorization: Bearer <accessToken>"
 | `LOGHARVEST_ARCHIVE_MAX_RATIO` | `500.0` | 膨胀比上限（累计解压量 ÷ 源文件字节）。为避免误伤正常小文件，累计解压量低于 64 MiB 时不参与判定 |
 | `LOGHARVEST_LOGIN_MAX_ATTEMPTS` | `10` | 同一"用户名 + 来源 IP"在一个窗口内允许的**失败**登录次数；超过返回 `429` 与 `Retry-After`。成功登录会清空该来源的计数 |
 | `LOGHARVEST_LOGIN_WINDOW_SECONDS` | `300` | 上述失败计数的滑动窗口（秒）。计数在进程内存中，**多副本部署时实际放行量是阈值 × 副本数** |
+| `LOGHARVEST_TRUSTED_PROXY_CIDRS` | `""` | 可信反向代理地址/CIDR，逗号分隔。只有 TCP 对端落在此列表内时才解析 `X-Forwarded-For`/`X-Real-IP`；默认空 = 不信任任何转发头。经 nginx 部署时必须填入 nginx 容器地址或网段，否则登录限流仍按代理 IP 分桶 |
 
 ## 数据库迁移
 
@@ -93,18 +94,20 @@ DDL 的所有权已经从 `create_all` 交给 Alembic（`alembic.ini` + `service
 | `0001_baseline` | 一次建出 M1 的七张业务表（`data_sources`、`rule_sets`、`jobs`、`file_tasks`、`file_task_attempts`、`matches`、`workers`）。生产库尚不存在，这里有意使用 `SQLModel.metadata.create_all(bind, tables=BUSINESS_TABLES)` 捷径 |
 | `0002_auth_tables` | 新增 `users`/`roles`/`user_roles`，写成显式 `op.create_table`/`op.create_index`，不复用捷径，保证可 `downgrade` |
 | `0003_matches_rule_index` | 给 `matches` 补 `(rule_id, created_at)` 索引（规格要求的三条索引之一）。建索引前先 `inspect` 是否已存在：0001 的 `create_all` 捷径已经让新库在基线就带上它，只有 0002 之前升上来的库才真的缺 |
+| `0004_rbac_menus` / `0005_operation_logs` | RBAC 菜单表与操作日志表；索引分别随表创建 |
+| `0006_file_task_queue_indexes` | 给 `file_tasks` 补领取 `(scheduled_at, id) WHERE status='pending'` 与僵死回收 `(heartbeat_at) WHERE status='running'` 两条部分索引。0001 的新库基线已带索引，迁移只补旧库；`downgrade` 可删除 |
 
 ```bash
 cd service
 uv run --python 3.12 alembic upgrade head   # 幂等：第二次不重复建表
-uv run --python 3.12 alembic current        # 0003 (head)
+uv run --python 3.12 alembic current        # 0006 (head)
 ```
 
 启动接线：`src/infrastructure/migrations.py` 的 `run_migrations()` 由 `src/main.py` 的 lifespan 在 `LOGHARVEST_AUTO_CREATE_TABLES=true`（默认）时调用，置 `false` 则启动不动 schema。
 
 **测试例外**：`tests/conftest.py` 有一个 autouse fixture 把 `auto_create_tables` 强制设为 `False`，每个用例改用 `src/infrastructure/database.py:create_db_and_tables()` 在内存 SQLite 上建表。原因是不让测试碰开发库（也避免每个用例跑一遍迁移）。副作用是 `create_all` 会跟着模型自动同步，新增表时忘了写迁移不会被测试发现；为此 `tests/infrastructure/test_migrations.py` 会把 `alembic upgrade head` 的结果逐表、逐列、逐索引与 `SQLModel.metadata` 比对，漏写迁移直接失败。
 
-`alembic upgrade head` → `alembic current`（`0003 (head)`）→ `alembic downgrade base`（回到只剩 `alembic_version`）已在临时 SQLite 文件上真实执行确认；**未在 PostgreSQL 上验证过**（见"PostgreSQL 依赖与验证边界"）。
+`alembic upgrade head` → `alembic current`（`0006 (head)`）→ `alembic downgrade base`（回到只剩 `alembic_version`）已在临时 SQLite 文件上真实执行确认；**未在 PostgreSQL 上验证过**（见"PostgreSQL 依赖与验证边界"）。0006 的两条部分索引已在 `tests/infrastructure/test_migrations.py` 中按名称断言。
 
 ## 认证
 
@@ -113,7 +116,7 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` 已从认证路径与
 流程：
 
 1. `POST /api/login`（`{"username": "...", "password": "..."}`）取 `accessToken`/`refreshToken`。登录**只校验、不创建用户**：库里没有任何用户时返回 `401`（不是 `500`），管理员由 `scripts/seed_admin` 建立。
-2. 受保护接口带 `Authorization: Bearer <accessToken>`；只有 `GET /api/health`、`POST /api/login` 与 `POST /api/refresh-token` 不需要凭证（`/api/auth/routes` 与 `/api/logout` 需要）。
+2. 受保护接口带 `Authorization: Bearer <accessToken>`；只有 `GET /api/health`、`GET /api/health/ready`、`POST /api/login` 与 `POST /api/refresh-token` 不需要凭证（`/api/auth/routes` 与 `/api/logout` 需要）。
 3. `POST /api/refresh-token`（`{"refreshToken": "..."}`，字段名是 camelCase 以对齐前端基座）换一对新的 access/refresh。两类令牌带不同的 `type` 声明，不能互换使用。
 4. `POST /api/logout` 只回一个空数据信封：服务端没有会话、没有 token 黑名单，令牌靠 `exp` 自然过期（access 默认 30 分钟）。
 
@@ -172,7 +175,8 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` 已从认证路径与
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/api/health` | 健康检查，无需认证 |
+| `GET` | `/api/health` | 存活检查（liveness），无需认证；只证明进程在运行 |
+| `GET` | `/api/health/ready` | 就绪检查（readiness），无需认证；执行 `SELECT 1`，数据库不可用时返回 `503` |
 | `POST` | `/api/login` | 用户名口令换 `accessToken`/`refreshToken`；返回信封，`roles`/`permissions` 在 `data` 里 |
 | `POST` | `/api/refresh-token` | 用 `refreshToken` 换新令牌对；返回信封 |
 | `GET` | `/api/auth/routes` | 需认证；按当前用户角色返回动态菜单/路由树（目录无可见页面时剔除），页面 `meta.auths` 带有效权限码；返回信封 |
@@ -237,9 +241,10 @@ LOGHARVEST_DATABASE_URL=postgresql://logharvest:logharvest@127.0.0.1:5432/loghar
 4. **源文件校验（复制之前）**：只读 `stat` 一次，源文件不存在、`size_bytes` 与规划不符、`mtime` 与规划不符（按秒比较，naive 时间列按 UTC 解释）任意一条成立即抛 `PermanentTaskFailure`，走永久失败路径，不进入复制。
 5. 复制到本地临时盘：1 MiB 分块，至少每 5 秒 `touch` 续租（`id + attempts + status='running'` 栅栏）。续租返回假说明租约已被回收或接管，立即抛 `LeaseLost` 中止，不写任务终态、也不决定作业终态。
 6. 流式解压与逐行匹配：每 20000 行或每 5 秒 `heartbeat` 续租并回写进度计数，因此被 `file_glob` 过滤掉的行同样会续租；命中按 `LOGHARVEST_MATCHES_BATCH_SIZE` 批量写入 `matches`。
-7. **取消检查**：行循环里每处理完一行调用一次 `cancel_check`（`SELECT cancel_requested FROM jobs WHERE id = ...`），为真即抛 `JobCancelled`、把该 `file_task` 写成 `cancelled`（并关闭当次尝试记录）后停止，不再评估剩余行。注意这是每行一次数据库查询，不是每 2 万行一次。
-8. 重试幂等：`attempts > 1` 时先 `delete_for_task` 清理上一次写入的命中，再重新写入。
-9. 终态写回 `complete` 使用同一租约栅栏，迟到的完成不会覆盖已被回收的任务；`failed` 且未达 `max_attempts`（5）时退回 `pending`，`scheduled_at` 线性退避 `attempts * 5` 秒。`COMPLETE_SQL` 的自动重排还要求 `:retryable` 为真：`PermanentTaskFailure` 以 `retryable=False` 落 `failed` 终态，**不自动重试**，等人工确认后用 `POST /api/jobs/{id}/files/retry-failed` 手动放回队列。`failed` 且作业已请求取消时写成 `cancelled`，避免作业被永远悬在 `running`。
+7. **取消检查**：`cancel_check` 跟随心跳预算执行（每 20000 行或每 5 秒一次），不是逐行查询；为真即抛 `JobCancelled`、把该 `file_task` 写成 `cancelled`（并关闭当次尝试记录）后停止，不再评估剩余行。
+8. 重试幂等：`attempts > 1` 时先 `delete_for_task` 清理上一次写入的命中，再重新写入。任务进入 `failed` 终态时也会在写终态前删除本次尝试的命中（`partial` 保留），所以失败任务不会留下半截结果。
+9. 单任务命中上限：每写入一条命中前检查 `LOGHARVEST_MAX_MATCHES_PER_TASK`；达到上限即停止扫描，删除本次尝试命中并以 `failed + retryable=False` 收尾，错误文案包含 `max_matches_per_task`。`partial` 是成员级内容失败，保留已成功成员的结果。
+10. 终态写回 `complete` 使用同一租约栅栏，迟到的完成不会覆盖已被回收的任务；`failed` 且未达 `max_attempts`（5）时退回 `pending`，`scheduled_at` 线性退避 `attempts * 5` 秒。`COMPLETE_SQL` 的自动重排还要求 `:retryable` 为真：`PermanentTaskFailure`/`SourceNotReadOnly`/命中上限以 `retryable=False` 落 `failed` 终态，**不自动重试**，等人工确认后用 `POST /api/jobs/{id}/files/retry-failed` 手动放回队列；`ESTALE`/`EIO`/`ETIMEDOUT` 等瞬时源错误以 `retryable=True` 重新入队。`failed` 且作业已请求取消时写成 `cancelled`，避免作业被永远悬在 `running`。
 10. 任务处理成功后尝试汇总作业终态；队列为空时等待 `LOGHARVEST_WORKER_POLL_SECONDS` 再继续领取。Worker 不绑定作业，不会因为某个作业结束而退出。
 11. 每 300 秒重复执行僵死回收 + 作业终态补偿，覆盖没有完成回调的路径。
 
@@ -261,12 +266,13 @@ LOGHARVEST_DATABASE_URL=postgresql://logharvest:logharvest@127.0.0.1:5432/loghar
 | 条件 | `jobs.status` |
 |---|---|
 | 全部文件任务 `succeeded` | `succeeded` |
-| 有成功且存在 `failed`/`partial` | `partial` |
-| 无成功且存在 `failed` | `failed` |
+| 存在 `partial`（无论是否有 `succeeded`/`failed`） | `partial` |
+| 无 `partial`，存在 `succeeded` 与 `failed` | `partial` |
+| 无 `succeeded`/`partial`，存在 `failed` | `failed` |
 | `cancel_requested` 为真 | `cancelled` |
 | 文件任务全部被取消 | `cancelled` |
 
-仅在作业仍为 `running` 且不存在 `pending`/`running` 文件任务时写入，同时设置 `finished_at`。并发汇总以 `jobs.status = 'running'` 行级栅栏保证单一写入者；触发点是完成任务的 Worker，兜底是 Worker 启动与每 300 秒的补偿扫描，以及下节的 `POST /api/system/maintenance`。文件任务级 `partial` 已实现：压缩包内部分成员损坏、其余匹配成员成功时写 `partial`，作业汇总按上表计入 `partial`。
+仅在作业仍为 `running` 且不存在 `pending`/`running` 文件任务时写入，同时设置 `finished_at`。并发汇总以 `jobs.status = 'running'` 行级栅栏保证单一写入者；触发点是完成任务的 Worker，兜底是 Worker 启动与每 300 秒的补偿扫描，以及下节的 `POST /api/system/maintenance`。文件任务级 `partial` 已实现：压缩包内部分成员损坏、其余匹配成员成功时写 `partial`，作业汇总保留 `partial`，即使全部任务都是 `partial` 也不会被吞成 `failed`。
 
 ## 服务端维护入口
 
@@ -308,10 +314,21 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 - 队列 SQL（`FOR UPDATE SKIP LOCKED`、`make_interval`、`ON CONFLICT`、CTE `UPDATE ... RETURNING`）只能在 PostgreSQL 上执行。真实执行与 `SKIP LOCKED` 并发行为由 `tests/integration/test_postgres_queue.py` 覆盖（设置 `LOGHARVEST_TEST_PG_URL`，每个用例重建 schema）；SQLite 套件只验证可移植语句。
 - PostgreSQL 连接会强制 `timezone=UTC`（`connect_args_for`）：时间戳列是 `without time zone`，SQL `now()` 写入的是会话时区的墙上时间，而 Python 侧写入 UTC。若会话不是 UTC，`heartbeat_at`、僵死回收阈值与"静默 Worker 降级"的比较会整体偏移，降级可能永远不触发。
 - 作业终态汇总 SQL 使用可移植写法，已在真实建表的 SQLite 上验证聚合与栅栏语义。
-- 表结构 DDL 已交给 Alembic（`0001_baseline`、`0002_auth_tables`、`0003_matches_rule_index`），并在启动时按 `LOGHARVEST_AUTO_CREATE_TABLES` 执行 `upgrade head`；`create_db_and_tables()` 仍然存在，用途收缩为测试夹具建表。迁移只在临时 SQLite 文件上真实跑过 `upgrade head` / `current` / `downgrade base`，**没有在 PostgreSQL 上执行过**：`0001` 的 `create_all` 捷径与 `0002` 的显式 op 生成的语句在 PG 方言下的行为（`JSONB`、`BIGSERIAL`、`BIGINT` 列类型）仍待补验。
+- 表结构 DDL 已交给 Alembic（`0001_baseline`、`0002_auth_tables`、`0003_matches_rule_index`、`0004_rbac_menus`、`0005_operation_logs`、`0006_file_task_queue_indexes`），并在启动时按 `LOGHARVEST_AUTO_CREATE_TABLES` 执行 `upgrade head`；`create_db_and_tables()` 仍然存在，用途收缩为测试夹具建表。迁移只在临时 SQLite 文件上真实跑过 `upgrade head` / `current` / `downgrade base`，**没有在 PostgreSQL 上执行过**：`0001` 的 `create_all` 捷径与 `0002` 的显式 op 生成的语句在 PG 方言下的行为（`JSONB`、`BIGSERIAL`、`BIGINT` 列类型）仍待补验。
 - **NAS 只读判定在非 POSIX 平台上恒为 `unknown`**（见 `src/domain/source_guard.py`）：无副作用的证据只有两处——POSIX 挂载表（`/proc/self/mounts`、`/etc/mtab`）与 `st_mode` 的写权限位。Windows / SMB 上读不到挂载表，而 SMB 挂载通常带回可写位，于是判定落到 `unknown`。后果是 `LOGHARVEST_NAS_READ_ONLY_POLICY=enforce` 在 Windows 开发机上**实际不会拦截任何数据源**（只有真的判为 `writable` 才拒绝处理），`warn` 则只打一条 `nas_read_only_not_confirmed` 日志。规格 §7.2 的"拒绝在可写挂载上处理"只能在 Linux + 只读挂载的环境里真正生效，**不要拿 Windows 开发机当作这条保护已生效的证据**；前端同源处理（`DataSourceTestResult.writability`）也把 `unknown` 显示成"只读未确认"而不是绿勾。
 
 ## 测试
+
+### PostgreSQL 集成门禁（CI）
+
+`tests/integration/` 默认跳过；CI 使用 `scripts/run_pg_integration.sh` 启动一次性 `postgres:16` 容器，
+先对空库执行 `alembic upgrade head` 并断言 `file_tasks` 的领取/回收索引存在，再运行全部集成用例，
+退出时删除容器。Jenkins 的「PostgreSQL 集成测试」阶段已接入该脚本。
+
+```bash
+cd service
+bash scripts/run_pg_integration.sh   # 需要 Docker；不会接触 deploy/ 下的数据库
+```
 
 - API 测试（`tests/api/`、`tests/test_health.py`）使用内存 SQLite（`StaticPool`）与 FastAPI `dependency_overrides`，不需要 PostgreSQL；每个 API 用例通过 `create_db_and_tables()` 建表。`tests/conftest.py` 的 autouse fixture 会把 `settings.auto_create_tables` 置为 `False`，因此测试进程从不执行 Alembic，也不会碰开发库；`tests/conftest.py` 在任何 `src` 导入之前直接赋值注入 `LOGHARVEST_ENVIRONMENT=test` 与测试签名密钥（`Settings` 在模块导入时即完成校验），`auth_headers` 夹具再用 `settings.jwt_secret_key` 签发真实 access token。`tests/domain/` 与 `tests/application/` 为领域/应用单元测试，不经过 API 与依赖覆盖（模型测试自行使用内存 SQLite 验证建表）。
 - `tests/api/` 覆盖 JWT 登录/刷新/登出/停用账号、数据源、规则集、作业规划/幂等/路径校验/取消/失败重试、结果查询、Worker 管理、SSE、系统状态与概览/维护接口；`tests/domain/services/` 覆盖 bcrypt 与 `TokenService`（含过期、错密钥、access/refresh 不可互换）；`tests/scripts/test_seed_admin.py` 覆盖管理员种子的幂等与弱口令拒绝；`tests/application/` 覆盖 Worker 处理器的复制续租、时间心跳、租约丢失、取消检查与永久失败；`tests/worker/` 用 fake 仓库覆盖领取循环、drain、注册、僵死回收、周期补偿、取消检查接线与信号退出；`tests/infrastructure/` 覆盖队列 SQL 形状、批量写入、作业终态汇总（后两者在真实建表的 SQLite 上执行）以及迁移结果与 `SQLModel.metadata` 的逐表逐列比对；`tests/integration/` 在真实 PostgreSQL 上覆盖 `SKIP LOCKED` 并发领取、租约栅栏、重试/取消/永久失败、成员级 `partial`、僵死回收、作业汇总与批量写入，以及用户/角色/菜单删除时外键关联的 flush 顺序（`test_postgres_rbac.py`）。
@@ -375,7 +392,7 @@ cd web && pnpm test && pnpm typecheck                        # 前端单测 + �
 
 - 认证领域核心：`users`/`roles`/`user_roles` 三张表、bcrypt 口令哈希（超 72 字节先 SHA-256，拒绝空口令）、HS256 `TokenService`（`access`/`refresh` 带 `type` 声明、密钥最短 32 字符、过期与错签名一律拒绝）。
 - JWT 登录链路：`POST /api/login`、`POST /api/refresh-token`、`GET /api/auth/routes`、`POST /api/logout`（四个端点返回 `{"code","message","data"}` 信封），认证依赖解码 access token；后续 RBAC 把业务路由从单一 `AdminDep` 升级为细粒度 `require_permission(...)`，`scripts/seed_admin.py` 幂等创建管理员，启动时补齐 RBAC 种子。
-- Alembic：`0001_baseline`（七张业务表）+ `0002_auth_tables`（显式 op）+ `0004_rbac_menus`（menus/role_menus 与 roles 扩列），`src/infrastructure/migrations.py:run_migrations()` 由 lifespan 按 `LOGHARVEST_AUTO_CREATE_TABLES` 执行 `upgrade head`；测试关掉迁移改用 `create_all`，并用逐表逐列断言防止漏写迁移。
+- Alembic：`0001_baseline`（七张业务表）+ `0002_auth_tables`（显式 op）+ `0004_rbac_menus`（menus/role_menus 与 roles 扩列）+ `0006_file_task_queue_indexes`（领取/回收部分索引），`src/infrastructure/migrations.py:run_migrations()` 由 lifespan 按 `LOGHARVEST_AUTO_CREATE_TABLES` 执行 `upgrade head`；测试关掉迁移改用 `create_all`，并用逐表逐列断言防止漏写迁移。
 - 队列/Worker 遗留语义：领取语句带回 `size_bytes`/`mtime`，复制前源校验，源缺失或变更走 `PermanentTaskFailure` 并以 `retryable=False` 落 `failed`（不自动重试），取消检查按心跳预算执行（每 `heartbeat_every_lines` 行或每 `heartbeat_every_seconds` 秒一次，`is_job_cancelled` → `cancelled`；规格 §7.3 的"每 2 万行"，不是逐行 SELECT），手动重试 `POST /api/jobs/{id}/files/retry-failed`。
 - 概览与运维：`GET /api/system/overview`（作业/文件任务分组计数、24 小时命中量、在线 Worker 与版本分布、最老 pending 等待秒数）、`POST /api/system/maintenance`（`run_maintenance`：回收僵死任务、降级静默 Worker、收尾作业；**队列不是 PostgreSQL 时返回 503**，因为回收语句用了 PostgreSQL 专有语法）、`GET /api/jobs/{id}/files?status=` 状态筛选。
 
@@ -397,7 +414,7 @@ cd web && pnpm test && pnpm typecheck                        # 前端单测 + �
 service/
 ├── alembic/
 │   ├── env.py                      # 用 settings.database_url 建同步引擎
-│   └── versions/                   # 0001_baseline、0002_auth_tables、0003_matches_rule_index
+│   └── versions/                   # 0001_baseline … 0006_file_task_queue_indexes
 ├── alembic.ini
 ├── scripts/seed_admin.py           # 幂等创建/补齐管理员账号
 ├── src/

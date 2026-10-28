@@ -69,6 +69,21 @@ def test_all_failures_fail_the_job(engine: Engine) -> None:
     assert PostgresTaskRepository(engine).finalize_job(job_id) == "failed"
 
 
+def test_all_partial_tasks_close_the_job_as_partial(engine: Engine) -> None:
+    """成员级 partial 是部分成功，不能因为“没有 succeeded”就吞成 failed。"""
+    job_id = _seed(engine, ["partial", "partial"])
+
+    assert PostgresTaskRepository(engine).finalize_job(job_id) == "partial"
+    assert _reload(engine, job_id).status == "partial"
+
+
+def test_partial_with_failures_is_still_partial(engine: Engine) -> None:
+    job_id = _seed(engine, ["partial", "failed"])
+
+    assert PostgresTaskRepository(engine).finalize_job(job_id) == "partial"
+    assert _reload(engine, job_id).status == "partial"
+
+
 def test_cancel_flag_wins_over_task_outcomes(engine: Engine) -> None:
     job_id = _seed(engine, ["succeeded", "cancelled"], cancel_requested=True)
 

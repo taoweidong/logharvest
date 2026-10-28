@@ -1,3 +1,5 @@
+import ipaddress
+
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -28,7 +30,7 @@ class Settings(BaseSettings):
     worker_version: str = "0.1.0"
     max_concurrent_copies: int = 4
     matches_batch_size: int = 1000
-    max_matches_per_task: int = 200_000
+    max_matches_per_task: int = Field(default=200_000, ge=1)
     jwt_secret_key: str = ""
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
@@ -45,6 +47,9 @@ class Settings(BaseSettings):
     # 按"用户名 + 来源 IP"限制失败次数（语义见 src/domain/services/rate_limit.py）。
     login_max_attempts: int = Field(default=10, ge=0)
     login_window_seconds: int = Field(default=300, gt=0)
+    # 只有 TCP 对端落在这个列表里时才解析 X-Forwarded-For / X-Real-IP。
+    # 默认空 = 不信任任何转发头，保持"直连客户端无法用头伪造来源"的既有语义。
+    trusted_proxy_cidrs: str = ""
 
     @model_validator(mode="after")
     def validate_auth_settings(self) -> "Settings":
@@ -73,6 +78,27 @@ class Settings(BaseSettings):
             choices = ", ".join(f'"{name}"' for name in sorted(READ_ONLY_POLICIES))
             raise ValueError(f"nas_read_only_policy must be one of {choices}")
         self.nas_read_only_policy = policy
+        return self
+
+    @model_validator(mode="after")
+    def validate_trusted_proxy_cidrs(self) -> "Settings":
+        raw = self.trusted_proxy_cidrs.strip()
+        if not raw:
+            self.trusted_proxy_cidrs = ""
+            return self
+        normalized: list[str] = []
+        for token in raw.split(","):
+            candidate = token.strip()
+            if not candidate:
+                continue
+            try:
+                network = ipaddress.ip_network(candidate, strict=False)
+            except ValueError as exc:
+                raise ValueError(
+                    f"trusted_proxy_cidrs contains an invalid IP or CIDR: {candidate!r}"
+                ) from exc
+            normalized.append(str(network))
+        self.trusted_proxy_cidrs = ",".join(normalized)
         return self
 
 

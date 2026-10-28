@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlmodel import Session
 
 from src.application.worker.ports import ClaimedTask, WorkerStats
-from src.domain.models.entities import Job, Worker, utcnow
+from src.domain.models.entities import FileTask, Job, Worker, utcnow
 from src.infrastructure.task_queue import (
     CLAIM_SQL,
     COMPLETE_SQL,
@@ -19,6 +19,17 @@ from src.infrastructure.task_queue import (
 
 def _normalized(sql: str) -> str:
     return " ".join(sql.split()).upper()
+
+
+def test_file_task_queue_indexes_are_partial() -> None:
+    indexes = {index.name: index for index in FileTask.__table__.indexes}
+    claim = indexes["ix_file_tasks_claim"]
+    recover = indexes["ix_file_tasks_recover"]
+
+    assert [column.name for column in claim.columns] == ["scheduled_at", "id"]
+    assert "status = 'pending'" in str(claim.dialect_options["postgresql"]["where"])
+    assert [column.name for column in recover.columns] == ["heartbeat_at"]
+    assert "status = 'running'" in str(recover.dialect_options["postgresql"]["where"])
 
 
 def test_claimed_task_gets_independent_rule_config_default() -> None:

@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, Column, Index, Integer, Numeric, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, Column, Index, Integer, Numeric, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -78,6 +78,21 @@ class FileTask(SQLModel, table=True):
     __tablename__ = "file_tasks"
     __table_args__ = (
         UniqueConstraint("job_id", "source_path", name="uq_file_tasks_job_source_path"),
+        # 领取与僵死回收各走一条部分索引：任务表到十万级后，没有索引的
+        # ORDER BY scheduled_at, id 会退化成全表扫描 + 外部排序（见 2026-10-29 评估）。
+        Index(
+            "ix_file_tasks_claim",
+            "scheduled_at",
+            "id",
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+        Index(
+            "ix_file_tasks_recover",
+            "heartbeat_at",
+            postgresql_where=text("status = 'running'"),
+            sqlite_where=text("status = 'running'"),
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)

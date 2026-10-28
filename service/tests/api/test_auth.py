@@ -1,4 +1,5 @@
 import pytest
+from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from src.api import dependencies
@@ -6,6 +7,7 @@ from src.application.services.auth import ensure_admin
 from src.domain.models.auth import ADMIN_ROLE_CODE, User
 from src.domain.services.rate_limit import SlidingWindowLimiter
 from src.domain.services.tokens import TokenService
+from src.main import create_app
 
 UNIT_SECRET = "unit-secret-key-0123456789-abcdef"
 
@@ -296,6 +298,44 @@ def test_rate_limit_is_scoped_per_username(client, session, monkeypatch) -> None
     blocked = client.post("/api/login", json={"username": "admin", "password": "wrong"})
     other = client.post("/api/login", json={"username": "ghost", "password": "wrong"})
 
+    assert blocked.status_code == 429
+    assert other.status_code == 401
+
+
+def test_rate_limit_uses_trusted_forwarded_client_ip(engine, session, monkeypatch) -> None:
+    """经可信代理时按 X-Forwarded-For 的真实客户端分桶，而不是代理 IP。"""
+    from src.config import settings as settings_module
+
+    install_limiter(monkeypatch, max_attempts=1)
+    ensure_admin(session, "admin", "Sup3r-Secret")
+    app = create_app()
+
+    def override_session():
+        with Session(engine) as db_session:
+            yield db_session
+
+    app.dependency_overrides[dependencies.get_session] = override_session
+    app.dependency_overrides[dependencies.get_engine] = lambda: engine
+    monkeypatch.setattr(settings_module.settings, "trusted_proxy_cidrs", "127.0.0.1/32")
+
+    with TestClient(app, client=("127.0.0.1", 5555)) as proxy_client:
+        first = proxy_client.post(
+            "/api/login",
+            json={"username": "admin", "password": "wrong"},
+            headers={"X-Forwarded-For": "203.0.113.1"},
+        )
+        blocked = proxy_client.post(
+            "/api/login",
+            json={"username": "admin", "password": "wrong"},
+            headers={"X-Forwarded-For": "203.0.113.1"},
+        )
+        other = proxy_client.post(
+            "/api/login",
+            json={"username": "admin", "password": "wrong"},
+            headers={"X-Forwarded-For": "203.0.113.2"},
+        )
+
+    assert first.status_code == 401
     assert blocked.status_code == 429
     assert other.status_code == 401
 

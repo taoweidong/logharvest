@@ -51,7 +51,9 @@ class FakeRepo:
     def heartbeat(self, *args, **kwargs):
         return True
 
-    def complete(self, task_id, attempts, status, processed_lines, matched_rows, error=None):
+    def complete(
+        self, task_id, attempts, status, processed_lines, matched_rows, error=None, retryable=True
+    ):
         self.completed.append((task_id, attempts, status, processed_lines, matched_rows, error))
 
     def is_job_cancelled(self, job_id):
@@ -159,6 +161,28 @@ def test_run_once_forwards_configured_batch_size(tmp_path, monkeypatch):
 
     assert runtime.run_once() is True
     assert captured["batch_size"] == 7
+
+
+def test_run_once_forwards_the_match_limit(tmp_path, monkeypatch):
+    captured = {}
+
+    class RecordingProcessor:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def process(self, task):
+            return TaskResult("succeeded", 0, 0)
+
+    monkeypatch.setattr(worker_main, "TaskProcessor", RecordingProcessor)
+    runtime = make_runtime(
+        FakeRepo([make_task(tmp_path)]),
+        FakeWriter(),
+        tmp_path,
+        max_matches_per_task=7,
+    )
+
+    assert runtime.run_once() is True
+    assert captured["max_matches_per_task"] == 7
 
 
 def test_run_once_forwards_the_nas_read_only_policy(tmp_path, monkeypatch):
@@ -384,6 +408,7 @@ def test_main_wires_stop_event_and_signals(monkeypatch):
     assert captured["options"]["worker_version"] == worker_main.settings.worker_version
     assert captured["options"]["poll_seconds"] == worker_main.settings.worker_poll_seconds
     assert captured["options"]["batch_size"] == worker_main.settings.matches_batch_size
+    assert captured["options"]["max_matches_per_task"] == worker_main.settings.max_matches_per_task
     # The declared copy budget reaches the worker registry, so the management
     # view reports the configured value instead of the schema default.
     assert captured["repo_options"] == {

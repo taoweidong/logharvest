@@ -48,6 +48,15 @@ def test_migrations_match_model_metadata(tmp_path) -> None:
         )
 
 
+def test_upgrade_creates_file_task_queue_indexes(tmp_path) -> None:
+    url = sqlite_url(tmp_path)
+    run_migrations(url)
+
+    indexes = {index["name"] for index in inspect(create_engine(url)).get_indexes("file_tasks")}
+
+    assert {"ix_file_tasks_claim", "ix_file_tasks_recover"} <= indexes
+
+
 def test_only_postgres_takes_the_startup_lock() -> None:
     from src.infrastructure.migrations import needs_advisory_lock
 

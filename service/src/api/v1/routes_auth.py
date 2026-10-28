@@ -88,7 +88,7 @@ def login(
 ):
     # 限流排在所有工作之前：被限流的请求连 bcrypt 都不该跑。放在后面就只能压低爆破
     # 速度，挡不住它最该挡的东西——一次登录约 100ms 的 CPU 占用本身。
-    key = attempt_key(payload.username, request.client.host if request.client else None)
+    key = attempt_key(payload.username, client_ip(request))
     if not limiter.check(key):
         retry_after = limiter.retry_after(key)
         _login_logger.warning(

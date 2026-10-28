@@ -9,7 +9,11 @@ from threading import Event
 from time import monotonic, time
 
 from src.application.worker.ports import ClaimedTask, WorkerStats
-from src.application.worker.processor import LeaseLost, TaskProcessor
+from src.application.worker.processor import (
+    DEFAULT_MAX_MATCHES_PER_TASK,
+    LeaseLost,
+    TaskProcessor,
+)
 from src.config.settings import settings
 from src.domain.archive.reader import ArchiveBudget
 from src.domain.rules.evaluator import CompiledRuleSet, compile_ruleset
@@ -54,6 +58,7 @@ class WorkerRuntime:
         collect_stats: Callable[[Path], WorkerStats] | None = None,
         logger=None,
         archive_budget: ArchiveBudget | None = None,
+        max_matches_per_task: int = DEFAULT_MAX_MATCHES_PER_TASK,
     ) -> None:
         self._repo = repo
         self._writer = writer
@@ -69,6 +74,10 @@ class WorkerRuntime:
         self._collect_stats = collect_stats
         self._logger = logger
         self._archive_budget = archive_budget
+        self._max_matches_per_task = max_matches_per_task
+        # 编译缓存：规则集版本不可变，(rule_set_id, version) 命中即免重复编译。
+        # 5k 规则一次编译约 300ms+，2000 任务的同版本作业不缓存就是 10 分钟纯编译。
+        self._rules_cache: dict[tuple[int, int], CompiledRuleSet] = {}
 
     def _stats(self) -> WorkerStats | None:
         """None 表示未注入采集器：轻量 fake 与测试保持零依赖。"""
@@ -92,6 +101,17 @@ class WorkerRuntime:
             self._repo.heartbeat_worker(self._worker_id, status, task_id, stats=self._stats())
         except Exception as exc:  # noqa: BLE001
             self._log("error", "worker_loop_error", stage="heartbeat", error=str(exc))
+
+    def _get_rules(self, task: ClaimedTask) -> CompiledRuleSet:
+        """按 (rule_set_id, version) 缓存编译结果；上限 64 个版本，FIFO 淘汰。"""
+        key = (task.rule_set_id, task.rule_version)
+        cached = self._rules_cache.get(key)
+        if cached is None:
+            cached = self._rules_factory(task)
+            if len(self._rules_cache) >= 64:
+                self._rules_cache.pop(next(iter(self._rules_cache)))
+            self._rules_cache[key] = cached
+        return cached
 
     def run_once(self) -> bool:
         """Claim and process at most one task; return whether work was attempted.
@@ -135,11 +155,12 @@ class WorkerRuntime:
                 processor = TaskProcessor(
                     repo=self._repo,
                     writer=self._writer,
-                    rules=self._rules_factory(task),
+                    rules=self._get_rules(task),
                     work_dir=self._work_dir,
                     batch_size=self._batch_size,
                     nas_read_only_policy=self._nas_read_only_policy,
                     budget=self._archive_budget,
+                    max_matches_per_task=self._max_matches_per_task,
                     cancel_check=cancel_check,
                     # A task can run for minutes; keep workers.last_heartbeat
                     # fresh so the management view and the peer dead-worker
@@ -303,6 +324,7 @@ def main() -> None:
             max_members=settings.archive_max_members,
             max_ratio=settings.archive_max_ratio,
         ),
+        max_matches_per_task=settings.max_matches_per_task,
     )
 
     stop = Event()

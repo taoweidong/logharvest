@@ -60,3 +60,31 @@ def test_nas_read_only_policy_is_normalized() -> None:
 def test_unknown_nas_read_only_policy_is_rejected() -> None:
     with pytest.raises(ValueError, match="nas_read_only_policy"):
         _make(environment="dev", jwt_secret_key=VALID_SECRET, nas_read_only_policy="relaxed")
+
+
+def test_match_limit_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="max_matches_per_task"):
+        _make(environment="dev", jwt_secret_key=VALID_SECRET, max_matches_per_task=0)
+
+
+def test_trusted_proxy_cidrs_defaults_to_empty() -> None:
+    settings = _make(environment="dev", jwt_secret_key=VALID_SECRET)
+    assert settings.trusted_proxy_cidrs == ""
+
+
+def test_trusted_proxy_cidrs_are_normalized() -> None:
+    settings = _make(
+        environment="dev",
+        jwt_secret_key=VALID_SECRET,
+        trusted_proxy_cidrs=" 10.0.0.0/8, 192.168.1.5 , 2001:db8::/32 ",
+    )
+    assert settings.trusted_proxy_cidrs == "10.0.0.0/8,192.168.1.5/32,2001:db8::/32"
+
+
+def test_invalid_trusted_proxy_cidr_is_rejected() -> None:
+    with pytest.raises(ValueError, match="trusted_proxy_cidrs"):
+        _make(
+            environment="dev",
+            jwt_secret_key=VALID_SECRET,
+            trusted_proxy_cidrs="10.0.0.0/8,not-a-network",
+        )

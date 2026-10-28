@@ -1,3 +1,5 @@
+import errno
+import logging
 import shutil
 from collections.abc import Callable
 from datetime import UTC
@@ -27,6 +29,27 @@ from src.domain.source_guard import POLICY_ENFORCE, SourceNotReadOnly, guard_sou
 RAW_LINE_LIMIT = 4096
 COPY_CHUNK_SIZE = 1024 * 1024
 ERROR_TEXT_LIMIT = 2000
+DEFAULT_MAX_MATCHES_PER_TASK = 200_000
+
+logger = logging.getLogger(__name__)
+
+# NAS 抖动与本地瞬时压力：同一任务重试可能成功。ENOENT、EACCES、尺寸/mtime
+# 变化不在其中——它们是对"源已变化"的确定性判断，重试只会同样失败。
+_TRANSIENT_ERRNOS = frozenset(
+    {
+        errno.EIO,
+        errno.ETIMEDOUT,
+        errno.EAGAIN,
+        errno.EBUSY,
+        errno.EINTR,
+        errno.ENOMEM,
+        *(
+            value
+            for name in ("ESTALE", "ENETRESET", "ENETUNREACH", "EHOSTUNREACH")
+            if (value := getattr(errno, name, None)) is not None
+        ),
+    }
+)
 
 
 class LeaseLost(RuntimeError):
@@ -39,6 +62,20 @@ class JobCancelled(RuntimeError):
 
 class PermanentTaskFailure(RuntimeError):
     """Source changed or vanished; retrying would fail the same way, so do not retry."""
+
+
+class RetryableTaskFailure(RuntimeError):
+    """A transient source error; another attempt may succeed."""
+
+
+class MatchLimitExceeded(RuntimeError):
+    """A task produced more matches than the configured per-task cap."""
+
+
+def _source_unavailable_error(exc: OSError) -> RuntimeError:
+    if exc.errno in _TRANSIENT_ERRNOS:
+        return RetryableTaskFailure(f"source temporarily unavailable: {exc}")
+    return PermanentTaskFailure(f"source unavailable: {exc}")
 
 
 def _truncate_raw_line(text: str) -> tuple[str, bool]:
@@ -73,6 +110,7 @@ class TaskProcessor:
         cancel_check: Callable[[], bool] | None = None,
         nas_read_only_policy: str = POLICY_ENFORCE,
         budget: ArchiveBudget | None = None,
+        max_matches_per_task: int = DEFAULT_MAX_MATCHES_PER_TASK,
     ) -> None:
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -82,6 +120,8 @@ class TaskProcessor:
             raise ValueError("heartbeat_every_seconds must be >= 0")
         if copy_heartbeat_seconds < 0:
             raise ValueError("copy_heartbeat_seconds must be >= 0")
+        if max_matches_per_task < 1:
+            raise ValueError("max_matches_per_task must be >= 1")
         self._repo = repo
         self._writer = writer
         self._rules = rules
@@ -95,6 +135,7 @@ class TaskProcessor:
         self._cancel_check = cancel_check
         self._nas_read_only_policy = nas_read_only_policy
         self._budget = budget if budget is not None else DEFAULT_ARCHIVE_BUDGET
+        self._max_matches_per_task = max_matches_per_task
         self._member_spec = pathspec.PathSpec.from_lines("gitwildmatch", [rules.config.file_glob])
 
     def _verify_lease(self, task: ClaimedTask) -> None:
@@ -124,7 +165,7 @@ class TaskProcessor:
         try:
             real_source = task.source_path.resolve()
         except OSError as exc:
-            raise PermanentTaskFailure(f"source unavailable: {exc}") from exc
+            raise _source_unavailable_error(exc) from exc
         if not real_source.is_relative_to(root):
             raise PermanentTaskFailure(
                 f"source escapes data source root: {real_source} is not under {root}"
@@ -140,7 +181,7 @@ class TaskProcessor:
         try:
             stat = source.stat()
         except OSError as exc:
-            raise PermanentTaskFailure(f"source unavailable: {exc}") from exc
+            raise _source_unavailable_error(exc) from exc
         if task.expected_size_bytes is not None and stat.st_size != task.expected_size_bytes:
             raise PermanentTaskFailure(
                 f"source size changed: expected {task.expected_size_bytes}, found {stat.st_size}"
@@ -168,6 +209,47 @@ class TaskProcessor:
         succeeded = any(self._member_spec.match_file(member) for member in scan.succeeded_members)
         return ("partial" if succeeded else "failed"), _format_member_errors(relevant_errors)
 
+    def _discard_matches(self, task: ClaimedTask) -> bool:
+        """Remove this attempt's rows before recording a terminal failure.
+
+        The delete is itself a write, so it is fenced by the same lease. A lost
+        lease means another attempt may already own the task; in that case the
+        rows belong to the new attempt and must not be touched.
+        """
+        try:
+            if not self._repo.touch(task.id, task.attempts):
+                return False
+            self._writer.delete_for_task(task.id)
+            return True
+        except Exception:
+            # A cleanup failure must not hide the task's real failure; the next
+            # attempt still clears old rows at its start.
+            logger.exception("failed to discard matches for task %s", task.id)
+            return False
+
+    def _finish_failed(
+        self,
+        task: ClaimedTask,
+        processed_lines: int,
+        matched_rows: int,
+        error: str,
+        *,
+        retryable: bool,
+        lease_acquired: bool,
+    ) -> TaskResult:
+        discarded = self._discard_matches(task) if lease_acquired else False
+        reported_matches = 0 if discarded else matched_rows
+        self._repo.complete(
+            task.id,
+            task.attempts,
+            "failed",
+            processed_lines,
+            reported_matches,
+            error,
+            retryable=retryable,
+        )
+        return TaskResult("failed", processed_lines, reported_matches, error)
+
     def process(self, task: ClaimedTask) -> TaskResult:
         processed_lines = 0
         matched_rows = 0
@@ -179,6 +261,7 @@ class TaskProcessor:
 
         result: TaskResult
         scan: ArchiveScan | None = None
+        lease_acquired = False
         try:
             # 只读守卫排在最前面：可写挂载上连 stat、租约栅栏和本地复制都不该发生
             # （规格 §7.2）。判定按压缩包所在目录，嵌套挂载可以各自不同。
@@ -192,6 +275,7 @@ class TaskProcessor:
             # Fence before the retry cleanup too: deleting another attempt's
             # rows is a write as well.
             self._verify_lease(task)
+            lease_acquired = True
             if task.attempts > 1:
                 self._writer.delete_for_task(task.id)
 
@@ -220,6 +304,11 @@ class TaskProcessor:
                         raw_line, raw_truncated = _truncate_raw_line(line.text)
                         raw_truncated = raw_truncated or line.truncated
                         for match in matches:
+                            if matched_rows >= self._max_matches_per_task:
+                                raise MatchLimitExceeded(
+                                    "match limit exceeded: "
+                                    f"max_matches_per_task={self._max_matches_per_task}"
+                                )
                             buffer.append(
                                 MatchRecord(
                                     job_id=task.job_id,
@@ -273,43 +362,56 @@ class TaskProcessor:
         except JobCancelled:
             self._repo.complete(task.id, task.attempts, "cancelled", processed_lines, matched_rows)
             return TaskResult("cancelled", processed_lines, matched_rows, "job cancelled")
-        except PermanentTaskFailure as exc:
-            self._repo.complete(
-                task.id,
-                task.attempts,
-                "failed",
+        except MatchLimitExceeded as exc:
+            return self._finish_failed(
+                task,
                 processed_lines,
                 matched_rows,
                 str(exc),
                 retryable=False,
+                lease_acquired=lease_acquired,
             )
-            return TaskResult("failed", processed_lines, matched_rows, str(exc))
+        except PermanentTaskFailure as exc:
+            return self._finish_failed(
+                task,
+                processed_lines,
+                matched_rows,
+                str(exc),
+                retryable=False,
+                lease_acquired=lease_acquired,
+            )
         except SourceNotReadOnly as exc:
             # 可写挂载是环境事实，不是抖动：重试只会同样失败并烧光 max_attempts。
-            self._repo.complete(
-                task.id,
-                task.attempts,
-                "failed",
+            return self._finish_failed(
+                task,
                 processed_lines,
                 matched_rows,
                 str(exc),
                 retryable=False,
+                lease_acquired=lease_acquired,
             )
-            return TaskResult("failed", processed_lines, matched_rows, str(exc))
+        except RetryableTaskFailure as exc:
+            return self._finish_failed(
+                task,
+                processed_lines,
+                matched_rows,
+                str(exc),
+                retryable=True,
+                lease_acquired=lease_acquired,
+            )
         # Boundary of the worker loop: any ordinary failure must be recorded on
         # the task instead of aborting the process. Successful completion stays
         # outside this handler so its own failure cannot trigger a failed
         # completion for a task that already succeeded.
         except Exception as exc:  # noqa: BLE001
-            self._repo.complete(
-                task.id,
-                task.attempts,
-                "failed",
+            return self._finish_failed(
+                task,
                 processed_lines,
                 matched_rows,
                 str(exc),
+                retryable=True,
+                lease_acquired=lease_acquired,
             )
-            return TaskResult("failed", processed_lines, matched_rows, str(exc))
         else:
             if result.status == "succeeded":
                 self._repo.complete(

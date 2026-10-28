@@ -1,3 +1,4 @@
+import errno
 import io
 import tarfile
 import zipfile
@@ -91,6 +92,27 @@ class RetainingWriter(FakeWriter):
 
     def write_batch(self, matches) -> None:
         self.batches.append(matches)
+
+
+class ClearingWriter(FakeWriter):
+    """Mimics the database: deleting a task removes its visible rows."""
+
+    def delete_for_task(self, task_id: int) -> None:
+        super().delete_for_task(task_id)
+        self.written = [record for record in self.written if record.file_task_id != task_id]
+
+
+class FailingWriter(ClearingWriter):
+    def __init__(self, after: int = 1) -> None:
+        super().__init__()
+        self._after = after
+        self._calls = 0
+
+    def write_batch(self, matches) -> None:
+        super().write_batch(matches)
+        self._calls += 1
+        if self._calls >= self._after:
+            raise RuntimeError("match batch write failed")
 
 
 class SuccessCompletionFailingRepo(FakeRepo):
@@ -218,6 +240,7 @@ def make_processor(
         ({"heartbeat_every_lines": 0}, "heartbeat_every_lines"),
         ({"heartbeat_every_seconds": -1}, "heartbeat_every_seconds"),
         ({"copy_heartbeat_seconds": -1}, "copy_heartbeat_seconds"),
+        ({"max_matches_per_task": 0}, "max_matches_per_task"),
     ],
 )
 def test_processor_rejects_invalid_timing_config(
@@ -282,6 +305,92 @@ def test_retry_deletes_old_matches(tmp_path: Path) -> None:
     )
     processor.process(make_task(tmp_path, attempts=2))
     assert writer.deleted == [10]
+
+
+def test_match_limit_fails_task_and_discards_this_attempt(tmp_path: Path) -> None:
+    repo = FakeRepo()
+    writer = ClearingWriter()
+    processor = make_processor(
+        repo,
+        writer,
+        tmp_path / "work",
+        max_matches_per_task=2,
+        batch_size=1,
+    )
+
+    result = processor.process(
+        make_task(tmp_path, members={"app.log": "ERROR a\nERROR b\nERROR c\n"})
+    )
+
+    assert result.status == "failed"
+    assert result.processed_lines == 3
+    assert result.matched_rows == 0
+    assert "max_matches_per_task=2" in (result.error or "")
+    assert repo.completed == [(10, 1, "failed", 3, 0, result.error)]
+    assert repo.retryables == [(10, False)]
+    assert writer.deleted == [10]
+    assert writer.written == []
+
+
+def test_failed_task_discards_matches_written_by_this_attempt(tmp_path: Path) -> None:
+    repo = FakeRepo()
+    writer = FailingWriter(after=1)
+    processor = make_processor(repo, writer, tmp_path / "work", batch_size=1)
+
+    result = processor.process(make_task(tmp_path))
+
+    assert result.status == "failed"
+    assert "match batch write failed" in (result.error or "")
+    assert result.matched_rows == 0
+    assert repo.completed == [(10, 1, "failed", 1, 0, result.error)]
+    assert repo.retryables == [(10, True)]
+    assert writer.deleted == [10]
+    assert writer.written == []
+
+
+def test_transient_source_stat_error_is_retried(tmp_path: Path, monkeypatch) -> None:
+    repo = FakeRepo()
+    processor = make_processor(repo, FakeWriter(), tmp_path / "work")
+    task = make_task(tmp_path)
+    real_stat = Path.stat
+
+    def flaky_stat(self, *args, **kwargs):
+        if self == task.source_path:
+            raise OSError(errno.EIO, "stale file handle")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+
+    result = processor.process(task)
+
+    assert result.status == "failed"
+    assert "temporarily unavailable" in (result.error or "")
+    assert repo.completed == [(10, 1, "failed", 0, 0, result.error)]
+    assert repo.retryables == [(10, True)]
+    assert repo.touches == []
+
+
+def test_transient_source_resolve_error_is_retried(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    repo = FakeRepo()
+    processor = make_processor(repo, FakeWriter(), tmp_path / "work")
+    task = make_task(root, root_path=root)
+    real_resolve = Path.resolve
+
+    def flaky_resolve(self, *args, **kwargs):
+        if self == task.source_path:
+            raise OSError(errno.ESTALE, "stale file handle")
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", flaky_resolve)
+
+    result = processor.process(task)
+
+    assert result.status == "failed"
+    assert "temporarily unavailable" in (result.error or "")
+    assert repo.retryables == [(10, True)]
+    assert repo.touches == []
 
 
 def test_tar_gz_copy_keeps_original_name_and_processes_members(tmp_path: Path, monkeypatch) -> None:
@@ -424,6 +533,7 @@ def test_partial_when_some_members_are_corrupt(tmp_path: Path) -> None:
     assert "bad.log" in (result.error or "")
     assert repo.completed == [(10, 1, "partial", 1, 1, result.error)]
     assert repo.retryables == [(10, False)]
+    assert writer.deleted == []
     assert [(match.member_path, match.line_no) for match in writer.written] == [("app.log", 1)]
 
 
