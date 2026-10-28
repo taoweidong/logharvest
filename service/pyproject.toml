@@ -30,6 +30,17 @@ dev = [
   "ruff>=0.5.0",
   "mypy>=1.10.0",
 ]
+prototype = [
+  "hyperscan==0.9.1",
+]
+
+[tool.uv.sources]
+hyperscan = { index = "prototype-pypi" }
+
+[[tool.uv.index]]
+name = "prototype-pypi"
+url = "https://pypi.org/simple"
+explicit = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
