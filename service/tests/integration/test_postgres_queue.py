@@ -530,3 +530,30 @@ def test_match_writer_batches_and_scoped_cleanup(engine: Engine) -> None:
         assert session.exec(select(Match).where(Match.file_task_id == task_id)).all() == []
         survivors = session.exec(select(Match).where(Match.file_task_id == other_task)).all()
     assert len(survivors) == 1
+
+
+def test_claim_caches_rule_config_by_ruleset_version(
+    repo: PostgresTaskRepository, engine: Engine
+) -> None:
+    """同一 (rule_set_id, version) 的领取命中配置缓存，不再重复拉取 config JSON。
+
+    5k 规则的 config 是 MB 级 JSON：2000 任务逐次领取重复传输是 GB 级浪费。
+    版本不可变（rule_sets 只增版本），缓存永不失效。
+    """
+    _job_id, _task_ids = _seed(engine, ["pending"], scheduled_delta_seconds=-5)
+    task = repo.claim_next("w-cache", "0.1.0")
+    assert task is not None
+    assert task.rule_config == {"name": "rs", "rules": []}
+    assert repo._rule_config_cache == {(task.rule_set_id, task.rule_version): task.rule_config}
+
+    # 失败回队后再次领取：同版本 → 缓存命中（键不变、config 对象同一）。
+    repo.complete(task.id, task.attempts, "failed", 0, 0, "x")
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE file_tasks SET status = 'pending', scheduled_at = now() WHERE id = :id"),
+            {"id": task.id},
+        )
+    again = repo.claim_next("w-cache", "0.1.0")
+    assert again is not None
+    assert (again.rule_set_id, again.rule_version) == (task.rule_set_id, task.rule_version)
+    assert again.rule_config is task.rule_config

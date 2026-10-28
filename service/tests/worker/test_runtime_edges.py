@@ -10,6 +10,8 @@ from test_runtime import FakeRepo, FakeWriter, make_runtime, make_task
 
 import src.worker.main as worker_main
 from src.application.worker.ports import TaskResult
+from src.domain.rules.evaluator import compile_ruleset
+from src.domain.rules.models import RuleSetConfig
 
 
 class RecordingLogger:
@@ -104,3 +106,25 @@ def test_cleanup_orphan_dirs_tolerates_stat_failures(tmp_path, monkeypatch) -> N
     monkeypatch.setattr(type(ghost), "stat", real_stat)
     assert ghost.exists()
     assert runtime._cleanup_orphan_work_dirs() == 0  # 新目录未过期，同样不清理
+
+
+def test_rules_factory_called_once_per_ruleset_version(tmp_path) -> None:
+    """同 (rule_set_id, version) 的任务只编译一次；不同版本各自编译。"""
+    calls: list[tuple[int, int]] = []
+
+    def counting_factory(task):
+        calls.append((task.rule_set_id, task.rule_version))
+        return compile_ruleset(RuleSetConfig.model_validate(task.rule_config))
+
+    repo = FakeRepo([make_task(tmp_path), make_task(tmp_path)])
+    runtime = make_runtime(repo, FakeWriter(), tmp_path, rules_factory=counting_factory)
+    assert runtime.run_once() is True
+    assert runtime.run_once() is True
+    assert calls == [(3, 1)]  # 第二个同版本任务命中缓存
+
+    task_c = make_task(tmp_path)
+    task_c = task_c.__class__(**{**task_c.__dict__, "rule_version": 2})
+    repo2 = FakeRepo([task_c])
+    runtime2 = make_runtime(repo2, FakeWriter(), tmp_path, rules_factory=counting_factory)
+    assert runtime2.run_once() is True
+    assert calls == [(3, 1), (3, 2)]

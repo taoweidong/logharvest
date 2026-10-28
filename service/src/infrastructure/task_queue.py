@@ -13,12 +13,16 @@ from src.domain.models.entities import utcnow
 # 带上 data_sources.root_path：Worker 执行时要用它复核源文件真实路径仍在
 # 数据源根下（规格 §11 的符号链接逃逸防护，见 TaskProcessor._check_root）。
 # 规划期校验过的是"当时的路径字符串"，执行期必须重新按 realpath 判一次。
+# 规则集标识随领取一并返回：同一 (rule_set_id, version) 的 config 不可变，
+# repository 端缓存命中即可跳过 RULE_SQL——5k 规则的 config JSON 是 MB 级，
+# 2000 任务逐次领取重复传输是 GB 级浪费（见 claim_next 的 _rule_config_cache）。
 CLAIM_SQL = """
 WITH picked AS (
-    SELECT t.id, d.root_path
+    SELECT t.id, d.root_path, j.rule_set_id, r.version
     FROM file_tasks t
     JOIN jobs j ON j.id = t.job_id
     LEFT JOIN data_sources d ON d.id = j.data_source_id
+    LEFT JOIN rule_sets r ON r.id = j.rule_set_id
     WHERE t.status = 'pending'
       AND t.scheduled_at <= now()
       AND j.cancel_requested = false
@@ -35,7 +39,7 @@ SET status = 'running',
 FROM picked p
 WHERE t.id = p.id
 RETURNING t.id, t.job_id, t.source_path, t.file_name, t.attempts, t.size_bytes, t.mtime,
-          p.root_path AS root_path;
+          p.root_path AS root_path, p.rule_set_id AS rule_set_id, p.version AS rule_version;
 """
 
 RULE_SQL = """
@@ -253,7 +257,6 @@ OPEN_TASK_STATUSES = ("pending", "running")
 # ``j.cancel_requested = false``）；再把它算成"未完成"，作业与它的 SSE 就会永久
 # 滞留。因此取消中只剩 running 算未完成。
 CANCELLING_OPEN_TASK_STATUSES = ("running",)
-FAILED_TASK_STATUSES = ("failed", "partial")
 
 
 def _status_in_clause(statuses: tuple[str, ...]) -> str:
@@ -321,10 +324,13 @@ def _derive_job_status(rows) -> str | None:
         return None
 
     succeeded = counts.get("succeeded", 0)
-    failed = sum(counts.get(status, 0) for status in FAILED_TASK_STATUSES)
+    partial = counts.get("partial", 0)
+    failed = counts.get("failed", 0)
     if cancel_requested:
         return "cancelled"
-    if failed and succeeded:
+    # 成员级 partial 是"部分成功"：只要存在 partial，作业就不能被吞成
+    # failed；全部任务都 partial 时同样保留 partial。
+    if partial or (failed and succeeded):
         return "partial"
     if failed:
         return "failed"
@@ -348,6 +354,9 @@ class PostgresTaskRepository:
         self._engine = engine
         self._max_attempts = max_attempts
         self._max_concurrent_copies = max_concurrent_copies
+        # 规则配置缓存：(rule_set_id, version) → config JSON。版本不可变所以
+        # 永不失效；上限 256 个版本，FIFO 淘汰（实际部署版本数远小于此）。
+        self._rule_config_cache: dict[tuple[int, int], dict] = {}
 
     def register_worker(self, worker_id: str, hostname: str, version: str) -> None:
         with self._engine.begin() as conn:
@@ -414,14 +423,21 @@ class PostgresTaskRepository:
             )
             if row is None:
                 return None
-            rule = (
-                conn.execute(
-                    text(RULE_SQL),
-                    {"job_id": row["job_id"]},
+            rule_key = (row["rule_set_id"], row["rule_version"])
+            rule_config = self._rule_config_cache.get(rule_key)
+            if rule_config is None:
+                rule = (
+                    conn.execute(
+                        text(RULE_SQL),
+                        {"job_id": row["job_id"]},
+                    )
+                    .mappings()
+                    .one()
                 )
-                .mappings()
-                .one()
-            )
+                rule_config = rule["config"] or {}
+                if len(self._rule_config_cache) >= 256:
+                    self._rule_config_cache.pop(next(iter(self._rule_config_cache)))
+                self._rule_config_cache[rule_key] = rule_config
             conn.execute(
                 text(START_ATTEMPT_SQL),
                 {
@@ -437,9 +453,9 @@ class PostgresTaskRepository:
                 source_path=Path(row["source_path"]),
                 file_name=row["file_name"],
                 attempts=row["attempts"],
-                rule_set_id=rule["rule_set_id"],
-                rule_version=rule["version"],
-                rule_config=rule["config"] or {},
+                rule_set_id=rule_key[0],
+                rule_version=rule_key[1],
+                rule_config=rule_config,
                 expected_size_bytes=row["size_bytes"],
                 expected_mtime=row["mtime"],
                 root_path=Path(row["root_path"]) if row.get("root_path") else None,

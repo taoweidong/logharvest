@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import func, update
+from sqlalchemy import func, insert, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -168,16 +168,27 @@ def create_job(
     session.add(job)
     try:
         session.flush()
-        for path, stat in file_stats:
-            session.add(
-                FileTask(
-                    job_id=job.id,
-                    source_path=str(path),
-                    file_name=path.name,
-                    size_bytes=stat.st_size,
-                    mtime=_utc_from_timestamp(stat.st_mtime),
-                )
-            )
+        # 大批次（2 万文件任务）走 executemany 一次批量插入；显式补齐
+        # 仅存在于 Python 侧默认值的 NOT NULL 列（core insert 不经过 ORM 默认值）。
+        scheduled_at = utcnow()
+        task_rows = [
+            {
+                "job_id": job.id,
+                "source_path": str(path),
+                "file_name": path.name,
+                "size_bytes": stat.st_size,
+                "mtime": _utc_from_timestamp(stat.st_mtime),
+                "status": "pending",
+                "attempts": 0,
+                "max_attempts": 5,
+                "scheduled_at": scheduled_at,
+                "processed_lines": 0,
+                "matched_rows": 0,
+            }
+            for path, stat in file_stats
+        ]
+        if task_rows:
+            session.execute(insert(FileTask), task_rows)
         session.commit()
     except IntegrityError:
         # A concurrent request may have created the same idempotency key first.

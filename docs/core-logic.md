@@ -245,12 +245,39 @@ flowchart TD
 
 `keyword.any` 与 `keyword.all` 互斥；正则阈值依赖命名分组提取；字符串形式的 `value` 避免 Decimal 精度丢失。
 
+### 5.1 大规模规则（5k+）的求值性能
+
+2026-10-29 基准（5000 规则、2 万行、2 Worker，真实 PG 全流程 E2E）：朴素逐规则遍历 **358 行/s**，
+预筛索引后 **3532 行/s（9.9×）**，命中结果与朴素路径逐规则零差异（等价性测试 + E2E 跨运行比对钉住）。
+三道优化全部保守可证：
+
+| 优化 | 机制 | 正确性保证 |
+|---|---|---|
+| 关键字 AC 预筛 | 同组针（敏感/不敏感）合并进一棵 Aho–Corasick 自动机（`domain/rules/aho.py`），每行各扫一次得到"出现过的针"，按规则需要的针数（any=1、all=全集）筛候选 | AC 报告所有出现（含前后缀重叠），候选集合零假阴/假阳；命中判定仍走原 `_keyword_hit` |
+| 正则必选字面量预筛 | `_mandatory_literal` 保守提取"任一匹配必然包含"的最长字面量段（量词/分支/分组一律宁缺毋滥），每行对去重 hint 逐一 `in` 检查 | hint 是匹配的必要条件；不命中即不可能命中，跳过安全。**带 `i` 标志的正则不预筛**——regex 模块的 IGNORECASE 是全 Unicode 折叠（`TITLE/i` 命中 `tıtle`），`lower()+子串` 无法复现 |
+| 编译缓存 | WorkerRuntime 按 `(rule_set_id, version)` 缓存编译结果（FIFO 64）；repository 按 same key 缓存 config JSON（FIFO 256），领取命中缓存即跳过 MB 级 config 传输 | 规则集版本不可变（只增版本），缓存永不失效 |
+
+组合正则预筛方案（5000 针 lookahead 交替）已被基准证伪（1.9ms/行，比朴素慢 2.5 倍，regex 模块
+未对该规模建 trie）；hyperscan 原型（211×，见 `prototype` 依赖组与 `scripts/bench_multimode.py`）
+因依赖不在默认安装组而未投产，可作为后续可选加速。
+
+队列侧同期优化：`file_tasks` 两条部分索引（0006，claim/recover）、建作业 2 万文件任务
+executemany 批量插入（创建耗时 0.50s → 0.14s @2000 任务）。三场景 E2E 实测：
+
+| 场景 | 优化前 | 优化后 | 加速 |
+|---|---|---|---|
+| 常规（50 规则 / 60 万行 / 2 Worker） | 21.9s（27,433 行/s） | 11.2s（53,645 行/s） | 2.0× |
+| 大量任务（50 规则 / 2000 任务 / 3 百万行 / 4 Worker） | 69.2s（43,358 行/s） | 53.5s（56,095 行/s） | 1.3× |
+| 5k 规则（5000 规则 / 2 万行 / 2 Worker） | 54.4s（358 行/s） | 5.7s（3,532 行/s） | 9.6× |
+
+三次运行的命中总数与逐规则计数与基线**完全一致**（跨运行比对 + 朴素求值器三元组精确比对双 Oracle）。
+
 ---
 
 ## 6. 作业终态汇总与取消/重试语义
 
 - **由谁汇总**：完成最后一个任务的 Worker 通过 `finalize_job` 收尾；每 300 秒与服务端维护入口做周期兜底（覆盖无完成回调的路径）。
-- **汇总规则**：全部任务 `succeeded` → `succeeded`；混有 `failed/partial` → `failed`/`partial`；`cancel_requested` 为真 → `cancelled`；存在 `pending/running` → 继续 `running`。
+- **汇总规则**：全部任务 `succeeded` → `succeeded`；存在 `partial`（即使没有 `succeeded`）→ `partial`；无 `partial` 且同时有 `succeeded`/`failed` → `partial`；只有 `failed` → `failed`；`cancel_requested` 为真 → `cancelled`；存在 `pending/running` → 继续 `running`。
 - **取消**：`POST /jobs/{id}/cancel` 把 `pending` 置 `cancelled` + `cancel_requested=true`；无 running 任务立即终态，否则等 Worker 在行循环里感知（每行一次查询）。终态作业的取消是幂等空操作。
 - **手动重试**：`retry-failed` 只搬 `failed` 行（单次上限 200，`remaining_failed` 可见）、`attempts` 不重置（防死循环刷库）、已取消作业直接 `409`（`CLAIM_SQL` 永不再领取，重新入队只会永久滞留）。
 - **Worker drain**：`drain_requested=true` 后只心跳不领取；`drain-version` 按版本批量打标（离线 Worker 只记标记不改状态），是 Jenkins 滚动升级的基础原语。
