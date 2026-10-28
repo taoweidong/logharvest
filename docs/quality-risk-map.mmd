@@ -1,0 +1,33 @@
+flowchart TB
+  subgraph QA[质量属性]
+    SEC[安全]
+    REL[可靠性]
+    PERF[性能与规模]
+    TEST[可测试性]
+    OPS[可运维性]
+    MAINT[可维护性]
+  end
+  subgraph RISK[风险热点]
+    R1["Q-01 登录限流代理坍缩"]
+    R2["Q-02 命中无上限"]
+    R3["Q-03 队列缺索引"]
+    R4["Q-04 PG 路径不在 CI"]
+    R5["Q-05 失败任务语义"]
+    R6["Q-06 前端无 E2E / strict false"]
+    R7["Q-09 容器与入口硬化"]
+    R8["Q-10 健康与可观测"]
+  end
+  SEC --> R1
+  SEC --> R7
+  REL --> R5
+  REL --> R4
+  PERF --> R2
+  PERF --> R3
+  TEST --> R4
+  TEST --> R6
+  OPS --> R8
+  MAINT --> R6
+  classDef p1 fill:#ffe0e0,stroke:#c0392b,stroke-width:2px;
+  classDef p2 fill:#fff3cd,stroke:#b7791f;
+  class R1,R2,R3,R4,R5,R6 p1;
+  class R7,R8 p2;
