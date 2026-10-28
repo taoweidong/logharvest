@@ -1,0 +1,54 @@
+# LogHarvest 控制面栈（独立部署）：FastAPI Server + Nginx 前端。
+# 依赖数据库栈（deploy/postgres）已在同一外部网络 logharvest-net 上运行；
+# server/worker 栈之间同样零 compose 依赖，可独立升级。
+#
+# 用法：
+#   cp deploy/server/.env.example deploy/server/.env      # 填写口令/密钥
+#   docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env up -d
+#
+# 启动顺序：数据库栈 healthy 之后再来起本栈（应用启动即执行 Alembic 迁移 + RBAC 种子；
+# 若数据库尚未就绪，restart: unless-stopped 会带动应用重试直到连上）。
+
+name: logharvest-app
+
+services:
+  server:
+    build:
+      context: ../../service
+      dockerfile: Dockerfile
+      target: server
+    image: ${REGISTRY:-local}/logharvest-server:${IMAGE_TAG:-latest}
+    environment:
+      LOGHARVEST_ENVIRONMENT: ${LOGHARVEST_ENVIRONMENT:-production}
+      # 跨栈直连：logharvest-postgres 是数据库栈的固定容器名（外部网络 DNS）
+      LOGHARVEST_DATABASE_URL: postgresql://${POSTGRES_USER:-logharvest}:${POSTGRES_PASSWORD}@logharvest-postgres:5432/${POSTGRES_DB:-logharvest}
+      LOGHARVEST_JWT_SECRET_KEY: ${LOGHARVEST_JWT_SECRET_KEY:?set LOGHARVEST_JWT_SECRET_KEY}
+      LOGHARVEST_ADMIN_USERNAME: ${LOGHARVEST_ADMIN_USERNAME:-admin}
+      LOGHARVEST_ADMIN_PASSWORD: ${LOGHARVEST_ADMIN_PASSWORD:?set LOGHARVEST_ADMIN_PASSWORD}
+      LOGHARVEST_AUTO_CREATE_TABLES: "true"
+      LOGHARVEST_NAS_READ_ONLY_POLICY: ${LOGHARVEST_NAS_READ_ONLY_POLICY:-enforce}
+      LOGHARVEST_LOGIN_MAX_ATTEMPTS: ${LOGHARVEST_LOGIN_MAX_ATTEMPTS:-10}
+      LOGHARVEST_LOGIN_WINDOW_SECONDS: ${LOGHARVEST_LOGIN_WINDOW_SECONDS:-300}
+    ports:
+      - "${SERVER_PORT:-8000}:8000"
+    restart: unless-stopped
+    networks:
+      - logharvest-net
+
+  web:
+    build:
+      context: ../../web
+      dockerfile: Dockerfile
+    image: ${REGISTRY:-local}/logharvest-web:${IMAGE_TAG:-latest}
+    depends_on:
+      - server
+    ports:
+      - "${WEB_PORT:-80}:80"
+    restart: unless-stopped
+    networks:
+      - logharvest-net
+
+networks:
+  logharvest-net:
+    external: true
+    name: logharvest-net

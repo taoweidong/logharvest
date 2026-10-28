@@ -1,0 +1,68 @@
+# LogHarvest 数据库栈（独立部署）。
+# 仅承载 PostgreSQL：数据与备份全部落在数据盘 /usr1；server/worker 栈通过
+# 外部网络 logharvest-net 以容器名 logharvest-postgres 直连，跨栈无 compose 依赖。
+#
+# 用法（在仓库检出目录）：
+#   bash deploy/init-dirs.sh                              # 首次：建目录/网络/属主
+#   cp deploy/postgres/.env.example deploy/postgres/.env  # 填写口令
+#   docker compose -f deploy/postgres/docker-compose.yml --env-file deploy/postgres/.env up -d
+#   docker compose -f deploy/postgres/docker-compose.yml --env-file deploy/postgres/.env \
+#     --profile backup up -d        # 可选：启用每日自动备份归档
+
+name: logharvest-db
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: logharvest-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-logharvest}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/postgres/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-logharvest}
+      # 数据目录在 /usr1 数据盘（bind mount），时区/区域交给应用层钉扎
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      # 数据：/usr1/logharvest/postgres/data（init-dirs.sh 已建好并 chown 70:70）
+      - ${PG_DATA_DIR:-/usr1/logharvest/postgres/data}:/var/lib/postgresql/data
+      # 备份归档：Jenkins 升级前 pg_dump 与定时备份都写这里
+      - ${PG_BACKUP_DIR:-/usr1/logharvest/postgres/backup}:/backup
+    ports:
+      # 仅绑定回环地址：宿主机侧 pg_dump/运维可用，外部不可达
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-logharvest} -d ${POSTGRES_DB:-logharvest}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      - logharvest-net
+
+  # 可选：每日定时 pg_dump 归档到 /usr1/logharvest/postgres/backup，按天保留
+  # 启用：--profile backup
+  backup:
+    image: prodrigestivill/postgres-backup-local:16
+    profiles: ["backup"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: logharvest-postgres
+      POSTGRES_USER: ${POSTGRES_USER:-logharvest}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-logharvest}
+      SCHEDULE: ${BACKUP_SCHEDULE:-@daily}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_DIR: /backups
+      HEALTHCHECK_PORT: 8080
+    volumes:
+      - ${PG_BACKUP_DIR:-/usr1/logharvest/postgres/backup}:/backups
+    restart: unless-stopped
+    networks:
+      - logharvest-net
+
+networks:
+  logharvest-net:
+    external: true
+    name: logharvest-net

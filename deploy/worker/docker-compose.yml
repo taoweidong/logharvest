@@ -1,0 +1,45 @@
+# LogHarvest Worker 栈（独立部署）：可任意 scale 的领取/处理进程池。
+# 依赖：数据库栈（logharvest-postgres）与外部网络；NAS 只读挂载 + 临时盘在数据盘 /usr1。
+#
+# 用法：
+#   cp deploy/worker/.env.example deploy/worker/.env
+#   docker compose -f deploy/worker/docker-compose.yml --env-file deploy/worker/.env up -d
+#   docker compose -f deploy/worker/docker-compose.yml --env-file deploy/worker/.env \
+#     up -d --scale worker=4        # 设计口径 4–6 个副本
+#
+# 多副本：容器 hostname 互不相同，Worker 以 hostname 作为 worker_id，状态行互不覆盖。
+# NAS 只读是硬约束（规格 §7.2）：挂载必须保持 :ro；enforce 策略判可写即拒绝处理。
+
+name: logharvest-worker
+
+services:
+  worker:
+    build:
+      context: ../../service
+      dockerfile: Dockerfile
+      target: worker
+    image: ${REGISTRY:-local}/logharvest-worker:${IMAGE_TAG:-latest}
+    environment:
+      LOGHARVEST_ENVIRONMENT: ${LOGHARVEST_ENVIRONMENT:-production}
+      LOGHARVEST_DATABASE_URL: postgresql://${POSTGRES_USER:-logharvest}:${POSTGRES_PASSWORD}@logharvest-postgres:5432/${POSTGRES_DB:-logharvest}
+      LOGHARVEST_JWT_SECRET_KEY: ${LOGHARVEST_JWT_SECRET_KEY:?set LOGHARVEST_JWT_SECRET_KEY}
+      LOGHARVEST_ADMIN_USERNAME: ${LOGHARVEST_ADMIN_USERNAME:-admin}
+      LOGHARVEST_ADMIN_PASSWORD: ${LOGHARVEST_ADMIN_PASSWORD:?set LOGHARVEST_ADMIN_PASSWORD}
+      # Settings 在非 dev/test 环境强制校验管理口令非空，Worker 与 server 共用同一凭据
+      LOGHARVEST_NAS_READ_ONLY_POLICY: ${LOGHARVEST_NAS_READ_ONLY_POLICY:-enforce}
+      LOGHARVEST_WORK_DIR: ${LOGHARVEST_WORK_DIR:-/local-tmp}
+      LOGHARVEST_MATCHES_BATCH_SIZE: ${LOGHARVEST_MATCHES_BATCH_SIZE:-1000}
+      LOGHARVEST_WORKER_POLL_SECONDS: ${LOGHARVEST_WORKER_POLL_SECONDS:-1.0}
+    volumes:
+      # NAS 原始数据：只读挂载（compose 层面固定 :ro，不给运行期放开写入的可能）
+      - ${NAS_LOGS_DIR:?set NAS_LOGS_DIR}:/nas:ro
+      # 本地临时盘：解压工作区归档在数据盘 /usr1（任务结束自动清理，容量需容纳最大整包解压）
+      - ${WORK_TMP_DIR:-/usr1/logharvest/worker/tmp}:/local-tmp
+    restart: unless-stopped
+    networks:
+      - logharvest-net
+
+networks:
+  logharvest-net:
+    external: true
+    name: logharvest-net
