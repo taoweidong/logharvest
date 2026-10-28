@@ -14,43 +14,34 @@
 
 三个栈之间**零 compose 依赖**，通过预先创建的外部 Docker 网络 `logharvest-net` 互通；数据库栈以固定容器名 `logharvest-postgres` 提供 DNS。任何一栈都可以独立重启/升级/回滚。
 
-```plantuml
-@startuml
-title 三栈部署拓扑（compose 项目边界 + /usr1 数据盘）
+```mermaid
+flowchart TB
+    browser(["用户浏览器"])
+    subgraph HOST["Docker 宿主机（Linux）"]
+        subgraph WEB["web 容器 :80（nginx）"]
+            nginx["nginx + dist 前端"]
+        end
+        subgraph SERVER["server 容器 :8000（uvicorn）"]
+            app["FastAPI"]
+        end
+        subgraph WORKER["worker 容器 ×N（python -m src.worker）"]
+            wproc["领取/解压/匹配"]
+            tmp[("/usr1/logharvest/worker/tmp<br/>本地临时盘")]
+        end
+        subgraph PGC["postgres:16 容器（logharvest-postgres）"]
+            pg[("pg-data：/usr1/logharvest/postgres/data")]
+        end
+    end
+    nas[("NAS 只读挂载<br/>NAS_LOGS_DIR → /nas:ro")]
 
-node "宿主机（Linux + Docker）" {
-  node "compose 栈 logharvest-db" as db {
-    [postgres 容器\nlogharvest-postgres] as pg
-    [backup 容器（--profile backup）\n每日 pg_dump 归档] as bkp
-  }
-  node "compose 栈 logharvest-app" as app {
-    [server :8000\nuvicorn + 迁移/种子] as server
-    [web :80\nnginx + dist] as web
-  }
-  node "compose 栈 logharvest-worker" as wk {
-    [worker ×N\n（--scale，hostname 即 worker_id）] as workers
-  }
-
-  database "/usr1/logharvest/postgres/data\n（PGDATA bind mount）" as pgdata
-  folder "/usr1/logharvest/postgres/backup\n（pg_dump 归档）" as backup
-  folder "/usr1/logharvest/worker/tmp\n（解压临时盘）" as tmp
-  folder "NAS 只读挂载\nNAS_LOGS_DIR → /nas:ro" as nas
-}
-
-cloud "用户浏览器" as browser
-network logharvest-net as net
-
-browser --> web
-web --> server : /api/**
-pg <--> net
-server --> net : 直连 logharvest-postgres:5432
-workers --> net : 直连 logharvest-postgres:5432
-pgdata --- pg
-backup --- pg
-backup --- bkp
-tmp --- workers
-nas ..> workers : 只读复制
-@enduml
+    browser --> web
+    web -->|"/api/**（SSE 禁缓冲）"| server
+    server <--> pg
+    worker <--> pg
+    nas -.只读复制.-> worker
+    tmp --- worker
+    note1["Worker 扩容：docker compose up -d --scale worker=N<br/>容器 hostname 唯一 → worker_id 唯一"]
+    WORKER -.附注.-> note1
 ```
 
 ## 2. /usr1 数据盘目录规划

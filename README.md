@@ -29,37 +29,30 @@ LogHarvest 面向企业 NAS 上的海量压缩日志：管理员在 Web 上配�
 
 ## 🏗 架构总览
 
-```plantuml
-@startuml
-skinparam componentStyle rectangle
-title 三服务架构
+```mermaid
+flowchart TB
+    user(["用户（管理员/运维/只读）"])
+    web["浏览器：Vue 3 + Element Plus"]
+    nginx["Nginx :80（/api 反代，SSE 禁缓冲）"]
+    subgraph SRV["FastAPI Server :8000"]
+      api["REST API + SSE"]
+    end
+    subgraph PG["PostgreSQL 16"]
+      tables["13 张表（业务 7 + RBAC 5 + 审计 1）"]
+      queue["file_tasks 队列：SKIP LOCKED"]
+    end
+    nas[("NAS（只读挂载）")]
+    subgraph WK["Worker ×4–6"]
+      w["领取 → 解压 → 规则匹配"]
+    end
 
-actor 用户 as user
-
-node "浏览器" {
-  [Vue 3 + Element Plus] as web
-}
-node "Nginx :80" as nginx
-node "FastAPI Server :8000" {
-  [REST API + SSE] as api
-}
-database "PostgreSQL 16" as pg {
-  [13 张表] as tables
-  [file_tasks 队列\nSKIP LOCKED] as queue
-}
-folder "NAS（只读）" as nas
-node "Worker ×4–6" as worker {
-  [领取/解压/匹配] as w
-}
-
-user --> web
-web --> nginx : /api/**
-nginx --> api
-api --> pg
-worker --> queue : 领取/心跳/写入
-nas ..> worker : 只读复制
-worker --> w
-@enduml
+    user --> web
+    web --> nginx
+    nginx --> api
+    api --> pg
+    worker --> queue
+    nas -.只读复制.-> w
+    w --> tmp[("本地临时盘")]
 ```
 
 更完整的架构说明见 [docs/architecture.md](docs/architecture.md)（含端到端数据流与设计决策），4+1 视图见 [docs/architecture-4plus1.md](docs/architecture-4plus1.md)。
@@ -106,7 +99,7 @@ cd web && corepack enable && pnpm install && pnpm dev   # http://localhost:8848
 | 文档 | 内容 |
 |---|---|
 | [整体设计架构](docs/architecture.md) | 系统定位、硬约束、三服务架构、技术选型、数据流、设计决策 |
-| [4+1 架构视图](docs/architecture-4plus1.md) | 场景 / 逻辑 / 开发 / 过程 / 物理五个视图（全 PlantUML） |
+| [4+1 架构视图](docs/architecture-4plus1.md) | 场景 / 逻辑 / 开发 / 过程 / 物理五个视图（全 Mermaid） |
 | [核心逻辑说明](docs/core-logic.md) | 作业规划、队列租约、Worker 容错、解压预算、规则引擎、终态汇总、SSE、RBAC 与审计 |
 | [本地开发指导](docs/local-development.md) | 环境搭建、启动、联调、测试门禁、调试入口、FAQ |
 | [Docker 部署说明](docs/deployment-docker.md) | 镜像与编排、首次部署、运维、升级回滚、安全清单 |

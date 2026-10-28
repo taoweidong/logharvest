@@ -6,50 +6,45 @@
 
 ## 1. 流水线全景
 
-```plantuml
-@startuml
-title Jenkins 流水线阶段（活动图，覆盖数据库/控制面/Worker 三栈）
+```mermaid
+flowchart TD
+    S(["start"]) --> CO["Checkout（checkout scm）"]
 
-start
-:Checkout（checkout scm）;
+    subgraph GATE["质量门禁（agent.md 等价物）"]
+        LINT["后端静态检查<br/>uv run ruff check / ruff format --check / mypy"]
+        BT["后端单元测试<br/>uv run pytest tests -q（500 条，无需 PG）"]
+        FT["前端测试<br/>pnpm install --frozen-lockfile<br/>pnpm test（77 条）+ pnpm typecheck"]
+        GQ{"全部通过?"}
+        LINT --> BT --> FT --> GQ
+    end
 
-partition "质量门禁\n（agent.md 等价物）" {
-  :后端静态检查\nuv run ruff check / ruff format --check / mypy;
-  :后端单元测试\nuv run pytest tests -q（500 条，无需 PG）;
-  :前端测试\npnpm install --frozen-lockfile\npnpm test（77 条）+ pnpm typecheck;
-  if (全部通过?) then (否)
-    :终止——不产出镜像、不发布;
-    stop
-  else (是)
-  endif
-}
+    subgraph IMG["镜像"]
+        BUILD["docker build 三镜像<br/>server / worker（--target）/ web"]
+        DQ{"DEPLOY 参数?"}
+        LOGIN["docker login（凭据 REGISTRY_PASSWORD）"]
+        PUSH["docker push ×3（IMAGE_TAG = build-构建号）"]
+        BUILD --> DQ
+    end
 
-partition "镜像" {
-  :docker build 三镜像\nserver / worker（--target）/ web;
-  if (DEPLOY 参数?) then (false)
-    :本次仅验证，结束;
-    stop
-  else (true)
-    :docker login（凭据 REGISTRY_PASSWORD）;
-    :docker push ×3（IMAGE_TAG = build-<BUILD_NUMBER>）;
-  endif
-}
+    subgraph DEPLOY["发布（ssh 到目标主机 /opt/logharvest）"]
+        P0["发布 0：init-dirs.sh（幂等）<br/>/usr1 目录规划 + logharvest-net 网络"]
+        P1Q{"BACKUP_BEFORE_DEPLOY?"}
+        P1["发布 1：pg_dump 归档<br/>→ /usr1/logharvest/postgres/backup/pre-deploy-*.sql.gz"]
+        P2["发布 2：数据库栈 up -d --wait<br/>（等待 logharvest-postgres healthy）"]
+        P3["发布 3：控制面栈 pull + up -d --wait<br/>（server 启动即迁移 + 种子）"]
+        P4["发布 4：Worker 栈 pull + up -d --scale worker=N<br/>（滚动换新，drain/租约栅栏兜底）"]
+        SMOKE["冒烟：GET /api/health + GET /"]
+    end
 
-partition "发布（ssh 到目标主机 /opt/logharvest）" {
-  :发布 0：init-dirs.sh（幂等）\n/usr1 目录规划 + logharvest-net 网络;
-  if (BACKUP_BEFORE_DEPLOY?) then (是)
-    :发布 1：pg_dump 归档\n→ /usr1/logharvest/postgres/backup/pre-deploy-*.sql.gz;
-  else (否)
-  endif
-  :发布 2：数据库栈 up -d --wait\n（等待 logharvest-postgres healthy）;
-  :发布 3：控制面栈 pull + up -d --wait\n（server 启动即迁移 + 种子）;
-  :发布 4：Worker 栈 pull + up -d --scale worker=N\n（滚动换新，drain/租约栅栏兜底）;
-  :冒烟：GET /api/health + GET /;
-}
-
-:发布完成（通知）;
-stop
-@enduml
+    CO --> LINT
+    GQ -->|"否"| ABORT["终止——不产出镜像、不发布"]
+    GQ -->|"是"| BUILD
+    DQ -->|"false"| ONLY["本次仅验证，结束"]
+    DQ -->|"true"| LOGIN --> PUSH --> P0
+    P0 --> P1Q
+    P1Q -->|"是"| P1 --> P2
+    P1Q -->|"否"| P2
+    P2 --> P3 --> P4 --> SMOKE --> DONE(["发布完成（通知）"])
 ```
 
 三个栈的发布语义各不相同，这正是"独立部署"的价值：
@@ -74,34 +69,27 @@ stop
 
 Worker 是唯一有状态的进程角色（手头可能正跑着小时级任务），换新必须"跑完再退"。流水线默认采用**强替换 + 兜底回收**；若采用严格 drain 滚动（双版本并存），插入以下步骤：
 
-```plantuml
-@startuml
-title drain 严格滚动（可选，双版本并存版）
+```mermaid
+sequenceDiagram
+    autonumber
+    participant J as Jenkins
+    participant S as server 容器
+    participant PG as PostgreSQL
+    participant Old as 旧版本 Worker w-old ×N（v1.1）
+    participant New as 新版本 Worker w-new ×N（v1.2）
 
-participant "Jenkins" as j
-database "PostgreSQL" as pg
-box "旧版本 Worker\n(v1.1)" #LightYellow
-  participant "w-old ×N" as old
-end box
-box "新版本 Worker\n(v1.2)" #LightGreen
-  participant "w-new ×N" as new
-end box
-
-j -> pg : POST /api/workers/drain-version?version=1.1
-pg -> old : drain_requested=true\n（在线者 → draining）
-old -> old : 跑完手头任务（不领新任务）
-old -> pg : 任务清零后优雅退出
-loop 每 30s
-  j -> pg : GET /api/system/overview\n检查 workers.by_version["1.1"] 是否清零
-end
-j -> pg : compose up -d --scale worker=4（v1.2 镜像）
-new -> pg : register（online, version=1.2）
-note over old
-  离线 Worker 不被 drain 改状态：
-  只记录标记，重启后自然落到新版本
-end note
-j -> pg : 冒烟 /api/health
-@enduml
+    J->>S: 部署 server/web（无状态直换）
+    J->>PG: POST /api/workers/drain-version?version=1.1
+    PG->>Old: drain_requested=true（在线者 → draining）
+    Old->>Old: 跑完手头任务（不领新任务）
+    Old->>PG: 任务清零后优雅退出
+    loop 每 30s
+        J->>PG: GET /api/system/overview<br/>检查 workers.by_version 的 1.1 是否清零
+    end
+    J->>PG: compose up -d --scale worker=4（v1.2 镜像）
+    New->>PG: register（online, version=1.2）
+    Note over Old: 离线 Worker 不被 drain 改状态：<br/>只记录标记，重启后自然落到新版本
+    J->>PG: 冒烟 /api/health
 ```
 
 两条纪律（无论哪种滚动方式都成立）：

@@ -1,7 +1,7 @@
 # LogHarvest 整体设计架构
 
 > 读者：第一次接触本仓库的工程师。读完应能回答"系统是什么、由什么组成、数据怎么流、为什么这样设计"。
-> 本文的 PlantUML 源码均可直接粘贴到 [PlantUML 在线服务](https://www.plantuml.com/plantuml) 渲染。
+> 所有图表使用 **Mermaid** 编写，可在 GitHub / GitLab 及主流 Markdown 渲染器中直接渲染。
 
 ## 1. 系统定位
 
@@ -18,48 +18,39 @@ LogHarvest 是**压缩日志规则提取平台**：面向企业 NAS 上的海量
 
 ## 3. 三服务架构
 
-```plantuml
-@startuml
-skinparam componentStyle rectangle
-title LogHarvest 三服务架构（组件图）
+```mermaid
+flowchart TB
+    user(["管理员 / 运维"])
+    subgraph B["浏览器"]
+        web["Vue 3 + Element Plus<br/>管理前端"]
+    end
+    subgraph N["Nginx（web 容器）"]
+        proxy["静态资源 + /api 反代"]
+    end
+    subgraph S["FastAPI Server（server 容器 :8000）"]
+        api["控制面 REST API<br/>api/v1/routes_*"]
+        svc["应用服务层<br/>application/services"]
+        dom["领域层 domain/<br/>（零框架依赖）"]
+    end
+    subgraph D["PostgreSQL（数据盘 /usr1）"]
+        tbl[("13 张表：业务 7 + RBAC 5 + 审计 1")]
+        q[("file_tasks = 任务队列<br/>SKIP LOCKED")]
+    end
+    nas[("企业 NAS<br/>（只读挂载 /nas）")]
+    subgraph W["Worker 池（worker 容器 ×N）"]
+        wk["领取循环 + 处理器<br/>worker/main.py<br/>application/worker/processor.py"]
+        tmp[("本地临时盘卷<br/>/usr1/logharvest/worker/tmp")]
+    end
 
-actor 管理员/运维 as user
-
-node "浏览器" {
-  [Vue 3 + Element Plus\n管理前端] as web
-}
-
-node "Nginx（web 容器）" {
-  [静态资源 + /api 反代] as nginx
-}
-
-node "FastAPI Server（server 容器 :8000）" {
-  [控制面 REST API\napi/v1/routes_*] as api
-  [应用服务层\napplication/services] as svc
-  [领域层\ndomain/（零框架依赖）] as dom
-}
-
-database "PostgreSQL（独立部署栈）" as pg {
-  [13 张表：业务 7 + RBAC 5 + 审计 1]
-  [file_tasks = 任务队列\nSKIP LOCKED]
-}
-
-node "企业 NAS（只读挂载 /nas）" as nas
-node "Worker 池（worker 容器 ×N）" as workers {
-  [领取循环 + 处理器\nworker/main.py\napplication/worker/processor.py] as wk
-  [本地临时盘卷\n（/usr1/logharvest/worker/tmp）] as tmp
-}
-
-user --> web : HTTPS
-web --> nginx
-nginx --> api : /api/**（SSE 禁缓冲）
-api --> svc
-svc --> dom
-api --> pg : SQLAlchemy/SQLModel
-wk --> pg : SKIP LOCKED 领取 / 心跳 / 批量写命中
-nas ..> wk : 只读复制到本地
-wk --> tmp : 解压与逐行匹配
-@enduml
+    user --> web
+    web --> nginx
+    nginx --> api
+    api --> svc
+    svc --> dom
+    api -->|"SQLAlchemy / SQLModel"| D
+    wk --> q
+    nas -.只读复制.-> wk
+    wk --> tmp
 ```
 
 三个进程角色共享同一个 PostgreSQL，彼此之间**没有任何直接通信**：Server 只写元数据，Worker 只通过队列 SQL 领取任务，进度经 `file_tasks` 状态与 SSE 轮询读回。
@@ -79,56 +70,48 @@ wk --> tmp : 解压与逐行匹配
 
 ## 5. 分层架构（后端）
 
-```plantuml
-@startuml
-title 后端分层与依赖方向（开发视图节选）
+```mermaid
+flowchart TB
+    subgraph API["api（HTTP 映射）"]
+        deps["dependencies.py<br/>Session / Engine / 权限依赖"]
+        routes["v1/routes_* ×13"]
+        helpers["v1/helpers.py"]
+    end
 
-package "api（HTTP 映射）" {
-  [routes_*]
-  [dependencies.py\nSession/Engine/权限依赖]
-  [helpers.py]
-}
+    subgraph APP["application（用例服务）"]
+        schemas["schemas.py（接口 DTO）"]
+        svcs["services/*.py ×10"]
+        proc["worker/processor.py"]
+    end
 
-package "application（用例服务）" {
-  [services/jobs.py]
-  [services/rbac.py]
-  [services/queries.py]
-  [services/analytics.py]
-  [services/audit.py]
-  [worker/processor.py]
-  [schemas.py（接口 DTO）]
-}
+    subgraph DOMAIN["domain（纯业务，零框架依赖）"]
+        models["models/（13 张表）"]
+        rules["rules/（编译与求值）"]
+        archive["archive/（发现与流式读取）"]
+        dservices["services/（口令 / JWT / 限流）"]
+        guard["source_guard.py"]
+        perms["permissions.py"]
+        text["text.py"]
+    end
 
-package "domain（纯业务，零框架依赖）" {
-  [models/（13 张表）]
-  [rules/（编译与求值）]
-  [archive/（发现与流式读取）]
-  [services/（口令/JWT/限流）]
-  [source_guard.py]
-  [permissions.py]
-  [text.py]
-}
+    subgraph INFRA["infrastructure（持久化 / 队列）"]
+        database["database.py"]
+        taskq["task_queue.py（SKIP LOCKED SQL）"]
+        writer["match_writer.py"]
+        migr["migrations.py"]
+    end
 
-package "infrastructure（持久化/队列）" {
-  [database.py]
-  [task_queue.py（SKIP LOCKED SQL）]
-  [match_writer.py]
-  [migrations.py]
-}
+    subgraph WK["worker（常驻进程）"]
+        wmain["main.py（领取循环）"]
+    end
 
-package "worker（常驻进程）" {
-  [main.py（领取循环）]
-  [logging_setup.py]
-}
-
-api --> application
-api --> domain : 权限码/模型
-application --> domain
-application --> infrastructure
-worker --> application
-worker --> infrastructure
-infrastructure --> domain
-@enduml
+    API -->|"import"| APP
+    APP --> DOMAIN
+    API --> DOMAIN
+    APP --> INFRA
+    WK --> APP
+    WK --> INFRA
+    INFRA --> DOMAIN
 ```
 
 依赖方向恒为 `api → application → domain ← infrastructure`，`worker → application`。两条纪律由约定与测试共同守卫：
@@ -138,37 +121,34 @@ infrastructure --> domain
 
 ## 6. 端到端数据流
 
-```plantuml
-@startuml
-title 端到端数据流（从配置到命中结果）
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as 管理员
+    participant Web as Web 前端
+    participant Server as FastAPI Server
+    participant PG as PostgreSQL
+    participant Worker as Worker ×N
+    participant NAS as NAS（只读）
 
-skinparam sequenceMessageAlign center
-actor 管理员 as admin
-participant "Web 前端" as web
-participant "FastAPI\nServer" as server
-database "PostgreSQL" as pg
-participant "Worker ×N" as worker
-storage "NAS\n（只读）" as nas
-
-admin -> web : 1. 登记数据源（NAS 挂载点）
-web -> server : POST /api/data-sources
-admin -> web : 2. 上传规则集配置
-web -> server : POST /api/rule-sets（编译校验，422 即拒）
-admin -> web : 3. 创建作业（指定目录 + 规则集）
-web -> server : POST /api/jobs（Idempotency-Key）
-server -> server : 只读守卫 → 路径校验 → 10s 递归扫描
-server -> pg : 4. 写 jobs + 每压缩包一条 file_tasks（同一事务）
-web -> server : 5. 订阅 SSE /api/jobs/{id}/events
-loop 每 1s
-  worker -> pg : 6. CLAIM（SKIP LOCKED，attempts+1）
-  nas ..> worker : 7. 只读复制压缩包到本地临时盘
-  worker -> worker : 8. 流式解压 + 逐行规则匹配
-  worker -> pg : 9. 批量写 matches + 心跳/续租
-  worker -> pg : 10. 终态写回（租约栅栏）+ 作业终态汇总
-end
-web -> server : 11. 查询命中（(created_at,id) 游标）
-server -> pg : SELECT ... ORDER BY created_at DESC, id DESC
-@enduml
+    Admin->>Web: 1. 登记数据源（NAS 挂载点）
+    Web->>Server: POST /api/data-sources
+    Admin->>Web: 2. 上传规则集配置
+    Web->>Server: POST /api/rule-sets（编译校验，422 即拒）
+    Admin->>Web: 3. 创建作业（指定目录 + 规则集）
+    Web->>Server: POST /api/jobs（Idempotency-Key）
+    Note over Server: 只读守卫 → 路径校验 → 10s 递归扫描
+    Server->>PG: 4. 写 jobs + 每压缩包一条 file_tasks（同一事务）
+    Web->>Server: 5. 订阅 SSE /api/jobs/{id}/events
+    loop 每 1s
+        Worker->>PG: 6. CLAIM（SKIP LOCKED，attempts+1）
+        NAS->>Worker: 7. 只读复制压缩包到本地临时盘
+        Note over Worker: 8. 流式解压 + 逐行规则匹配
+        Worker->>PG: 9. 批量写 matches + 心跳/续租
+        Worker->>PG: 10. 终态写回（租约栅栏）+ 作业终态汇总
+    end
+    Web->>Server: 11. 查询命中（(created_at,id) 游标）
+    Server->>PG: SELECT ... ORDER BY created_at DESC, id DESC
 ```
 
 ## 7. 目录结构

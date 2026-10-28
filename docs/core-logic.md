@@ -1,6 +1,6 @@
 # LogHarvest 核心逻辑说明
 
-> 逐条解释系统的八块核心逻辑：**为什么这样设计、边界在哪、失败时发生什么**。配套代码位置均可直接点击跳转。所有图均为 PlantUML。
+> 逐条解释系统的八块核心逻辑：**为什么这样设计、边界在哪、失败时发生什么**。配套代码位置均可直接点击跳转。所有图均为 Mermaid，GitHub 可直接渲染。
 
 ## 目录
 
@@ -19,60 +19,32 @@
 
 代码：`application/services/jobs.py`（服务）+ `api/v1/routes_jobs.py`（HTTP 映射 + 审计）。
 
-```plantuml
-@startuml
-title POST /api/jobs 创建作业（活动图）
+```mermaid
+flowchart TD
+    S(["start"]) --> KEY{"Idempotency-Key 存在且非空?"}
+    KEY -->|"是"| LOOKUP["查 (created_by, idempotency_key) 已有作业"]
+    LOOKUP --> HIT{"命中?"}
+    HIT -->|"是"| MATCHQ{"name/source_path/rule_set_id/<br/>file_filter 与请求体一致?"}
+    MATCHQ -->|"是"| REPLAY["返回已有作业（200，不重复审计）"]
+    MATCHQ -->|"否"| CONFLICT["409 幂等键冲突"]
+    KEY -->|"空白串"| BLANK["400 Idempotency-Key must not be blank"]
+    KEY -->|"无键"| VALIDATE
 
-start
-:读取 Idempotency-Key 请求头;
-if (键存在且非空?) then (是)
-  :查 (created_by, idempotency_key) 已有作业;
-  if (命中?) then (是)
-    if (name/source_path/rule_set_id/file_filter\n与请求体一致?) then (是)
-      :返回已有作业（200，不重复审计）;
-      stop
-    else (否)
-      :409 幂等键冲突;
-      stop
-    endif
-  else (未命中)
-  endif
-elseif (键为空白串?) then (是)
-  :400 Idempotency-Key must not be blank;
-  stop
-else (无键)
-endif
-
-:校验数据源（存在且 enabled）与规则集（404）;
-:source_path 必须 ⊆ 数据源 root_path（400 路径逃逸）
-且必须是已存在目录（400）;
-:只读守卫 guard_source(enforce)——判可写即 409（规格 §7.2）;
-note right
-  扫描前先 session.rollback() 结束读事务，
-  避免长扫描期间占用连接池
-end note
-
-:同步递归扫描（10s deadline，max_files=20000 触顶即停，
-  max_depth 静默截断，跳过符号链接与点目录）;
-if (扫描超时?) then (是)
-  :503 缩小目录或过滤器;
-  stop
-elseif (文件数超限?) then (是)
-  :400 too many files;
-  stop
-else (正常)
-endif
-:每个压缩文件 stat（size/mtime 快照，供 Worker 核对）;
-
-:写 jobs（空目录直接 succeeded；有文件则 running）
-+ 每压缩包一条 file_tasks（pending）——同一事务;
-if (IntegrityError（并发同键）?) then (是)
-  :回查幂等键——命中则返回已有作业，未命中 re-raise;
-else (否)
-  :201 返回新作业 + 审计留痕（同事务收尾）;
-endif
-stop
-@enduml
+    HIT -->|"未命中"| VALIDATE
+    VALIDATE["校验数据源（存在且 enabled）与规则集（404）"]
+    VALIDATE --> PATH["source_path 必须 ⊆ 数据源 root_path（400 路径逃逸）<br/>且必须是已存在目录（400）"]
+    PATH --> GUARD["只读守卫 guard_source(enforce)——判可写即 409（规格 §7.2）"]
+    GUARD --> NOTE["扫描前先 session.rollback() 结束读事务，<br/>避免长扫描期间占用连接池"]
+    NOTE --> SCAN["同步递归扫描（10s deadline，max_files=20000 触顶即停，<br/>max_depth 静默截断，跳过符号链接与点目录）"]
+    SCAN --> TIMEOUT{"扫描超时?"}
+    TIMEOUT -->|"是"| S503["503 缩小目录或过滤器"]
+    TIMEOUT -->|"否"| TOOMANY{"文件数超限?"}
+    TOOMANY -->|"是"| E400["400 too many files"]
+    TOOMANY -->|"否"| STAT["每个压缩文件 stat（size/mtime 快照，供 Worker 核对）"]
+    STAT --> WRITE["写 jobs（空目录直接 succeeded；有文件则 running）<br/>+ 每压缩包一条 file_tasks（pending）——同一事务"]
+    WRITE --> DUP{"IntegrityError（并发同键）?"}
+    DUP -->|"是"| RACE["回查幂等键——命中则返回已有作业，未命中 re-raise"]
+    DUP -->|"否"| CREATED["201 返回新作业 + 审计留痕（同事务收尾）"]
 ```
 
 设计要点：
@@ -89,61 +61,47 @@ stop
 
 ### 2.1 file_tasks 状态机
 
-```plantuml
-@startuml
-title file_tasks 状态机（attempts 栅栏贯穿全部迁移）
-
-[*] --> pending : 作业规划写入
-
-pending --> running : CLAIM_SQL\n(Skip Locked, attempts+1)
-running --> running : touch/heartbeat\n(id+attempts+status 栅栏)
-running --> succeeded : COMPLETE_SQL(成功)
-running --> partial : COMPLETE_SQL(成员级部分失败)
-running --> failed : COMPLETE_SQL(失败且\nattempts>=max_attempts 或 !retryable)
-running --> cancelled : JobCancelled / COMPLETE_SQL\n(作业已请求取消)
-running --> pending : COMPLETE_SQL(失败可重试)\nscheduled_at += attempts*5s
-running --> pending : recover_stale\n(心跳 >120s 的僵死任务回收)
-pending --> cancelled : POST /jobs/{id}/cancel
-
-failed --> pending : POST /jobs/{id}/files/retry-failed\n(attempts 不重置，仍受 max_attempts 约束)
-succeeded --> [*]
-partial --> [*]
-failed --> [*]
-cancelled --> [*]
-@enduml
+```mermaid
+stateDiagram-v2
+    [*] --> pending: 作业规划写入
+    pending --> running: CLAIM_SQL（SKIP LOCKED，attempts+1）
+    running --> running: touch/heartbeat（id+attempts+status 栅栏）
+    running --> succeeded: COMPLETE_SQL（成功）
+    running --> partial: COMPLETE_SQL（成员级部分失败）
+    running --> failed: COMPLETE_SQL（失败且 attempts≥max_attempts 或不可重试）
+    running --> cancelled: JobCancelled / 作业已请求取消
+    running --> pending: COMPLETE_SQL（可重试）→ scheduled_at += attempts×5s
+    running --> pending: recover_stale（心跳>120s 的僵死任务回收）
+    pending --> cancelled: POST /jobs/:id/cancel
+    failed --> pending: retry-failed（attempts 不重置，仍受 max_attempts 约束）
+    succeeded --> [*]
+    partial --> [*]
+    failed --> [*]
+    cancelled --> [*]
 ```
 
 ### 2.2 领取与租约栅栏（时序）
 
-```plantuml
-@startuml
-title 领取、心跳续租与迟到写入失效（时序图）
+```mermaid
+sequenceDiagram
+    autonumber
+    participant WA as Worker-A
+    participant WB as Worker-B
+    participant PG as PostgreSQL
 
-participant "Worker-A" as wa
-participant "Worker-B" as wb
-database "PostgreSQL" as pg
+    WA->>PG: BEGIN，SELECT ... FOR UPDATE SKIP LOCKED（task#7，attempts 0→1）RETURNING
+    WA->>PG: COMMIT（写 file_task_attempts#1）
+    WA->>PG: touch(task#7, attempts=1) → true<br/>（复制开始，此后每 5s 续租）
 
-wa -> pg : BEGIN; SELECT ... FOR UPDATE SKIP LOCKED\n(task#7, attempts 0→1) RETURNING
-wa -> pg : COMMIT（写 file_task_attempts#1）
-wa -> pg : touch(task#7, attempts=1) → true\n（复制开始，此后每 5s 续租）
+    Note over PG: ... Worker-A 进程僵死（心跳停止）...
+    Note over PG: 120 秒后：recover_stale 把 task#7 置回 pending（attempts=1）
 
-... Worker-A 进程僵死（心跳停止）...
+    WB->>PG: CLAIM task#7（attempts 1→2）
+    WB->>PG: touch(task#7, attempts=2) → true
 
-note over pg
-  120 秒后：recover_stale
-  把 task#7 置回 pending（attempts=1）
-end note
-wb -> pg : CLAIM task#7（attempts 1→2）
-wb -> pg : touch(task#7, attempts=2) → true
-
-wa -> pg : 迟到的批量写 matches\n（先 touch(task#7, attempts=1)）
-pg --> wa : 0 行更新 → LeaseLost
-note right of wa
-  栅栏失败：不写 matches、不写终态，
-  中止当次尝试——旧 Worker 永远
-  覆盖不了新 Owner 的结果
-end note
-@enduml
+    WA->>PG: 迟到的批量写 matches（先 touch(task#7, attempts=1)）
+    PG-->>WA: 0 行更新 → LeaseLost
+    Note over WA: 栅栏失败：不写 matches、不写终态，中止当次尝试——<br/>旧 Worker 永远覆盖不了新 Owner 的结果
 ```
 
 要点：
@@ -160,55 +118,38 @@ end note
 
 ### 3.1 单任务处理
 
-```plantuml
-@startuml
-title TaskProcessor.process（活动图）
-
-start
-:guard_source（只读守卫，嵌套挂载各自判定）;
-:_check_root——真实路径必须仍在数据源根下\n（防规划后被替换成外指符号链接）;
-:_check_source——stat 比对 size/mtime;
-if (不一致 / 不可用?) then (是)
-  :PermanentTaskFailure（retryable=False）\n不烧租约不复制，人工确认后手动重试;
-  stop
-else (否)
-endif
-:_verify_lease（栅栏）;
-if (attempts > 1?) then (是)
-  :delete_for_task 清上次残留命中;
-else (否)
-endif
-:mkdir 隔离目录 + 复制到本地（1MiB 分块，≥5s touch）;
-if (续租返回假?) then (是)
-  :LeaseLost——中止，不写终态;
-  stop
-else (否)
-endif
-:scan_archive 流式解压（预算见 §4）;
-while (下一行?) is (有)
-  :成员切换时算一次 file_glob 匹配（缓存后 ~60ns/行）;
-  if (成员命中且 cancel_requested?) then (是)
-    :JobCancelled——file_task 置 cancelled;
-    stop
-  else (否)
-  endif
-  :evaluate_line 求值;
-  if (有命中?) then (是)
-    :raw_line 截断（64KiB + truncated 标记）;
-    :入批量缓冲（batch_size=1000）;
-    if (缓冲满?) then (是)
-      :touch 栅栏 → 批量 INSERT matches;
-    else (否)
-    endif
-  else (否)
-  endif
-  :每 20000 行或 5s：heartbeat 续租 + 回写进度;
-endwhile (无)
-:按匹配成员结果汇总 succeeded/partial/failed;
-:COMPLETE_SQL 终态写回（同栅栏）;
-:删除本地复制目录;
-stop
-@enduml
+```mermaid
+flowchart TD
+    S(["start"]) --> GUARD["guard_source（只读守卫，嵌套挂载各自判定）"]
+    GUARD --> ROOT["_check_root——真实路径必须仍在数据源根下<br/>（防规划后被替换成外指符号链接）"]
+    ROOT --> SRC["_check_source——stat 比对 size/mtime"]
+    SRC --> BAD{"不一致 / 不可用?"}
+    BAD -->|"是"| PERM["PermanentTaskFailure（retryable=False）<br/>不烧租约不复制，人工确认后手动重试"]
+    BAD -->|"否"| LEASE["_verify_lease（栅栏）"]
+    LEASE --> OLD{"attempts > 1?"}
+    OLD -->|"是"| DEL["delete_for_task 清上次残留命中"]
+    OLD -->|"否"| MKDIR
+    DEL --> MKDIR["mkdir 隔离目录 + 复制到本地（1MiB 分块，≥5s touch）"]
+    MKDIR --> LOST{"续租返回假?"}
+    LOST -->|"是"| LL["LeaseLost——中止，不写终态"]
+    LOST -->|"否"| ARCH["scan_archive 流式解压（预算见 §4）"]
+    ARCH --> ROWS{"下一行?"}
+    ROWS -->|"有"| GLOB["成员切换时算一次 file_glob 匹配（缓存后 ~60ns/行）"]
+    GLOB --> CANCELQ{"成员命中且 cancel_requested?"}
+    CANCELQ -->|"是"| CC["JobCancelled——file_task 置 cancelled"]
+    CANCELQ -->|"否"| EVAL["evaluate_line 求值"]
+    EVAL --> HITQ{"有命中?"}
+    HITQ -->|"是"| RAW["raw_line 截断（64KiB + truncated 标记）→ 入批量缓冲"]
+    RAW --> FULL{"缓冲满（batch_size=1000）?"}
+    FULL -->|"是"| FLUSH["touch 栅栏 → 批量 INSERT matches"]
+    FULL -->|"否"| HB
+    FLUSH --> HB["每 20000 行 / 5s：heartbeat 续租 + 回写进度"]
+    HITQ -->|"否"| HB2["每 20000 行 / 5s：heartbeat 续租 + 回写进度"]
+    HB --> ROWS
+    HB2 --> ROWS
+    ROWS -->|"无"| SUM["按匹配成员结果汇总 succeeded/partial/failed"]
+    SUM --> DONE["COMPLETE_SQL 终态写回（同栅栏）"]
+    DONE --> RM["删除本地复制目录"]
 ```
 
 ### 3.2 成员级容错（为什么会有 partial）
@@ -229,36 +170,22 @@ stop
 
 代码：`domain/archive/reader.py` 的 `ArchiveBudget` + `_BudgetTracker`。
 
-```plantuml
-@startuml
-title ArchiveBudget 四维防护（活动图，单位均为"解压后"字节）
-
-start
-:tracker.begin_member(member);
-if (成员数 > max_members(10000)?) then (是)
-  :ScanLimitError(reason="max_members")\n→ 整包停止;
-  stop
-else (否)
-endif
-while (读到下一行?) is (有)
-  :累计成员字节与整包字节;
-  if (单成员 > max_member_bytes(1GiB)?) then (是)
-    :该成员记错误（只牺牲它），其余成员照常 → partial;
-  else (否)
-  endif
-  if (整包累计 > max_total_bytes(4GiB)?) then (是)
-    :整包停止扫描（failed，不重试）;
-    stop
-  else (否)
-  endif
-  if (整包 ≥ 64MiB 且 累计/源大小 > max_ratio(500)?) then (是)
-    :膨胀比超限 → 整包停止;
-    stop
-  else (否)
-  endif
-endwhile (无)
-stop
-@enduml
+```mermaid
+flowchart TD
+    S(["start"]) --> BEGINM["tracker.begin_member(member)"]
+    BEGINM --> MEMQ{"成员数 > max_members（10000）?"}
+    MEMQ -->|"是"| STOP1["ScanLimitError(reason=max_members)<br/>→ 整包停止扫描"]
+    MEMQ -->|"否"| LOOP{"读到下一行?"}
+    LOOP -->|"有"| ACC["累计成员字节与整包字节"]
+    ACC --> MEMBYTES{"单成员 > max_member_bytes（1GiB）?"}
+    MEMBYTES -->|"是"| DROP["该成员记错误（只牺牲它），其余成员照常 → partial"]
+    MEMBYTES -->|"否"| TOTALQ
+    DROP --> TOTALQ{"整包累计 > max_total_bytes（4GiB）?"}
+    TOTALQ -->|"是"| STOP2["整包停止扫描（failed，不重试）"]
+    TOTALQ -->|"否"| RATIOQ{"整包 ≥ 64MiB 且 累计/源大小 > max_ratio（500）?"}
+    RATIOQ -->|"是"| STOP3["膨胀比超限 → 整包停止"]
+    RATIOQ -->|"否"| LOOP
+    LOOP -->|"无"| E(["stop"])
 ```
 
 动机：zip 声明的 `file_size` 可任意伪造，**只有实际解压出来的字节算数**——预算在流式读取路径上实时计数，这是唯一能在"读到一半"发现炸弹的位置。低于 64 MiB 不参与膨胀比判定，避免误伤正常小文件。
@@ -269,61 +196,33 @@ stop
 
 代码：`domain/rules/models.py`（配置模型）+ `domain/rules/evaluator.py`（编译与求值）。
 
-```plantuml
-@startuml
-title 规则求值管线（每行、每规则）
-
-start
-:RuleSetConfig.model_validate（pydantic 判别联合）;
-:compile_ruleset;
-note right
-  正则规则在编译期完成：
-  - regex.compile(pattern, flags)
-  - flags 仅允许 i/m/s
-  - threshold.field 必须是命名分组
-  编译失败的规则集在创建 API 即 422
-end note
-
-while (还有规则?) is (有)
-  if (规则 disabled?) then (是)
-    :跳过;
-  else (否)
-  endif
-  if (match.type == keyword?) then (是)
-    :any：任一关键字命中（大小写按 case_sensitive）
-    all：全部命中;
-    if (未命中?) then (是)
-      :continue;
-    else (否)
-      :命中 → fields 留空，severity/tags 生效;
-    endif
-  else (regex)
-    :item.regex.search(line, timeout=timeout_ms/1000);
-    if (TimeoutError?) then (是)
-      :告警日志 + 跳过该规则（该行漏命中，
-      已登记为已知限制 P1-7，见核心链路评估）;
-    else (否)
-      :提取命名分组 → fields;
-      if (threshold 存在?) then (是)
-        :Decimal(fields[field]) 与 threshold.value
-        按 op（gt/gte/lt/lte/eq）比较;
-        note right
-          非有限值 / 不可解析 / 比较异常
-          一律按"未命中"处理，绝不抛出
-        end note
-      else (否)
-      endif
-      if (阈值不满足?) then (是)
-        :未命中;
-      else (否)
-        :命中（记录 numeric_value）;
-      endif
-    endif
-  endif
-endwhile (无)
-:返回命中的 RuleMatch 列表（含 rule_id/version/severity/tags/fields）;
-stop
-@enduml
+```mermaid
+flowchart TD
+    S(["start"]) --> V["RuleSetConfig.model_validate（pydantic 判别联合）"]
+    V --> COMP["compile_ruleset"]
+    COMP --> N("编译期完成：regex.compile(pattern, flags)<br/>flags 仅允许 i/m/s；threshold.field 必须是命名分组<br/>编译失败的规则集在创建 API 即 422")
+    N --> LOOPQ{"还有规则?"}
+    LOOPQ -->|"有"| ENQ{"规则 disabled?"}
+    ENQ -->|"是"| NEXT
+    ENQ -->|"否"| TYPEQ{"match.type == keyword?"}
+    TYPEQ -->|"keyword"| KW["any：任一关键字命中（按 case_sensitive）<br/>all：全部命中"]
+    KW --> KWHIT{"未命中?"}
+    KWHIT -->|"是"| NEXT["下一个规则"]
+    KWHIT -->|"否"| HIT["命中 → fields 留空，severity/tags 生效"]
+    TYPEQ -->|"regex"| RE["item.regex.search(line, timeout=timeout_ms/1000)"]
+    RE --> TMO{"TimeoutError?"}
+    TMO -->|"是"| WARN["告警日志 + 跳过该规则（该行漏命中，<br/>已登记为已知限制 P1-7，见核心链路评估）"]
+    TMO -->|"否"| EXT["提取命名分组 → fields"]
+    EXT --> THQ{"threshold 存在?"}
+    THQ -->|"是"| DEC["Decimal(fields[field]) 与 threshold.value<br/>按 op（gt/gte/lt/lte/eq）比较。<br/>非有限值 / 不可解析 / 比较异常一律按未命中处理，绝不抛出"]
+    THQ -->|"否"| HITR["命中（记录 numeric_value）"]
+    DEC --> THOK{"阈值不满足?"}
+    THOK -->|"是"| NEXT
+    THOK -->|"否"| HITR
+    HIT --> NEXT
+    HITR --> NEXT
+    NEXT --> LOOPQ
+    LOOPQ -->|"无"| RET["返回命中的 RuleMatch 列表<br/>（含 rule_id/version/severity/tags/fields）"]
 ```
 
 规则配置形状（`RuleSetConfig`）：
@@ -362,36 +261,29 @@ stop
 
 代码：`api/v1/routes_events.py`（服务端）+ `web/src/utils/sse.ts`（客户端）。
 
-```plantuml
-@startuml
-title SSE 作业进度（时序图）
+```mermaid
+sequenceDiagram
+    autonumber
+    actor B as 浏览器
+    participant S as FastAPI /routes_events
+    participant PG as PostgreSQL
 
-actor 浏览器 as b
-participant "FastAPI\n/routes_events" as s
-database "PostgreSQL" as pg
+    B->>S: GET /api/jobs/:id/events<br/>（Authorization: Bearer；max_events 0–100）
+    Note over S: 权限校验（require_permission_streaming，<br/>短会话校验后立即归还连接）
+    S->>PG: 首次快照校验（作业不存在 → 404）
+    S-->>B: 200 text/event-stream<br/>（Cache-Control: no-cache；X-Accel-Buffering: no）
 
-b -> s : GET /api/jobs/{id}/events\n(Authorization: Bearer; max_events 0–100)
-s -> s : 权限校验（require_permission_streaming，\n短会话校验后立即归还连接）
-s -> pg : 首次快照校验（作业不存在 → 404）
-s --> b : 200 text/event-stream\n(Cache-Control: no-cache; X-Accel-Buffering: no)
+    loop 每秒（直到终态/作业消失/达到 max_events）
+        S->>PG: 每轮独立短会话快照<br/>（jobs.status + file_tasks 按 status 聚合）
+        S-->>B: event: progress<br/>data: job_id/status/total/by_status/processed_lines
+    end
 
-loop 每秒（直到终态/作业消失/达到 max_events）
-  s -> pg : 每轮独立短会话快照\n(jobs.status + file_tasks 按 status 聚合)
-  s --> b : event: progress\ndata: {"job_id":1,"status":"running",\n"total":100,"by_status":{...},"processed_lines":...}\n\n
-end
-
-alt 作业进入终态
-  s --> b : 最后一个快照后结束流
-else 作业被删除 / 代理切断
-  s --> b : 流提前结束
-end
-note over b
-  前端 fetch + getReader 手工分帧
-  （EventSource 无法自定义 Authorization 头）；
-  返回 undefined = 未观察到终态即结束
-  → 必须回退 5 秒轮询，不能当成"已完成"
-end note
-@enduml
+    alt 作业进入终态
+        S-->>B: 最后一个快照后结束流
+    else 作业被删除 / 代理切断
+        S-->>B: 流提前结束
+    end
+    Note over B: 前端 fetch + getReader 手工分帧<br/>（EventSource 无法自定义 Authorization 头）；<br/>返回 undefined = 未观察到终态即结束<br/>→ 必须回退 5 秒轮询，不能当成"已完成"
 ```
 
 Nginx 反代必须 `proxy_buffering off` + 长 `proxy_read_timeout`（见 `web/nginx.conf`），否则帧会被缓冲到流结束一次性下发，前端退化为轮询。
@@ -402,44 +294,39 @@ Nginx 反代必须 `proxy_buffering off` + 长 `proxy_read_timeout`（见 `web/n
 
 ### 8.1 登录与权限解析
 
-```plantuml
-@startuml
-title 登录与请求鉴权（时序图）
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant Login as POST /api/login
+    participant Dep as 业务请求 require_permission(code)
+    participant PG as PostgreSQL
 
-actor 用户 as u
-participant "POST /api/login" as login
-database "PostgreSQL" as pg
-participant "业务请求\nrequire_permission(code)" as dep
+    U->>Login: username + password
+    Note over Login: 限流检查（用户名+IP，滑动窗口 10 次/300s）<br/>超限 → 429 + Retry-After
+    Login->>PG: SELECT user WHERE username
+    Note over Login: 未知用户也跑一次 bcrypt（预置占位哈希）：<br/>消除 ~450ms vs ~5ms 的用户名枚举时序侧信道
+    alt 口令不符
+        Login->>PG: 审计 auth.login_failed（actor_id 空，<br/>用户名快照 + 来源 IP）
+        Login-->>U: 401 invalid credentials
+    else 账号停用
+        Login-->>U: 403 user is disabled<br/>（不计入限流——不对停用账号上反向锁）
+    else 成功
+        Login->>Login: 清空该来源失败计数
+        Login->>PG: roles_and_permissions（单次角色查询）
+        Login->>PG: 审计 auth.login_success（role_hint 快照）
+        Login-->>U: 信封 accessToken/refreshToken/roles/permissions/expires
+    end
 
-u -> login : username + password
-login -> login : 限流检查（用户名+IP，滑动窗口 10 次/300s）\n超限 → 429 + Retry-After
-login -> pg : SELECT user WHERE username
-note right
-  未知用户也跑一次 bcrypt（预置占位哈希）：
-  消除 ~450ms vs ~5ms 的用户名枚举时序侧信道
-end note
-alt 口令不符
-  login -> pg : 审计 auth.login_failed（actor_id 空，\n用户名快照 + 来源 IP）
-  login --> u : 401 invalid credentials
-else 账号停用
-  login --> u : 403 user is disabled\n（不计入限流——不对停用账号上反向锁）
-else 成功
-  login -> login : 清空该来源失败计数
-  login -> pg : roles_and_permissions（单次角色查询）
-  login -> pg : 审计 auth.login_success（role_hint 快照）
-  login --> u : 信封 {accessToken, refreshToken,\nroles, permissions, expires}
-end
-
-u -> dep : 业务请求 + Bearer
-dep -> pg : decode access JWT（type=access）
-dep -> pg : SELECT user（不存在或停用 → 401）
-dep -> pg : permission_codes（admin → *:*:*；\n否则查 active 角色关联的 active 权限节点）
-alt 无该权限码
-  dep --> u : 403 permission '<code>' required
-else 通过
-  dep --> u : 进入路由处理
-end
-@enduml
+    U->>Dep: 业务请求 + Bearer
+    Dep->>PG: decode access JWT（type=access）
+    Dep->>PG: SELECT user（不存在或停用 → 401）
+    Dep->>PG: permission_codes（admin → 通配；<br/>否则查 active 角色关联的 active 权限节点）
+    alt 无该权限码
+        Dep-->>U: 403 permission "code" required
+    else 通过
+        Dep-->>U: 进入路由处理
+    end
 ```
 
 RBAC 三条设计纪律：
@@ -450,36 +337,25 @@ RBAC 三条设计纪律：
 
 ### 8.2 操作审计
 
-```plantuml
-@startuml
-title 审计留痕事务口径（时序图）
+```mermaid
+sequenceDiagram
+    autonumber
+    participant R as 路由层
+    participant A as audit.py
+    participant PG as PostgreSQL
 
-participant "路由层" as r
-participant "audit.py" as a
-database "PostgreSQL" as pg
-
-r -> a : record_operation(...)\n（只 session.add，不提交）
-alt 与业务写同事务（更新/删除类）
-  r -> pg : 业务写 + 审计行 → 同一 commit
-  note right
-    业务回滚 = 审计一并回滚：
-    不留"业务没做成却记了案"的假案
-  end note
-else 创建类（业务已自提交，新 id 才存在）
-  r -> a : commit_operation(session)
-  a -> pg : 单独 commit
-  note right
-    提交失败只告警回滚：
-    不把已成功的业务变成 5xx
-  end note
-else 审计构造/写库本身失败
-  a -> a : structlog 告警（只记 action 与异常类型）
-  note right
-    留痕不完整可以补，
-    业务因审计挂掉不可接受
-  end note
-end
-@enduml
+    R->>A: record_operation(...)（只 session.add，不提交）
+    alt 与业务写同事务（更新/删除类）
+        R->>PG: 业务写 + 审计行 → 同一 commit
+        Note over PG: 业务回滚 = 审计一并回滚：<br/>不留"业务没做成却记了案"的假案
+    else 创建类（业务已自提交，新 id 才存在）
+        R->>A: commit_operation(session)
+        A->>PG: 单独 commit
+        Note over A: 提交失败只告警回滚：<br/>不把已成功的业务变成 5xx
+    else 审计构造/写库本身失败
+        A->>A: structlog 告警（只记 action 与异常类型）
+        Note over A: 留痕不完整可以补，<br/>业务因审计挂掉不可接受
+    end
 ```
 
 行内容：`actor_id`（删除账号时外键 SET NULL + 显式置空兜底 SQLite）、`actor_name`/`role_hint` 写入时快照（删号不抹责任链）、`action`（`user.create` / `job.cancel` / `auth.login_failed`…）、`detail`（变更前后摘要，**口令永不入库**）、`origin_ip`。表只追加：无更新接口、无删除接口。
