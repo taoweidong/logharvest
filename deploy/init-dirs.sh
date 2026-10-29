@@ -7,7 +7,7 @@
 # 目录规划（所有可归档数据一律落数据盘 /usr1）：
 #   /usr1/logharvest/postgres/data    PostgreSQL 数据目录（PG alpine 镜像 uid 70）
 #   /usr1/logharvest/postgres/backup  pg_dump 归档（Jenkins 升级前备份 + 每日定时）
-#   /usr1/logharvest/worker/tmp       Worker 解压临时盘（按任务隔离，任务结束自动清理）
+#   /usr1/logharvest/worker/tmp       Worker 解压临时盘（uid 10001，任务结束自动清理）
 #   /usr1/logharvest/server/logs      Server 日志归档位（当前日志走 stdout，可接收集器落盘）
 
 set -euo pipefail
@@ -36,8 +36,9 @@ mkdir -p \
 echo "==> chown 70:70 postgres/{data,backup}"
 chown 70:70 "$BASE/postgres/data" "$BASE/postgres/backup"
 
-# 临时盘与日志目录归 root（容器内 worker 以 root 运行时可写即可）
+# 临时盘归 10001（service/Dockerfile 的非 root app 用户）；日志目录归 root
 chmod 750 "$BASE/worker/tmp" "$BASE/server/logs"
+chown 10001:10001 "$BASE/worker/tmp"
 
 echo "==> 创建跨栈外部网络 logharvest-net"
 if docker network inspect logharvest-net >/dev/null 2>&1; then

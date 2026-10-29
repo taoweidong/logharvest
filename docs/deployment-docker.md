@@ -61,9 +61,9 @@ flowchart TB
 
 | 文件 | 作用 |
 |---|---|
-| `service/Dockerfile` | 后端多阶段构建：`builder`（uv 同步依赖）→ `server` / `worker` 两个 target；镜像内含 Alembic 迁移，启动时自动 `upgrade head` + RBAC 种子 |
-| `web/Dockerfile` | 前端两阶段：node:22 `pnpm build` → nginx:1.27-alpine 托管 `dist/` |
-| `web/nginx.conf` | SPA history 回退；`/api/**` 反代到 server 服务；**SSE 禁缓冲 + 1h 读超时** |
+| `service/Dockerfile` | 后端多阶段构建：`builder`（uv 同步依赖）→ `server` / `worker` 两个 target；镜像内含 Alembic 迁移，启动时自动 `upgrade head` + RBAC 种子；**非 root uid 10001 运行** |
+| `web/Dockerfile` | 前端两阶段：node:22 `pnpm build` → nginx:1.27-alpine 托管 `dist/`；**非 root nginx 监听 8080**（宿主机端口由 `WEB_PORT` 映射，默认 80） |
+| `web/nginx.conf` | 完整主配置（pid/缓存落 /tmp 支持非 root）；SPA 回退；`/api/**` 反代；**SSE 禁缓冲 + 1h 读超时**；安全响应头 nosniff / SAMEORIGIN / Referrer-Policy（CSP 模板注释待浏览器验证） |
 | `deploy/init-dirs.sh` | /usr1 目录规划 + 属主 + 外部网络（幂等） |
 | `deploy/<栈>/.env.example` | 各栈环境变量样例 |
 | `Jenkinsfile` | 门禁 → 镜像 → 升级前备份 → 三栈发布 → 冒烟 |
