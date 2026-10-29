@@ -347,22 +347,24 @@ onMounted(async () => {
           label-width="110px"
         >
           <el-row :gutter="12">
-            <el-col :xs="24" :sm="12" :lg="6">
+            <!-- 8+8+4+4=24 恰好铺满一行；此前 编码/回退编码 各占 lg=3，扣掉
+                 label-width 110px 后输入框只剩约 35px，连 "utf-8" 都显示不全 -->
+            <el-col :xs="24" :sm="12" :lg="8">
               <el-form-item label="规则集名称">
                 <el-input v-model="form.name" clearable />
               </el-form-item>
             </el-col>
-            <el-col :xs="24" :sm="12" :lg="6">
+            <el-col :xs="24" :sm="12" :lg="8">
               <el-form-item label="文件通配">
                 <el-input v-model="form.file_glob" placeholder="**/*" />
               </el-form-item>
             </el-col>
-            <el-col :xs="12" :sm="6" :lg="3">
+            <el-col :xs="12" :sm="6" :lg="4">
               <el-form-item label="编码">
                 <el-input v-model="form.encoding" />
               </el-form-item>
             </el-col>
-            <el-col :xs="12" :sm="6" :lg="3">
+            <el-col :xs="12" :sm="6" :lg="4">
               <el-form-item label="回退编码">
                 <el-input v-model="form.fallback_encoding" />
               </el-form-item>
@@ -406,7 +408,9 @@ onMounted(async () => {
         </el-form>
       </el-tab-pane>
 
-      <el-tab-pane label="跨版本检索" name="search">
+      <!-- lazy：检索 Tab 的表格与筛选器较重，首次切到该页签才挂载，
+           规则多时的编辑页首屏不再为其付出渲染成本 -->
+      <el-tab-pane label="跨版本检索" name="search" lazy>
         <PureTableBar
           title="规则索引"
           :columns="searchColumns"

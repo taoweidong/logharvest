@@ -291,30 +291,36 @@ onMounted(load);
     <PureTableBar title="Worker（按版本分组）" :columns="columns" @refresh="load">
       <template #buttons>
         <div class="flex flex-wrap items-center justify-end gap-2">
-          <el-select
-            v-model="statusFilter"
-            clearable
-            placeholder="状态筛选"
-            class="w-32 sm:w-36"
-          >
-            <el-option
-              v-for="item in WORKER_STATUS_OPTIONS"
-              :key="item"
-              :label="item"
-              :value="item"
-            />
-          </el-select>
-          <el-select
-            v-model="versionInput"
-            filterable
-            allow-create
-            default-first-option
-            clearable
-            placeholder="版本号"
-            class="w-36 sm:w-40"
-          >
-            <el-option v-for="v in versions" :key="v" :label="v" :value="v" />
-          </el-select>
+          <!-- 宽度挂在包裹层上：el-select 根节点自带 width:100%，直接加 w-36 会被
+               盖掉而横向撑满，把同排的按钮挤下去逐个堆叠（jobs/stats 页同款处理）。 -->
+          <div class="w-32 sm:w-36">
+            <el-select
+              v-model="statusFilter"
+              clearable
+              placeholder="状态筛选"
+              class="w-full"
+            >
+              <el-option
+                v-for="item in WORKER_STATUS_OPTIONS"
+                :key="item"
+                :label="item"
+                :value="item"
+              />
+            </el-select>
+          </div>
+          <div class="w-36 sm:w-40">
+            <el-select
+              v-model="versionInput"
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              placeholder="版本号"
+              class="w-full"
+            >
+              <el-option v-for="v in versions" :key="v" :label="v" :value="v" />
+            </el-select>
+          </div>
           <el-button
             v-perms="'workers:operate'"
             type="warning"
@@ -364,7 +370,6 @@ onMounted(load);
           <pure-table
             :size="size"
             row-key="id"
-            adaptive
             :loading="loading"
             :data="group.items"
             :columns="columns"

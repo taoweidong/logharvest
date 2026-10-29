@@ -174,7 +174,7 @@ onMounted(() => {
     <template v-else>
       <el-row v-loading="loading" :gutter="12">
         <el-col :xs="24" :sm="12" :lg="6">
-          <el-card shadow="never">
+          <el-card shadow="never" class="h-full">
             <div class="text-sm text-gray-500">作业数</div>
             <div class="text-2xl font-medium">
               {{ totals ? totals.jobs : "—" }}
@@ -198,7 +198,7 @@ onMounted(() => {
           </el-card>
         </el-col>
         <el-col :xs="24" :sm="12" :lg="6">
-          <el-card shadow="never">
+          <el-card shadow="never" class="h-full">
             <div class="text-sm text-gray-500">处理字节</div>
             <div class="text-2xl font-medium">
               {{ totals ? formatGB(totals.bytes_total) : "—" }}
@@ -209,7 +209,7 @@ onMounted(() => {
           </el-card>
         </el-col>
         <el-col :xs="24" :sm="12" :lg="6">
-          <el-card shadow="never">
+          <el-card shadow="never" class="h-full">
             <div class="text-sm text-gray-500">命中行数</div>
             <div class="text-2xl font-medium">
               {{ totals ? totals.matched_rows_total : "—" }}
@@ -217,7 +217,7 @@ onMounted(() => {
           </el-card>
         </el-col>
         <el-col :xs="24" :sm="12" :lg="6">
-          <el-card shadow="never">
+          <el-card shadow="never" class="h-full">
             <div class="text-sm text-gray-500">文件失败率</div>
             <div class="text-2xl font-medium">
               <span
