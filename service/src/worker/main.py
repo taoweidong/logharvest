@@ -211,8 +211,29 @@ class WorkerRuntime:
             self._report_status("online")
         return True
 
+    def _ensure_work_dir(self) -> None:
+        """启动即建工作目录，空闲 Worker 也能报出临时盘余量。
+
+        不建目录时 `shutil.disk_usage(work_dir)` 抛 FileNotFoundError，采集按
+        "失败降级为 None"的约定把 `temp_disk_free_bytes` 报成 NULL，而 workers 表
+        上报用的是 `COALESCE(:new, old)` —— 只要没有任务落过盘，这一列就一直是空，
+        管理端 `/api/workers` 与 `/api/system/status` 看不到磁盘水位，偏偏派活之前
+        最需要它。创建失败（临时盘没挂、属主不对）只记一条日志不阻断启动：真正写
+        盘时任务路径依旧会报错，行为不比现在更差。
+        """
+        try:
+            self._work_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._log(
+                "warning",
+                "work_dir_create_failed",
+                work_dir=str(self._work_dir),
+                error=str(exc),
+            )
+
     def run_forever(self, stop_event: Event | None = None) -> None:
         stop = stop_event or Event()
+        self._ensure_work_dir()
         self._cleanup_orphan_work_dirs()
         self._repo.register_worker(self._worker_id, socket.gethostname(), self._worker_version)
         self._recover_stale()

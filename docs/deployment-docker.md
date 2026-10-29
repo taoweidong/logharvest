@@ -101,7 +101,16 @@ curl -fsS http://localhost:8000/api/health     # {"status":"ok","service":"logha
 curl -fsS http://localhost/                    # 前端首页
 ```
 
-登录：`http://localhost/`，账号 `admin` / `LOGHARVEST_ADMIN_PASSWORD`（server 栈首次启动时由环境变量创建；如需手动种子：`docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env exec server python -m scripts.seed_admin`）。
+登录：`http://localhost/`，账号 `admin` / `LOGHARVEST_ADMIN_PASSWORD`。
+
+**管理员账号需要一次性手动种子**（应用启动只跑 Alembic 迁移 + RBAC 菜单/角色种子，不创建用户；见 `src/main.py` 的 lifespan 与 `api-contract` §2.5）：
+
+```bash
+docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env \
+  exec server python -m scripts.seed_admin
+```
+
+脚本幂等，可重复执行；`LOGHARVEST_ADMIN_PASSWORD` 已在 compose 的环境里，无需再传。**注意**：已存在的同名用户不会被改密码——换口令要直接改库或换用户名，重复跑种子无效。
 
 **启动顺序**：数据库栈 → 控制面栈 → Worker 栈。Worker 先于数据库启动也不会出错（`restart: unless-stopped` 会带动重试），但按此顺序最干净。
 
