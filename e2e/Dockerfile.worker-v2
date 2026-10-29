@@ -1,0 +1,10 @@
+# 升级演练用的"新版本" Worker 镜像：与 lh-e2e/service:worker 同一份代码，
+# 只在构建期写入一个标记文件，用来证明滚动升级换掉的是镜像本身
+# （而不是仅仅改了 LOGHARVEST_WORKER_VERSION 环境变量）。
+# 构建上下文 = service/，见 e2e/up.sh。
+ARG BASE=lh-e2e/service:worker
+FROM ${BASE}
+
+USER root
+RUN printf 'e2e-release=v2\n' > /etc/logharvest-release && chown root:root /etc/logharvest-release
+USER app
