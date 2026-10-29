@@ -190,6 +190,8 @@ flowchart TD
 
 动机：zip 声明的 `file_size` 可任意伪造，**只有实际解压出来的字节算数**——预算在流式读取路径上实时计数，这是唯一能在"读到一半"发现炸弹的位置。低于 64 MiB 不参与膨胀比判定，避免误伤正常小文件。
 
+**写侧预算**：解压预算之外还有一条命中写入预算 `max_matches_per_task`（默认 20 万，`LOGHARVEST_MAX_MATCHES_PER_TASK`）。每写入一批命中前检查累计数，达限立即停止扫描并**清理本尝试已写入的命中**（`partial` 保留），任务以 `failed + retryable=False` 终态收尾、错误文案包含 `max_matches_per_task`——空关键字/`.*` 这类规则不再能写爆 `matches` 表；等人工确认后经 `POST /api/jobs/{id}/files/retry-failed` 手动重试（写侧检查在 `processor.py`，retryable 语义在 `COMPLETE_SQL`）。
+
 ---
 
 ## 5. 规则引擎
@@ -393,8 +395,7 @@ sequenceDiagram
 
 | 边界 | 说明 |
 |---|---|
-| 登录限流为进程内计数 | 多副本实际放行量 = 阈值 × 副本数（`rate_limit.py` 文件头） |
+| 登录限流为进程内计数 | 多副本实际放行量 = 阈值 × 副本数（`rate_limit.py` 文件头）；反向代理部署需配 `LOGHARVEST_TRUSTED_PROXY_CIDRS` 按真实客户端分桶 |
 | 正则超时静默跳过且不计数 | 该行漏命中仍可能 `succeeded`（核心链路评估 P1-7，M3 议题） |
-| `max_matches_per_task` 声明未强制 | 空关键字/空正则可匹配全部行（核心链路 P0-3，修复方案见评估文档） |
 | `matches` 未按月分区 | 千万级命中下需按设计 §6.6 演进 |
 | 规则索引查询期展平 JSON | 当前版本量级可接受，代价记在主设计 §15 |

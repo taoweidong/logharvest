@@ -268,7 +268,7 @@ flowchart TB
         wRouter["router/（动态路由注入）"]
     end
 
-    subgraph WTESTS["web/tests（77 条 vitest 用例）"]
+    subgraph WTESTS["web/tests（102 条 vitest 用例）"]
         wTests["utils / rules / api / system"]
     end
 
@@ -292,7 +292,7 @@ flowchart TB
 工程纪律：
 
 - 后端 `ruff`（E/F/W/I/B/UP/SIM/PERF/RUF/BLE）+ `ruff format` 全绿；`mypy` 覆盖 domain/worker/application.worker/config。
-- 前端 `vue-tsc --noEmit` 门禁；纯逻辑一律抽 `.ts` 模块（`format.ts`、`rule-form.ts`、`pendingRequests.ts`、`sse.ts`），这是 77 条单测的前提。
+- 前端 `vue-tsc --noEmit` 门禁；纯逻辑一律抽 `.ts` 模块（`format.ts`、`rule-form.ts`、`pendingRequests.ts`、`sse.ts`），这是 102 条单测的前提。
 - `agent.md` 强制：任何代码变更提交前必须前后端测试全绿。
 
 ---

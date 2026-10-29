@@ -163,14 +163,14 @@ think/
 │   │   ├── infrastructure/   # 引擎、SKIP LOCKED 队列、批量写入、迁移
 │   │   ├── worker/           # 常驻循环（python -m src.worker）
 │   │   └── config/           # pydantic-settings 配置（强校验）
-│   ├── alembic/              # 0001 基线 ~ 0005 operation_logs
-│   ├── tests/                # 500 条用例（api/application/domain/worker/integration）
+│   ├── alembic/              # 0001 基线 ~ 0006 file_tasks 队列部分索引
+│   ├── tests/                # 686 条用例（api/application/domain/worker/integration）
 │   └── Dockerfile            # server / worker 双 target 多阶段构建
 ├── web/                      # 前端（pnpm + Vite 8 + Vue 3.5）
 │   ├── src/api/              # 按域拆分的 API 客户端与类型（契约注释）
 │   ├── src/views/            # logharvest（六屏）/ rules / system
 │   ├── src/utils/http/       # axios 封装、token 刷新队列
-│   ├── tests/                # vitest 77 条用例
+│   ├── tests/                # vitest 102 条用例
 │   ├── Dockerfile + nginx.conf
 │   └── LICENSE               # vue-pure-admin 上游 MIT 原文
 ├── deploy/                   # 三个独立 compose 栈 + 数据盘引导

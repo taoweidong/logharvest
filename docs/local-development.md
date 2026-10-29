@@ -80,7 +80,7 @@ Linux 上验证只读守卫的真实行为：把测试目录以 `ro` 方式 bind
 `agent.md` 是本仓库的强制协作规范：**任何代码变更，提交前必须前后端测试全绿**。
 
 ```bash
-# 后端（500 条用例，无需 PostgreSQL；integration/ 需 LOGHARVEST_TEST_PG_URL，默认跳过）
+# 后端（686 条用例；无 PostgreSQL 时 666 通过、20 条自动跳过——19 条集成用例 + 1 条平台相关）
 cd service
 uv run --python 3.12 pytest -q                       # 全量
 uv run --python 3.12 pytest tests/api -q             # 单目录
@@ -88,11 +88,11 @@ uv run --python 3.12 pytest -q --cov=src --cov-report=term   # 覆盖率（pytes
 uv run --python 3.12 ruff check src tests && uv run --python 3.12 ruff format --check src tests
 uv run --python 3.12 mypy
 
-# 真实 PostgreSQL 集成测试（可选，注意端口 5433 示例）
+# 真实 PostgreSQL 集成测试（可选，注意端口 5433 示例；CI 同款一键脚本见 bash scripts/run_pg_integration.sh，需 Docker）
 LOGHARVEST_TEST_PG_URL="postgresql+psycopg://logharvest:logharvest@127.0.0.1:5433/logharvest" \
   uv run --python 3.12 pytest tests/integration -q
 
-# 前端（77 条用例 + 类型检查）
+# 前端（102 条用例 + 类型检查）
 cd web
 pnpm test         # vitest run
 pnpm test:watch   # watch 模式

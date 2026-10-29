@@ -12,10 +12,11 @@ flowchart TD
 
     subgraph GATE["质量门禁（agent.md 等价物）"]
         LINT["后端静态检查<br/>uv run ruff check / ruff format --check / mypy"]
-        BT["后端单元测试<br/>uv run pytest tests -q（500 条，无需 PG）"]
-        FT["前端测试<br/>pnpm install --frozen-lockfile<br/>pnpm test（77 条）+ pnpm typecheck"]
+        BT["后端单元测试<br/>uv run pytest tests -q<br/>（686 条收集，其中 20 条集成用例<br/>无 PG 自动跳过，由下一阶段覆盖）"]
+        PGI["PostgreSQL 集成测试<br/>bash scripts/run_pg_integration.sh<br/>（一次性 PG 容器：空库迁移 +<br/>索引断言 + tests/integration）"]
+        FT["前端测试<br/>pnpm install --frozen-lockfile<br/>pnpm test（102 条）+ pnpm typecheck"]
         GQ{"全部通过?"}
-        LINT --> BT --> FT --> GQ
+        LINT --> BT --> PGI --> FT --> GQ
     end
 
     subgraph IMG["镜像"]
@@ -132,5 +133,5 @@ IMAGE_TAG=build-<上一个绿构建号> \
 
 ## 7. 与测试门禁的关系
 
-- `agent.md` 是对 AI 协作与人工提交的本地门禁，`Jenkinsfile` 是同一套门禁的 CI 强制版：`ruff`/`mypy`/`pytest`/`vitest`/`vue-tsc` 全绿是产出镜像的前置条件。
-- 真实 PostgreSQL 集成测试（`tests/integration/`，19 条）不在这条流水线里跑：需要 `LOGHARVEST_TEST_PG_URL` 指向的 PG 服务，建议放独立定时任务或带 PG sidecar 的专用节点。
+- `agent.md` 是对 AI 协作与人工提交的本地门禁，`Jenkinsfile` 是同一套门禁的 CI 强制版：`ruff`/`mypy`/`pytest`/PG 集成/`vitest`/`vue-tsc` 全绿是产出镜像的前置条件。
+- 真实 PostgreSQL 集成门禁（`PostgreSQL 集成测试` 阶段）跑 `scripts/run_pg_integration.sh`：脚本自建**一次性 PG 容器**（随机端口、退出即删，不接触部署库），执行空库 `alembic upgrade head` + `file_tasks` 部分索引断言 + `tests/integration/`（19 条，`LOGHARVEST_TEST_PG_URL` 指向该一次性容器）。单元阶段跳过的 20 条用例中，19 条 PG 集成用例由此覆盖（另 1 条是依赖 POSIX FIFO 的平台相关用例，与 PG 无关）。

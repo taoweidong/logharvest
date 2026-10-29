@@ -52,7 +52,7 @@ flowchart TB
 |---|---|---|---|
 | `/usr1/logharvest/postgres/data` | PostgreSQL 数据目录 | uid 70（pg alpine） | `PGDATA` 子目录结构由镜像初始化 |
 | `/usr1/logharvest/postgres/backup` | pg_dump 归档 | uid 70 | Jenkins 升级前自动备份 + 定时备份（`--profile backup`）共用 |
-| `/usr1/logharvest/worker/tmp` | 解压临时盘 | root（750） | 容器内挂载为 `/local-tmp`；按任务隔离、任务结束自动删除 |
+| `/usr1/logharvest/worker/tmp` | 解压临时盘 | **uid 10001**（750） | 容器内挂载为 `/local-tmp`，归 `service/Dockerfile` 的非 root `app` 用户；按任务隔离、任务结束自动删除 |
 | `/usr1/logharvest/server/logs` | Server 日志归档位 | root（750） | 当前日志走 stdout（docker logs / 收集器）；需要落盘时挂给容器 |
 
 环境变量文件（`.env`，含密钥）保留在仓库检出目录 `deploy/<栈>/.env`，**不入 git**；若安全策略要求配置也落数据盘，可将三个 `.env` 移到 `/usr1/logharvest/deploy/<栈>/.env` 并同步调整 Jenkinsfile 中的 `--env-file` 路径。
@@ -84,7 +84,7 @@ docker compose -f deploy/postgres/docker-compose.yml \
   --env-file deploy/postgres/.env up -d --wait
 docker inspect --format '{{.State.Health.Status}}' logharvest-postgres   # healthy
 
-# 3) 控制面栈（server 启动自动迁移建表 + RBAC 种子 + 管理员建号）
+# 3) 控制面栈（server 启动自动迁移建表 + RBAC 种子；管理员账号需第 4 步的一次性手动种子）
 cp deploy/server/.env.example deploy/server/.env
 vi deploy/server/.env                          # 填 JWT 密钥与 LOGHARVEST_ADMIN_PASSWORD
 docker compose -f deploy/server/docker-compose.yml \
@@ -126,10 +126,12 @@ docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env
 | server | `LOGHARVEST_JWT_SECRET_KEY` | ✅ | ≥32 字符；`python -c "import secrets; print(secrets.token_urlsafe(48))"` |
 | server | `LOGHARVEST_ADMIN_PASSWORD` | ✅ | 管理员初始口令（≥8 位），仅首次建号使用 |
 | server | `POSTGRES_PASSWORD` | ✅ | 与 postgres 栈一致（拼进连接串） |
+| server | `LOGHARVEST_TRUSTED_PROXY_CIDRS` | nginx 部署必填 | 可信反向代理 CIDR（逗号分隔）。默认空 = 不信任任何转发头；经本栈 nginx 访问时必须填 nginx 容器地址或 `logharvest-net` 网段，否则**所有登录共享代理 IP 的限流桶**（一个客户端可锁死全部用户），也不要把 8000 端口直接暴露公网 |
 | server | `IMAGE_TAG` / `REGISTRY` | 可选 | Jenkins 推送后拉取指定版本 |
 | worker | `NAS_LOGS_DIR` | ✅ | 宿主机 NAS 目录，容器内**只读**挂载到 `/nas` |
 | worker | `WORK_TMP_DIR` | 建议 | 默认 `/usr1/logharvest/worker/tmp` |
 | worker | `LOGHARVEST_ADMIN_PASSWORD` | ✅ | Settings 在生产环境强制校验非空（Worker 进程共用该配置） |
+| worker | `LOGHARVEST_MAX_MATCHES_PER_TASK` | 可选 | 单任务命中上限（默认 200000）：达限停止扫描、清理本次命中、任务 `failed` 不自动重试——防空关键字/`.*` 规则写爆 `matches` 表 |
 
 **NAS 只读是硬约束**：挂载务必带 `:ro`（worker 栈 compose 已固定）；`enforce` 策略在容器内（Linux，挂载表可读）真实生效——检测到可写时作业创建与 Worker 处理直接拒绝。
 
