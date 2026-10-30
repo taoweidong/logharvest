@@ -22,11 +22,38 @@
    * 横向 32px：沿用 12 个页面中 10 个原本的 `pl-8`；另 2 个是 pl-4(16px) 与
    * pl-2(8px)。原实现只有左内边距，右侧为 0，搜索按钮会紧贴卡片右边缘，
    * 这里补齐为左右对称，消除拥挤感。
+   *
+   * 2026-10 修正：32px 与表格面板的 16px 内缩不一致，导致搜索卡片的字段
+   * 和下方表格列左边缘错开 8~16px。统一收到 --pure-panel-padding 一个值上，
+   * 所有面板（搜索、表格、图表）内缩相同。
    */
-  --pure-search-form-padding-x: var(--pure-space-8);
-  --pure-search-form-padding-y: var(--pure-space-3);
+  --pure-search-form-padding-x: var(--pure-space-4);
+  --pure-search-form-padding-y: var(--pure-space-4);
   --pure-form-item-gap: var(--pure-space-3);
   --pure-content-margin: var(--pure-space-2);
+
+  /* ---------- 1a. 页面骨架（style/layout.scss 专用） ---------- */
+
+  /* 页面根内边距：与面板内缩同刻度，避免出现 p-4 / p-3 / px-2 三种写法 */
+  --pure-page-padding: var(--pure-space-4);
+
+  /* 面板之间的纵向节奏：此前 mb-2 / mb-3 / mt-2 / mt-3 / mt-4 混用 */
+  --pure-page-gap: var(--pure-space-3);
+
+  /* 面板内缩与标题行高度：标题行 32px 与一个默认尺寸控件等高，换行时不塌 */
+  --pure-panel-padding: var(--pure-space-4);
+  --pure-head-min-height: 32px;
+  --pure-panel-border: 1px solid var(--el-border-color-lighter);
+  --pure-panel-radius: var(--pure-radius-md);
+
+  /* 筛选行里控件之间的横向间距（换行后的纵向间距用 --pure-form-item-gap） */
+  --pure-toolbar-gap-x: var(--pure-space-6);
+
+  /* 卡片栅格的最小列宽：数据源卡、KPI 卡共用一套 auto-fill 规则 */
+  --pure-grid-min: 260px;
+
+  /* 表单栅格的列最小宽度：低于此宽度自动折到下一列 */
+  --pure-form-col-min: 280px;
 
   /* ---------- 1b. 纵向占满型面板高度 ---------- */
 
@@ -97,7 +124,12 @@
 @media (width <= 768px) {
   :root {
     /* 窄屏收紧横向内边距，给搜索控件让出更多宽度 */
-    --pure-search-form-padding-x: var(--pure-space-4);
+    --pure-search-form-padding-x: var(--pure-space-3);
+    --pure-search-form-padding-y: var(--pure-space-3);
+    --pure-page-padding: var(--pure-space-3);
+    --pure-panel-padding: var(--pure-space-3);
+    --pure-grid-min: 100%;
+    --pure-form-col-min: 100%;
     --pure-content-margin: var(--pure-space-1);
   }
 }

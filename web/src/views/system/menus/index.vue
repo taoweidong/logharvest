@@ -10,7 +10,7 @@ import { createMenu, deleteMenu, menuTree, updateMenu } from "@/api/rbac";
 import type { MenuPayload, MenuRecord, MenuType } from "@/api/rbacTypes";
 import { useAppStoreHook } from "@/store/modules/app";
 import { filterMenus, menuTypeMeta } from "../filters";
-import { ADAPTIVE_OFFSET_BOTTOM, TABLE_HEADER_CELL_STYLE } from "../table";
+import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 
 import Refresh from "~icons/ep/refresh";
 import AddFill from "~icons/ri/add-circle-line";
@@ -331,37 +331,39 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="p-4">
-    <el-form
-      :inline="true"
-      :model="filters"
-      class="search-form bg-bg_color mb-2"
-      @submit.prevent
-    >
-      <el-form-item label="菜单名称：" prop="keyword">
-        <el-input
-          v-model="filters.keyword"
-          placeholder="搜索标题 / 权限码 / 路径"
-          clearable
-          class="w-45!"
-          @keyup.enter="onSearch"
-          @clear="onResetSearch"
-        />
-      </el-form-item>
-      <el-form-item>
-        <el-button
-          type="primary"
-          :icon="useRenderIcon('ri/search-line')"
-          :loading="loading"
-          @click="onSearch"
-        >
-          搜索
-        </el-button>
-        <el-button :icon="useRenderIcon(Refresh)" @click="onResetSearch">
-          重置
-        </el-button>
-      </el-form-item>
-    </el-form>
+  <div class="page">
+    <section class="page-panel">
+      <el-form
+        :inline="true"
+        :model="filters"
+        class="search-form"
+        @submit.prevent
+      >
+        <el-form-item label="菜单名称：" prop="keyword">
+          <el-input
+            v-model="filters.keyword"
+            placeholder="搜索标题 / 权限码 / 路径"
+            clearable
+            class="w-45!"
+            @keyup.enter="onSearch"
+            @clear="onResetSearch"
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button
+            type="primary"
+            :icon="useRenderIcon('ri/search-line')"
+            :loading="loading"
+            @click="onSearch"
+          >
+            搜索
+          </el-button>
+          <el-button :icon="useRenderIcon(Refresh)" @click="onResetSearch">
+            重置
+          </el-button>
+        </el-form-item>
+      </el-form>
+    </section>
 
     <PureTableBar
       title="菜单管理"
@@ -383,8 +385,7 @@ onMounted(load);
         <pure-table
           ref="tableRef"
           row-key="id"
-          adaptive
-          :adaptiveConfig="{ offsetBottom: ADAPTIVE_OFFSET_BOTTOM }"
+          height="100%"
           align-whole="center"
           table-layout="auto"
           default-expand-all
@@ -458,9 +459,11 @@ onMounted(load);
             </el-tag>
           </template>
         </pure-table>
-        <p class="mt-3 text-sm text-gray-500">
+      </template>
+      <template #footer>
+        <span>
           内置菜单由系统维护，不能删除；名称、类型、上级、路径、组件不可修改，仅可调整标题、图标、排序与显示状态。
-        </p>
+        </span>
       </template>
     </PureTableBar>
 

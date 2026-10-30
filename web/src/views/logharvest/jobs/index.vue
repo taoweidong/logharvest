@@ -16,6 +16,7 @@ import {
 import { formatGB, formatDateTime, statusTagType } from "../format";
 import { hasPerms } from "@/utils/auth";
 import { useAppStoreHook } from "@/store/modules/app";
+import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 import CreateDialog from "./create-dialog.vue";
 
 defineOptions({ name: "Jobs" });
@@ -215,63 +216,57 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="p-4">
+  <div class="page">
     <PureTableBar title="分析作业" :columns="columns" @refresh="load">
       <template #buttons>
-        <div class="flex flex-wrap items-center justify-end gap-2">
-          <div class="w-[180px] sm:w-[220px]">
-            <el-input
-              v-model="keyword"
-              clearable
-              placeholder="关键字（本页）"
-              @keyup.enter="onSearch"
-              @clear="onSearch"
-            />
-          </div>
-          <!-- 宽度挂在包裹层上：el-select 根节点自带 width:100%，直接给组件加 w-32
-               会被盖掉，在 flex-wrap 容器里就会各占一行。 -->
-          <div class="w-32 sm:w-36">
-            <el-select
-              v-model="statusFilter"
-              clearable
-              placeholder="状态筛选"
-              class="w-full"
-              @change="onSearch"
-            >
-              <el-option
-                v-for="item in JOB_STATUS_OPTIONS"
-                :key="item"
-                :label="item"
-                :value="item"
-              />
-            </el-select>
-          </div>
-          <el-tag
-            v-if="dayHint"
-            closable
-            type="info"
-            effect="plain"
-            @close="clearDayHint"
-          >
-            UTC 日：{{ dayHint }}
-          </el-tag>
-          <el-button
-            v-perms="'jobs:write'"
-            type="primary"
-            @click="dialogVisible = true"
-          >
-            新建任务
-          </el-button>
-        </div>
+        <el-input
+          v-model="keyword"
+          clearable
+          placeholder="关键字（本页）"
+          class="w-45!"
+          @keyup.enter="onSearch"
+          @clear="onSearch"
+        />
+        <el-select
+          v-model="statusFilter"
+          clearable
+          placeholder="状态筛选"
+          class="w-36!"
+          @change="onSearch"
+        >
+          <el-option
+            v-for="item in JOB_STATUS_OPTIONS"
+            :key="item"
+            :label="item"
+            :value="item"
+          />
+        </el-select>
+        <el-tag
+          v-if="dayHint"
+          closable
+          type="info"
+          effect="plain"
+          @close="clearDayHint"
+        >
+          UTC 日：{{ dayHint }}
+        </el-tag>
+        <el-button
+          v-perms="'jobs:write'"
+          type="primary"
+          @click="dialogVisible = true"
+        >
+          新建任务
+        </el-button>
       </template>
       <template v-slot="{ size }">
         <pure-table
           :size="size"
           row-key="id"
-          adaptive
+          height="100%"
           :loading="loading"
           :data="displayRows"
           :columns="columns"
+          :header-cell-style="TABLE_HEADER_CELL_STYLE"
         >
           <template #status="{ row }">
             <el-tag
@@ -326,24 +321,22 @@ onMounted(async () => {
             </el-button>
           </template>
         </pure-table>
-        <div
-          class="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"
-        >
-          <span class="text-gray-500">
-            状态已下推到后端（<code>?status=</code>，非法值 422）；关键字与「UTC
-            日」提示 只在当前页内过滤（后端
-            <code>/jobs</code> 没有这两个参数）。列表接口不返回总数： 第
-            {{ pageIndex }} 页，本页 {{ rows.length }} 条，其中符合提示条件
-            {{ displayRows.length }} 条（截至 {{ dayjs().format("HH:mm:ss") }}）
-          </span>
-          <div class="flex gap-2">
-            <el-button :disabled="page.offset === 0 || loading" @click="goPrev">
-              上一页
-            </el-button>
-            <el-button :disabled="!hasNext || loading" @click="goNext">
-              下一页
-            </el-button>
-          </div>
+      </template>
+      <template #footer>
+        <span>
+          状态已下推到后端（<code>?status=</code>，非法值 422）；关键字与「UTC
+          日」提示 只在当前页内过滤（后端
+          <code>/jobs</code> 没有这两个参数）。列表接口不返回总数： 第
+          {{ pageIndex }} 页，本页 {{ rows.length }} 条，其中符合提示条件
+          {{ displayRows.length }} 条（截至 {{ dayjs().format("HH:mm:ss") }}）
+        </span>
+        <div class="page-foot__actions">
+          <el-button :disabled="page.offset === 0 || loading" @click="goPrev">
+            上一页
+          </el-button>
+          <el-button :disabled="!hasNext || loading" @click="goNext">
+            下一页
+          </el-button>
         </div>
       </template>
     </PureTableBar>

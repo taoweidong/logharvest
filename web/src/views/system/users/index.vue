@@ -18,7 +18,7 @@ import {
 import type { RoleRecord, UserRecord } from "@/api/rbacTypes";
 import { formatDateTime } from "@/views/logharvest/format";
 import { useAppStoreHook } from "@/store/modules/app";
-import { ADAPTIVE_OFFSET_BOTTOM, TABLE_HEADER_CELL_STYLE } from "../table";
+import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 
 import Refresh from "~icons/ep/refresh";
 import AddFill from "~icons/ri/add-circle-line";
@@ -37,7 +37,8 @@ const roles = ref<RoleRecord[]>([]);
 /** 关键字下推给后端（`?keyword=`），列表接口本身不支持状态筛选 */
 const filters = reactive({ keyword: "" });
 /** 后端列表接口是裸数组且没有 total，沿用窗口式 limit/offset 翻页 */
-const page = reactive({ limit: 20, offset: 0 });const hasNext = computed(() => rows.value.length === page.limit);
+const page = reactive({ limit: 20, offset: 0 });
+const hasNext = computed(() => rows.value.length === page.limit);
 const pageIndex = computed(() => Math.floor(page.offset / page.limit) + 1);
 
 async function load() {
@@ -327,37 +328,39 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="p-4">
-    <el-form
-      :inline="true"
-      :model="filters"
-      class="search-form bg-bg_color mb-2"
-      @submit.prevent
-    >
-      <el-form-item label="用户名称：" prop="keyword">
-        <el-input
-          v-model="filters.keyword"
-          placeholder="搜索用户名 / 昵称"
-          clearable
-          class="w-45!"
-          @keyup.enter="onSearch"
-          @clear="onSearch"
-        />
-      </el-form-item>
-      <el-form-item>
-        <el-button
-          type="primary"
-          :icon="useRenderIcon('ri/search-line')"
-          :loading="loading"
-          @click="onSearch"
-        >
-          搜索
-        </el-button>
-        <el-button :icon="useRenderIcon(Refresh)" @click="onResetSearch">
-          重置
-        </el-button>
-      </el-form-item>
-    </el-form>
+  <div class="page">
+    <section class="page-panel">
+      <el-form
+        :inline="true"
+        :model="filters"
+        class="search-form"
+        @submit.prevent
+      >
+        <el-form-item label="用户名称：" prop="keyword">
+          <el-input
+            v-model="filters.keyword"
+            placeholder="搜索用户名 / 昵称"
+            clearable
+            class="w-45!"
+            @keyup.enter="onSearch"
+            @clear="onSearch"
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button
+            type="primary"
+            :icon="useRenderIcon('ri/search-line')"
+            :loading="loading"
+            @click="onSearch"
+          >
+            搜索
+          </el-button>
+          <el-button :icon="useRenderIcon(Refresh)" @click="onResetSearch">
+            重置
+          </el-button>
+        </el-form-item>
+      </el-form>
+    </section>
 
     <PureTableBar title="用户管理" :columns="columns" @refresh="load">
       <template #buttons>
@@ -373,8 +376,7 @@ onMounted(() => {
       <template v-slot="{ size, dynamicColumns }">
         <pure-table
           row-key="id"
-          adaptive
-          :adaptiveConfig="{ offsetBottom: ADAPTIVE_OFFSET_BOTTOM }"
+          height="100%"
           align-whole="center"
           showOverflowTooltip
           table-layout="auto"
@@ -395,7 +397,9 @@ onMounted(() => {
                 {{ role.name }}
               </el-tag>
             </div>
-            <span v-else class="text-gray-400">未分配</span>
+            <span v-else class="text-[var(--el-text-color-secondary)]">
+              未分配
+            </span>
           </template>
           <template #is_active="{ row }">
             <el-tag
@@ -473,21 +477,18 @@ onMounted(() => {
             </el-dropdown>
           </template>
         </pure-table>
-        <div class="mt-3 flex items-center justify-between text-sm">
-          <span class="text-gray-500">
-            后端列表接口不返回总数；第 {{ pageIndex }} 页，本页 {{ rows.length }} 条
-          </span>
-          <div class="flex gap-2">
-            <el-button
-              :disabled="page.offset === 0 || loading"
-              @click="goPrev"
-            >
-              上一页
-            </el-button>
-            <el-button :disabled="!hasNext || loading" @click="goNext">
-              下一页
-            </el-button>
-          </div>
+      </template>
+      <template #footer>
+        <span>
+          后端列表接口不返回总数；第 {{ pageIndex }} 页，本页 {{ rows.length }} 条
+        </span>
+        <div class="page-foot__actions">
+          <el-button :disabled="page.offset === 0 || loading" @click="goPrev">
+            上一页
+          </el-button>
+          <el-button :disabled="!hasNext || loading" @click="goNext">
+            下一页
+          </el-button>
         </div>
       </template>
     </PureTableBar>
@@ -571,7 +572,7 @@ onMounted(() => {
           :value="role.id"
         />
       </el-select>
-      <p class="mt-2 text-xs text-gray-500">
+      <p class="page-hint mt-3">
         提交后会以当前选择覆盖该用户的角色集合。
       </p>
       <template #footer>

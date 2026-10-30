@@ -295,7 +295,7 @@ async function phase_datasources(ledger, st, { PHASE_LABEL }) {
     ledger.equal('列表里没有多出不该有的行（仍 3 张卡）', await page.locator('.el-card').count(), list.length + 1);
 
     // ---- ⑥ 窗口式翻页脚注 ----
-    const foot = (await page.locator('.text-gray-500').allInnerTexts()).map(norm).find((t) => t.includes('后端列表接口不返回总数'));
+    const foot = (await page.locator('.page-foot span').allInnerTexts()).map(norm).find((t) => t.includes('后端列表接口不返回总数'));
     ledger.check('脚注说明无总数 + 页码/本页条数', foot.includes(`第 1 页，本页 ${list.length + 1} 条`), foot);
     const pager = await page.getByRole('button', { name: '上一页' }).first().isDisabled();
     const nextDisabled = await page.getByRole('button', { name: '下一页' }).first().isDisabled();
@@ -331,7 +331,7 @@ async function phase_datasources(ledger, st, { PHASE_LABEL }) {
         === '还没有登记任何数据源：先新建一个挂载点', norm(await page.locator('.el-empty__description').first().innerText()));
       ledger.equal('空列表下卡片为 0', await page.locator('.el-card').count(), 0);
       ledger.check('空列表脚注「本页 0 条」', (await bodyText(page)).includes('第 1 页，本页 0 条'),
-        (await page.locator('.text-gray-500').allInnerTexts()).map(norm).join(' | '));
+        (await page.locator('.page-foot span').allInnerTexts()).map(norm).join(' | '));
     } finally {
       await offEmpty();
     }
@@ -375,7 +375,7 @@ async function phase_workers(ledger, st, { PHASE_LABEL }) {
     return out;
   };
   const headerFor = (list, version) => list.find((t) => t.startsWith(`版本 ${version} `)) ?? '';
-  const footerText = async () => (await page.locator('.text-gray-500').allInnerTexts())
+  const footerText = async () => (await page.locator('.page-foot span').allInnerTexts())
     .map(norm).find((t) => t.includes('后端列表接口不返回总数')) ?? '';
   const opsCell = (id, name) => tableRow(page, id).getByRole('button', { name, exact: true });
   let rows = [];

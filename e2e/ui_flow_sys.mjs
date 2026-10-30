@@ -354,7 +354,7 @@ async function usersLoop(ledger, st, page) {
   await step(ledger, 'U12-用户 列表口径', async () => {
     ledger.equal('用户表头（含固定操作列）', (await tableHeaderTexts(page)).join('|'),
       'ID|用户名|昵称|角色|状态|创建时间|操作');
-    const foot = norm(await page.locator('div.mt-3 span.text-gray-500').first().innerText());
+    const foot = norm(await page.locator('.page-foot span').first().innerText());
     ledger.check('脚注是窗口式口径（无总数）+ 本页条数等于接口返回条数',
       /^后端列表接口不返回总数；第 1 页，本页 \d+ 条$/.test(foot) && foot.endsWith(`${baseline.length} 条`),
       `脚注=「${foot}」 接口条数=${baseline.length}`);
@@ -697,7 +697,7 @@ async function menusLoop(ledger, st, page) {
   await step(ledger, 'U12-菜单 树表口径', async () => {
     ledger.equal('菜单表头九列', (await tableHeaderTexts(page)).join('|'),
       '标题|类型|名称/权限码|路径|组件|排序|显示|状态|操作');
-    const note = norm(await page.locator('p.text-gray-500').last().innerText());
+    const note = norm(await page.locator('.page-foot span').last().innerText());
     ledger.equal('灰条说明逐字命中', note,
       '内置菜单由系统维护，不能删除；名称、类型、上级、路径、组件不可修改，仅可调整标题、图标、排序与显示状态。');
     const row = tableRow(page, 'Users');
@@ -933,7 +933,7 @@ async function menusLoop(ledger, st, page) {
 // → 修改 → 内置角色半锁定 → 权限面板（只读 / 可写保存）→ 授权占用守卫 → 删除。
 // ---------------------------------------------------------------------------
 
-const roleFoot = (page) => page.locator('div.mt-3').last();
+const roleFoot = (page) => page.locator('.page-foot').last();
 const footSpans = async (page) => (await roleFoot(page).locator('span').allInnerTexts()).map(norm);
 const totalOf = (t) => Number((String(t).match(/共 (\d+) 条/) ?? [])[1] ?? -1);
 const roleRows = (page) => page.locator('.el-table__body .el-table__row');
@@ -1110,7 +1110,7 @@ async function phase_system(ledger, st, { PHASE_LABEL }) {
 // ---------------------------------------------------------------------------
 
 const auditRows = (page) => page.locator('.el-table__body .el-table__row');
-const auditFoot = async (page) => norm(await page.locator('div.mt-3 span.text-gray-500').first().innerText());
+const auditFoot = async (page) => norm(await page.locator('.page-foot span').first().innerText());
 const lastQuery = async (page, re) => {
   const reqs = await recentRequests(page, re);
   const req = reqs[reqs.length - 1];

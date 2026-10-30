@@ -15,7 +15,7 @@ import {
 import { listUsers } from "@/api/rbac";
 import type { UserRecord } from "@/api/rbacTypes";
 import { useAppStoreHook } from "@/store/modules/app";
-import { ADAPTIVE_OFFSET_BOTTOM, TABLE_HEADER_CELL_STYLE } from "../table";
+import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 
 import Refresh from "~icons/ep/refresh";
 import View from "~icons/ep/view";
@@ -187,125 +187,137 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="p-4">
-    <el-result
-      v-if="forbidden"
-      icon="warning"
-      title="无查看权限"
-      sub-title="操作日志需要 audit:read 权限（接口返回 403）。该权限默认只授予管理员与操作员，只读值守角色不可见。"
-    />
+  <div class="page">
+    <section v-if="forbidden" class="page-panel page-panel--grow">
+      <div class="page-empty">
+        <el-result
+          icon="warning"
+          title="无查看权限"
+          sub-title="操作日志需要 audit:read 权限（接口返回 403）。该权限默认只授予管理员与操作员，只读值守角色不可见。"
+        />
+      </div>
+    </section>
 
     <template v-else>
       <!-- 六个筛选条件放在表格上方独立一行：塞进 PureTableBar 的 #buttons 会在
            中等宽度下换行，换行部分与表格抢位置，查询/重置会点不到。
            宽度写在包裹的 div 上：Element Plus 的 select/input/datepicker 根节点
            自带 `width:100%`，直接给组件加 `w-36` 会被它盖掉而撑满整行。 -->
-      <el-form
-        :inline="true"
-        :model="form"
-        class="search-form bg-bg_color mb-2"
-        @submit.prevent
-      >
-        <el-form-item label="时间范围：">
-          <div class="w-[400px] max-w-full">
-            <el-date-picker
-              v-model="form.range"
-              type="datetimerange"
-              start-placeholder="开始时间"
-              end-placeholder="结束时间"
-              class="!w-full"
-              unlink-panels
-            />
-          </div>
-        </el-form-item>
-        <el-form-item label="操作人：">
-          <div class="w-36">
-            <el-select
-              v-model="form.actor_id"
-              clearable
-              filterable
-              :disabled="usersFailed"
-              :placeholder="usersFailed ? '用户列表不可用' : '操作人'"
-              class="w-full"
-            >
-              <el-option
-                v-for="item in users"
-                :key="item.id"
-                :label="item.username"
-                :value="item.id"
+      <section class="page-panel">
+        <el-form
+          :inline="true"
+          :model="form"
+          class="search-form"
+          @submit.prevent
+        >
+          <el-form-item label="时间范围：">
+            <div class="w-[400px] max-w-full">
+              <el-date-picker
+                v-model="form.range"
+                type="datetimerange"
+                start-placeholder="开始时间"
+                end-placeholder="结束时间"
+                class="!w-full"
+                unlink-panels
               />
-            </el-select>
-          </div>
-        </el-form-item>
-        <el-form-item label="动作族：">
-          <div class="w-36">
-            <el-select
-              v-model="form.action"
-              clearable
-              placeholder="动作族"
-              class="w-full"
-            >
-              <el-option
-                v-for="item in OPERATION_ACTION_FAMILIES"
-                :key="item"
-                :label="item"
-                :value="item"
+            </div>
+          </el-form-item>
+          <el-form-item label="操作人：">
+            <div class="w-36">
+              <el-select
+                v-model="form.actor_id"
+                clearable
+                filterable
+                :disabled="usersFailed"
+                :placeholder="usersFailed ? '用户列表不可用' : '操作人'"
+                class="w-full"
+              >
+                <el-option
+                  v-for="item in users"
+                  :key="item.id"
+                  :label="item.username"
+                  :value="item.id"
+                />
+              </el-select>
+            </div>
+          </el-form-item>
+          <el-form-item label="动作族：">
+            <div class="w-36">
+              <el-select
+                v-model="form.action"
+                clearable
+                placeholder="动作族"
+                class="w-full"
+              >
+                <el-option
+                  v-for="item in OPERATION_ACTION_FAMILIES"
+                  :key="item"
+                  :label="item"
+                  :value="item"
+                />
+              </el-select>
+            </div>
+          </el-form-item>
+          <el-form-item label="对象类型：">
+            <div class="w-32">
+              <el-select
+                v-model="form.resource_type"
+                clearable
+                placeholder="对象类型"
+                class="w-full"
+              >
+                <el-option
+                  v-for="item in OPERATION_RESOURCE_TYPES"
+                  :key="item"
+                  :label="item"
+                  :value="item"
+                />
+              </el-select>
+            </div>
+          </el-form-item>
+          <el-form-item label="对象 ID：">
+            <div class="w-28">
+              <el-input
+                v-model="form.resource_id"
+                clearable
+                placeholder="对象 ID"
+                class="w-full"
+                @keyup.enter="onSearch"
               />
-            </el-select>
-          </div>
-        </el-form-item>
-        <el-form-item label="对象类型：">
-          <div class="w-32">
-            <el-select
-              v-model="form.resource_type"
-              clearable
-              placeholder="对象类型"
-              class="w-full"
+            </div>
+          </el-form-item>
+          <el-form-item>
+            <el-button
+              type="primary"
+              :icon="useRenderIcon('ri/search-line')"
+              :loading="loading"
+              @click="onSearch"
             >
-              <el-option
-                v-for="item in OPERATION_RESOURCE_TYPES"
-                :key="item"
-                :label="item"
-                :value="item"
-              />
-            </el-select>
-          </div>
-        </el-form-item>
-        <el-form-item label="对象 ID：">
-          <div class="w-28">
-            <el-input
-              v-model="form.resource_id"
-              clearable
-              placeholder="对象 ID"
-              class="w-full"
-              @keyup.enter="onSearch"
-            />
-          </div>
-        </el-form-item>
-        <el-form-item>
-          <el-button
-            type="primary"
-            :icon="useRenderIcon('ri/search-line')"
-            :loading="loading"
-            @click="onSearch"
-          >
-            查询
-          </el-button>
-          <el-button :icon="useRenderIcon(Refresh)" :disabled="loading" @click="onReset">
-            重置
-          </el-button>
-        </el-form-item>
-      </el-form>
-      <p class="mb-2 text-xs text-gray-500">
-        时间为浏览器本地时区显示；服务端按 UTC 存储，列表不含总数、按时间倒序
-      </p>
+              查询
+            </el-button>
+            <el-button
+              :icon="useRenderIcon(Refresh)"
+              :disabled="loading"
+              @click="onReset"
+            >
+              重置
+            </el-button>
+          </el-form-item>
+        </el-form>
+
+        <p class="page-hint mt-3">
+          时间为浏览器本地时区显示；服务端按 UTC 存储，列表不含总数、按时间倒序
+        </p>
+      </section>
 
       <PureTableBar title="操作日志" :columns="columns" @refresh="load">
         <template v-slot="{ size, dynamicColumns }">
+          <!-- 空态只留一个：pure-table 自带的「暂无数据」与下面的 el-empty 不能同时挂出；
+               有错误文案要交代时显示 el-empty，其余情况由表格自己兜底 -->
           <pure-table
+            v-if="rows.length || loading"
             row-key="id"
-            adaptive
-            :adaptiveConfig="{ offsetBottom: ADAPTIVE_OFFSET_BOTTOM }"
+            height="100%"
             align-whole="center"
             showOverflowTooltip
             table-layout="auto"
@@ -331,7 +343,7 @@ onMounted(() => {
               <span v-else>{{ row.actor_name }}（账号已删除）</span>
               <div
                 v-if="row.role_hint && !isMobile"
-                class="text-xs text-gray-400"
+                class="text-xs text-[var(--el-text-color-secondary)]"
               >
                 {{ row.role_hint }}
               </div>
@@ -343,7 +355,9 @@ onMounted(() => {
                   #{{ row.resource_id }}</template
                 >
               </span>
-              <span v-else class="text-gray-400">—</span>
+              <span v-else class="text-[var(--el-text-color-secondary)]"
+                >—</span
+              >
             </template>
             <template #operation="{ row }">
               <el-button
@@ -359,25 +373,20 @@ onMounted(() => {
             </template>
           </pure-table>
           <el-empty
-            v-if="!rows.length && !loading"
+            v-else
             :description="loadError || '尚未产生写操作'"
             :image-size="70"
           />
-          <div v-else class="mt-3 flex items-center justify-between text-sm">
-            <span class="text-gray-500">
-              第 {{ pageIndex }} 页，本页 {{ rows.length }} 条
-            </span>
-            <div class="flex gap-2">
-              <el-button
-                :disabled="page.offset === 0 || loading"
-                @click="goPrev"
-              >
-                上一页
-              </el-button>
-              <el-button :disabled="!hasNext || loading" @click="goNext">
-                下一页
-              </el-button>
-            </div>
+        </template>
+        <template #footer>
+          <span>第 {{ pageIndex }} 页，本页 {{ rows.length }} 条</span>
+          <div class="page-foot__actions">
+            <el-button :disabled="page.offset === 0 || loading" @click="goPrev">
+              上一页
+            </el-button>
+            <el-button :disabled="!hasNext || loading" @click="goNext">
+              下一页
+            </el-button>
           </div>
         </template>
       </PureTableBar>
@@ -420,9 +429,9 @@ onMounted(() => {
           </div>
           <pre
             v-if="detailJson"
-            class="mt-1 overflow-auto rounded bg-gray-50 p-3 text-xs leading-6 dark:bg-gray-800"
+            class="mt-1 overflow-auto rounded bg-[var(--el-fill-color-light)] p-3 text-xs leading-6"
             >{{ detailJson }}</pre>
-          <p v-else class="mt-1 text-sm text-gray-400">该记录没有附加信息</p>
+          <p v-else class="page-hint mt-1">该记录没有附加信息</p>
         </template>
       </el-drawer>
     </template>

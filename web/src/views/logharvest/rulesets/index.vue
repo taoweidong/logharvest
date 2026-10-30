@@ -8,6 +8,7 @@ import { getRuleSet, listRuleSets } from "@/api/logharvestAdmin";
 import type { RuleSet } from "@/api/logharvestTypes";
 import { formatDateTime } from "../format";
 import { useAppStoreHook } from "@/store/modules/app";
+import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 import EditDrawer from "./edit-drawer.vue";
 
 defineOptions({ name: "RuleSets" });
@@ -33,9 +34,9 @@ async function load() {
   try {
     rows.value = await listRuleSets({ limit: page.limit, offset: page.offset });
     ruleCounts.value = {};
-    rows.value.forEach(row => {
+    rows.value.forEach((row) => {
       getRuleSet(row.id)
-        .then(detail => {
+        .then((detail) => {
           ruleCounts.value[row.id] = detail.config.rules.length;
         })
         .catch(() => {
@@ -64,7 +65,7 @@ function goMaintenance(row?: RuleSet) {
     path: "/rules/maintenance",
     query: row
       ? { rule_set_id: String(row.id), version: String(row.version) }
-      : undefined
+      : undefined,
   });
 }
 
@@ -74,57 +75,71 @@ const columns = computed<TableColumnList>(() => [
     label: "名称",
     prop: "name",
     minWidth: isMobile.value ? 160 : 200,
-    showOverflowTooltip: true
+    showOverflowTooltip: true,
   },
   { label: "版本", prop: "version", width: 90 },
   { label: "规则数", prop: "rule_count", slot: "rule_count", width: 100 },
   ...(isMobile.value
     ? []
     : ([
-        { label: "创建时间", prop: "created_at", slot: "created_at", width: 190 }
+        {
+          label: "创建时间",
+          prop: "created_at",
+          slot: "created_at",
+          width: 190,
+        },
       ] as TableColumnList)),
   {
     label: "操作",
     prop: "operation",
     slot: "operation",
     width: isMobile.value ? 130 : 200,
-    fixed: isMobile.value ? undefined : "right"
-  }
+    fixed: isMobile.value ? undefined : "right",
+  },
 ]);
 
 onMounted(load);
 </script>
 
 <template>
-  <div class="p-4">
+  <div class="page">
     <PureTableBar title="规则集" :columns="columns" @refresh="load">
       <template #buttons>
-        <div class="flex flex-wrap items-center justify-end gap-2">
-          <el-button v-perms="'rulesets:write'" @click="goMaintenance()">
-            新建规则集
-          </el-button>
-        </div>
+        <el-button v-perms="'rulesets:write'" @click="goMaintenance()">
+          新建规则集
+        </el-button>
       </template>
       <template v-slot="{ size }">
         <pure-table
           :size="size"
           row-key="id"
-          adaptive
+          height="100%"
           :loading="loading"
           :data="rows"
           :columns="columns"
+          :header-cell-style="TABLE_HEADER_CELL_STYLE"
         >
           <template #rule_count="{ row }">
-            <el-tag v-if="ruleCounts[row.id] != null" :size="size" effect="plain">
+            <el-tag
+              v-if="ruleCounts[row.id] != null"
+              :size="size"
+              effect="plain"
+            >
               {{ ruleCounts[row.id] }}
             </el-tag>
+            <!-- ui_flow_rules.mjs:534/544 用 span.text-gray-400 定位逐行回填的中间态，类名本身是测试锚点 -->
             <span v-else class="text-gray-400">加载中…</span>
           </template>
           <template #created_at="{ row }">
             {{ formatDateTime(row.created_at) }}
           </template>
           <template #operation="{ row }">
-            <el-button :size="size" link type="primary" @click="openDetail(row)">
+            <el-button
+              :size="size"
+              link
+              type="primary"
+              @click="openDetail(row)"
+            >
               详情
             </el-button>
             <el-button
@@ -138,20 +153,28 @@ onMounted(load);
             </el-button>
           </template>
         </pure-table>
-        <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
-          <span class="text-gray-500">
-            后端列表接口不返回总数与规则内容；同名规则集以版本递增共存，第
-            {{ Math.floor(page.offset / page.limit) + 1 }} 页。规则的增删改与「另存新版本」在
-            「规则管理 → 规则维护」整页完成。
-          </span>
-          <div class="flex gap-2">
-            <el-button :disabled="page.offset === 0 || loading" @click="(page.offset -= page.limit), load()">
-              上一页
-            </el-button>
-            <el-button :disabled="!hasNext || loading" @click="(page.offset += page.limit), load()">
-              下一页
-            </el-button>
-          </div>
+      </template>
+      <template #footer>
+        <span>
+          后端列表接口不返回总数与规则内容；同名规则集以版本递增共存，第
+          {{
+            Math.floor(page.offset / page.limit) + 1
+          }}
+          页。规则的增删改与「另存新版本」在 「规则管理 → 规则维护」整页完成。
+        </span>
+        <div class="page-foot__actions">
+          <el-button
+            :disabled="page.offset === 0 || loading"
+            @click="((page.offset -= page.limit), load())"
+          >
+            上一页
+          </el-button>
+          <el-button
+            :disabled="!hasNext || loading"
+            @click="((page.offset += page.limit), load())"
+          >
+            下一页
+          </el-button>
         </div>
       </template>
     </PureTableBar>

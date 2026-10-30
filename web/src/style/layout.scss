@@ -1,0 +1,277 @@
+/* ============================================================
+ * 页面骨架（Page Frame）
+ *
+ * 13 个业务页此前各自写 `p-4` + `mb-2` / `mb-3` / `mt-2` / `mt-3` / `mt-4`，
+ * 面板内缩有 16 / 24 / 32 三种，工具栏换行与页脚行高各页不一，窄屏还会
+ * 互相挤位。这里给出唯一一套结构类：页面只填内容，不再自带间距魔法数。
+ *
+ * 数值全部取自 style/tokens.scss，窄屏由 tokens 的 @media 统一收紧。
+ * 注意：本文件是全局样式表，禁止使用 :deep()（同 element-plus.scss 的约定）。
+ * ============================================================ */
+
+/* 页面根：与 element-plus.scss 的 .main-content 叠加在同一个元素上，
+   .main-content 负责外边距与纵向撑满，.page 负责内缩与节奏 */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pure-page-gap);
+  padding: var(--pure-page-padding);
+}
+
+/* 白底面板：搜索区、表格区、图表区共用一种底色、描边与圆角 */
+.page-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: var(--pure-panel-padding);
+  background: var(--el-bg-color);
+  border: var(--pure-panel-border);
+  border-radius: var(--pure-panel-radius);
+}
+
+/*
+ * 吃掉页面剩余高度的面板。
+ *
+ * --fill 用于「正文可滚动」的面板（列表页的表格面板）：flex-basis 归零，
+ *   面板高度就是视口剩余量，表格在里面自己滚，页面不再出现第二条滚动条，
+ *   也不会因为表格算高了而把内容裁掉（配合 .page-body 的 min-height: 0）。
+ * --grow 用于「正文就是一屏内容」的面板（表单、图表）：只放大不收缩，
+ *   内容超过视口时仍由页面滚动，不会被压进面板里。
+ */
+.page-panel--fill {
+  flex: 1 1 0;
+  min-height: 0;
+
+  /* 兜底：面板限高后，正文若仍超过剩余空间（分组表格、卡片列表），
+     在面板内部滚动，而不是溢出压在页脚上。正文是定高表格时不会触发。 */
+  overflow: auto;
+}
+
+.page-panel--grow {
+  flex: 1 0 auto;
+}
+
+/* 面板标题行：标题在左、操作在右，窄屏自动换行不重叠 */
+.page-panel__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pure-page-gap);
+  min-height: var(--pure-head-min-height);
+  margin-bottom: var(--pure-page-gap);
+}
+
+.page-panel__title {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--el-text-color-primary);
+}
+
+/* 工具栏 / 筛选行：控件宽度由页面自己给（w-*），这里只管对齐与换行 */
+.page-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pure-page-gap);
+  min-width: 0;
+}
+
+/*
+ * 筛选表单（el-form :inline）：与 .page-toolbar 同一套对齐，但必须多带一个
+ * .el-form--inline 才能压过 element-plus/dist/index.css —— 那份样式在
+ * main.ts 里晚于本文件引入，同权重会被它覆盖，导致每项右侧仍留 32px 死边距，
+ * 换行时行尾多出一截空隙。类名 search-form 同时是 e2e 的定位锚点，不能改。
+ */
+.search-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--pure-form-item-gap) var(--pure-toolbar-gap-x);
+  min-width: 0;
+}
+
+.search-form.el-form--inline .el-form-item {
+  margin: 0;
+}
+
+/* 窄屏（390）时控件的固定宽度必须能让位：flex 项默认 min-width:auto，
+   不显式归零就压不回行内，`max-w-full` 也拦不住整条筛选行横向溢出。 */
+.search-form .el-form-item,
+.search-form .el-form-item__content {
+  min-width: 0;
+}
+
+/* 筛选行里的整宽行（提示、alert）：换到下一行而不是挤进控件队列 */
+.search-form__wide {
+  flex: 1 0 100%;
+}
+
+/* 一行里既要放筛选又要放主操作时的右推位 */
+.page-toolbar__end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pure-space-2);
+  margin-left: auto;
+}
+
+/* 面板正文：表格、卡片列表等主体内容 */
+.page-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* 正文里的块不允许被 flex 压扁：面板一旦限高（--fill），
+   卡片列表、分组表格这类多块内容会被压缩重叠。这类页面应改传
+   :fill="false"（或 .page-panel--grow），让面板随内容长高。 */
+.page-body > * {
+  flex-shrink: 0;
+}
+
+/* 例外：表格是正文里唯一「吃掉剩余高度、在内部滚动」的块。
+   配合表格自身的 height="100%"，Element Plus 才会固定表头并让表体滚动。 */
+.page-body > .pure-table,
+.page-body > .el-table {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* flex 纵向容器默认 align-items: stretch，会把表格下面那颗「添加规则」
+   之类的按钮拉成整宽，看起来像一条工具条。按钮保持自身宽度。 */
+.page-body > .el-button {
+  align-self: flex-start;
+}
+
+/* 空态吃掉剩余高度：el-empty 自带纵向居中，提示因此落在面板正中，
+   而不是顶在上方、下面留一片白。 */
+.page-body > .el-empty {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/*
+ * 列表页表格撑满面板剩余高度。
+ *
+ * 取代 pure-table 的 adaptive：后者用 `window.innerHeight - 顶部位置 - 魔法数`
+ * 直接写死表格像素高，同一套面板在不同页面底部留白差 12~63px，页面内容一变
+ * （提示行换行、页脚出现）就要重算，还会把「暂无数据」拉成一整屏空白。
+ * 这里改由 flex 决定面板高度、百分比决定表格高度，任何一行文案变化都自动跟随。
+ * 表格自身仍需传 height="100%"，Element Plus 才会启用固定表头 + 表体内部滚动。
+ */
+.page-body > .pure-table {
+  height: 100%;
+  min-height: 0;
+}
+
+/* 说明性文字：统一 12px 次级色，跟随主题与暗色模式（不再写死 gray-500） */
+.page-hint {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+}
+
+.page-hint code {
+  padding: 0 4px;
+  font-size: 11px;
+  background: var(--el-fill-color-light);
+  border-radius: var(--pure-radius-sm);
+}
+
+/* 页脚说明里同样会出现 <code>（如 ?status=）：跟随 page-foot 自己的字号，
+   只保留「浅底圆角」的芯片观感，避免与 page-hint 的 12px 相互打架 */
+.page-foot code {
+  padding: 0 4px;
+  background: var(--el-fill-color-light);
+  border-radius: var(--pure-radius-sm);
+}
+
+/* 面板底部：计数 / 分页 / 收尾操作，顶部分隔线与正文分开 */
+.page-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pure-page-gap);
+  margin-top: var(--pure-page-gap);
+  padding-top: var(--pure-page-gap);
+  border-top: 1px solid var(--el-border-color-lighter);
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.page-foot__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pure-space-2);
+}
+
+/* 卡片栅格：等宽等高，最后一行不满时也不会留下半行空洞 */
+.page-grid {
+  display: grid;
+  gap: var(--pure-page-gap);
+  grid-template-columns: repeat(auto-fill, minmax(var(--pure-grid-min), 1fr));
+  align-content: start;
+}
+
+.page-grid > * {
+  min-width: 0;
+}
+
+/* 固定四列（KPI 卡）：随视口降为两列 / 一列 */
+.page-grid--4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (width <= 1200px) {
+  .page-grid--4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (width <= 768px) {
+  .page-grid--4 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 两列并排面板（概览、统计页的图表区） */
+.page-grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (width <= 1200px) {
+  .page-grid--2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 表单栅格：跨列字段按内容密度分配，避免一行只放两个框还拉满整宽 */
+.page-form {
+  display: grid;
+  gap: var(--pure-form-item-gap) var(--pure-space-6);
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(var(--pure-form-col-min, 280px), 1fr)
+  );
+}
+
+/* el-form-item 自带 18px 下边距，和 grid 行距叠起来会变成 30px；行距交给上面一条 */
+.page-form .el-form-item {
+  margin-bottom: 0;
+}
+
+/* 空态面板：内容不足一屏时给出下一步动作，而不是把表格拉到全屏高 */
+.page-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+}

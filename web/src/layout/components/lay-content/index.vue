@@ -220,8 +220,16 @@ const transitionMain = defineComponent({
   width: 100%;
 }
 
-.main-content {
-  flex: 1;
-  margin: 8px;
+/*
+ * .grow 原先只是 flex-grow: 1 的块级容器，页面根元素（.main-content）上的
+ * flex: 1 因此完全不生效——内容不足一屏时页面按内容高度收住，下面露出一整片
+ * 灰底。改成 flex 纵向容器后，.main-content 的 flex: 1 0 auto 才真正把工作区
+ * 铺到视口底部（外边距统一在 style/element-plus.scss 的 .main-content 定义，
+ * 此处不再重复一份 margin，避免两份声明互相覆盖）。
+ */
+.grow {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 </style>

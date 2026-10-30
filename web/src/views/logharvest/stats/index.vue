@@ -9,6 +9,7 @@ import { listDataSources } from "@/api/logharvestAdmin";
 import type { DataSource } from "@/api/logharvestTypes";
 import { formatGB, statusTagType } from "../format";
 import { useAppStoreHook } from "@/store/modules/app";
+import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 
 defineOptions({ name: "TaskStats" });
 
@@ -131,111 +132,122 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="p-4">
-    <div class="mb-3 flex flex-wrap items-center gap-3">
-      <h2 class="text-lg font-medium">任务统计</h2>
-      <el-radio-group v-model="days" :disabled="loading" @change="load">
-        <el-radio-button v-for="d in DAYS_OPTIONS" :key="d" :value="d">
-          {{ d }} 天
-        </el-radio-button>
-      </el-radio-group>
-      <!-- 宽度挂在包裹层上：el-select 自身是 width:100%，在 flex-wrap 行里会独占一行 -->
-      <div class="w-52">
-        <el-select
-          v-model="dataSourceId"
-          clearable
-          filterable
-          placeholder="全部数据源"
-          class="w-full"
-          :disabled="loading"
-          @change="load"
-        >
-          <el-option
-            v-for="item in dataSources"
-            :key="item.id"
-            :label="item.name"
-            :value="item.id"
-          />
-        </el-select>
+  <div class="page">
+    <section class="page-panel">
+      <div class="page-panel__head">
+        <h2 class="page-panel__title">任务统计</h2>
+        <div class="page-toolbar">
+          <el-radio-group v-model="days" :disabled="loading" @change="load">
+            <el-radio-button v-for="d in DAYS_OPTIONS" :key="d" :value="d">
+              {{ d }} 天
+            </el-radio-button>
+          </el-radio-group>
+          <!-- 宽度挂在包裹层上：el-select 自身是 width:100%，在 flex-wrap 行里会独占一行 -->
+          <div class="w-52">
+            <el-select
+              v-model="dataSourceId"
+              clearable
+              filterable
+              placeholder="全部数据源"
+              class="w-full"
+              :disabled="loading"
+              @change="load"
+            >
+              <el-option
+                v-for="item in dataSources"
+                :key="item.id"
+                :label="item.name"
+                :value="item.id"
+              />
+            </el-select>
+          </div>
+          <el-button :loading="loading" @click="load">刷新</el-button>
+          <span class="page-hint">日期为 UTC 日界，与本地时间可能差一天</span>
+        </div>
       </div>
-      <el-button :loading="loading" @click="load">刷新</el-button>
-      <span class="text-xs text-gray-500"
-        >日期为 UTC 日界，与本地时间可能差一天</span
-      >
-    </div>
+    </section>
 
-    <el-result
-      v-if="forbidden"
-      icon="warning"
-      title="无查看权限"
-      sub-title="任务统计需要 jobs:read 权限（接口返回 403），请联系管理员分配后重试。"
-    />
+    <section v-if="forbidden" class="page-panel page-panel--grow">
+      <div class="page-empty">
+        <el-result
+          icon="warning"
+          title="无查看权限"
+          sub-title="任务统计需要 jobs:read 权限（接口返回 403），请联系管理员分配后重试。"
+        />
+      </div>
+    </section>
 
     <template v-else>
-      <el-row v-loading="loading" :gutter="12">
-        <el-col :xs="24" :sm="12" :lg="6">
-          <el-card shadow="never" class="h-full">
-            <div class="text-sm text-gray-500">作业数</div>
-            <div class="text-2xl font-medium">
-              {{ totals ? totals.jobs : "—" }}
-            </div>
-            <div
-              v-if="totals && totals.jobs > 0"
-              class="mt-2 flex flex-wrap gap-1"
+      <div v-loading="loading" class="page-grid page-grid--4">
+        <el-card shadow="never">
+          <div class="text-sm text-[var(--el-text-color-secondary)]">
+            作业数
+          </div>
+          <div class="text-2xl font-medium">
+            {{ totals ? totals.jobs : "—" }}
+          </div>
+          <div
+            v-if="totals && totals.jobs > 0"
+            class="mt-2 flex flex-wrap gap-1"
+          >
+            <el-tag
+              v-for="item in statusQuickJumps"
+              :key="item.key"
+              :type="statusTagType(item.key)"
+              size="small"
+              effect="light"
+              class="cursor-pointer"
+              @click="goJobs({ status: String(item.key) })"
             >
-              <el-tag
-                v-for="item in statusQuickJumps"
-                :key="item.key"
-                :type="statusTagType(item.key)"
-                size="small"
-                effect="light"
-                class="cursor-pointer"
-                @click="goJobs({ status: String(item.key) })"
-              >
-                {{ item.label }} {{ totals[item.key] }}
-              </el-tag>
-            </div>
-          </el-card>
-        </el-col>
-        <el-col :xs="24" :sm="12" :lg="6">
-          <el-card shadow="never" class="h-full">
-            <div class="text-sm text-gray-500">处理字节</div>
-            <div class="text-2xl font-medium">
-              {{ totals ? formatGB(totals.bytes_total) : "—" }}
-            </div>
-            <div v-if="totals" class="mt-2 text-xs text-gray-500">
-              文件任务共 {{ totals.files_total }} 个
-            </div>
-          </el-card>
-        </el-col>
-        <el-col :xs="24" :sm="12" :lg="6">
-          <el-card shadow="never" class="h-full">
-            <div class="text-sm text-gray-500">命中行数</div>
-            <div class="text-2xl font-medium">
-              {{ totals ? totals.matched_rows_total : "—" }}
-            </div>
-          </el-card>
-        </el-col>
-        <el-col :xs="24" :sm="12" :lg="6">
-          <el-card shadow="never" class="h-full">
-            <div class="text-sm text-gray-500">文件失败率</div>
-            <div class="text-2xl font-medium">
-              <span
-                v-if="failureRate !== null"
-                :class="failureRate > 10 ? 'text-red-600' : 'text-green-700'"
-              >
-                {{ failureRate.toFixed(1) }}%
-              </span>
-              <span v-else class="text-gray-400">未知</span>
-            </div>
-            <div v-if="totals" class="mt-2 text-xs text-gray-500">
-              成功 {{ totals.file_succeeded }} / 失败 {{ totals.file_failed }}
-            </div>
-          </el-card>
-        </el-col>
-      </el-row>
+              {{ item.label }} {{ totals[item.key] }}
+            </el-tag>
+          </div>
+        </el-card>
+        <el-card shadow="never">
+          <div class="text-sm text-[var(--el-text-color-secondary)]">
+            处理字节
+          </div>
+          <div class="text-2xl font-medium">
+            {{ totals ? formatGB(totals.bytes_total) : "—" }}
+          </div>
+          <div v-if="totals" class="page-hint mt-2">
+            文件任务共 {{ totals.files_total }} 个
+          </div>
+        </el-card>
+        <el-card shadow="never">
+          <div class="text-sm text-[var(--el-text-color-secondary)]">
+            命中行数
+          </div>
+          <div class="text-2xl font-medium">
+            {{ totals ? totals.matched_rows_total : "—" }}
+          </div>
+        </el-card>
+        <el-card shadow="never">
+          <div class="text-sm text-[var(--el-text-color-secondary)]">
+            文件失败率
+          </div>
+          <div class="text-2xl font-medium">
+            <span
+              v-if="failureRate !== null"
+              :class="
+                failureRate > 10
+                  ? 'text-[var(--el-color-danger)]'
+                  : 'text-[var(--el-color-success)]'
+              "
+            >
+              {{ failureRate.toFixed(1) }}%
+            </span>
+            <span v-else class="text-[var(--el-text-color-placeholder)]"
+              >未知</span
+            >
+          </div>
+          <div v-if="totals" class="page-hint mt-2">
+            成功 {{ totals.file_succeeded }} / 失败 {{ totals.file_failed }}
+          </div>
+        </el-card>
+      </div>
 
-      <el-card v-loading="loading" shadow="never" class="mt-3">
+      <el-card v-loading="loading" shadow="never">
         <template #header
           >每日趋势（{{ days }} 天，条形长度按命中行数归一）</template
         >
@@ -248,12 +260,14 @@ onMounted(() => {
           <div
             v-for="row in daily"
             :key="row.date"
-            class="daily-row cursor-pointer rounded px-2 py-1 hover:bg-gray-50"
+            class="daily-row cursor-pointer rounded px-2 py-1 hover:bg-[var(--el-fill-color-light)]"
             @click="goJobs({ date: row.date })"
           >
             <div class="flex items-center justify-between text-sm">
               <span class="w-24 font-mono">{{ row.date }}</span>
-              <span class="hidden text-gray-500 sm:inline">
+              <span
+                class="hidden text-[var(--el-text-color-secondary)] sm:inline"
+              >
                 作业 {{ row.jobs_created }} · 字节
                 {{ formatGB(row.bytes_total) }}
               </span>
@@ -286,7 +300,7 @@ onMounted(() => {
               :status="row.files_failed > 0 ? 'warning' : 'success'"
             />
           </div>
-          <p class="pt-1 text-xs text-gray-500">
+          <p class="page-hint pt-1">
             点击某一行跳「任务创建」列表并带上当日条件；点「成/败」标签额外带上状态条件。
           </p>
         </div>
@@ -297,16 +311,16 @@ onMounted(() => {
         />
       </el-card>
 
-      <el-card shadow="never" class="mt-3">
+      <el-card shadow="never" class="page-panel--grow">
         <template #header>Top 规则（按命中行数）</template>
         <pure-table
           v-if="topRules.length || loading"
           row-key="rule_id"
-          adaptive
           :size="isMobile ? 'small' : 'default'"
           :loading="loading"
           :data="topRules"
           :columns="topRuleColumns"
+          :header-cell-style="TABLE_HEADER_CELL_STYLE"
         />
         <el-empty v-else description="该时间段没有命中" :image-size="60" />
       </el-card>

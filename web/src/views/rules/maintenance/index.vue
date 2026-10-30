@@ -11,6 +11,7 @@ import type { RuleIndexRow } from "@/api/analyticsTypes";
 import type { RuleSet } from "@/api/logharvestTypes";
 import { hasPerms } from "@/utils/auth";
 import { useAppStoreHook } from "@/store/modules/app";
+import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 import RuleTable from "./rule-table.vue";
 import {
   fromRule,
@@ -296,115 +297,118 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="p-4">
+  <div class="page">
     <el-tabs v-model="activeTab">
       <el-tab-pane :label="canWrite ? '编辑规则' : '查看规则'" name="edit">
-        <div class="mb-3 flex flex-wrap items-center gap-2">
-          <!-- 宽度挂在包裹层上：el-select 自身 width:100%，在 flex-wrap 行里会独占一行 -->
-          <div class="w-56">
-            <el-select
-              v-model="selectedName"
-              :loading="loadingSets"
-              filterable
-              placeholder="选择规则集"
-              class="w-full"
-              :disabled="!canWrite || loadingDetail"
-              @change="onNameChange"
-            >
-              <el-option
-                v-for="name in nameOptions"
-                :key="name"
-                :label="name"
-                :value="name"
-              />
-            </el-select>
+        <section class="page-panel rule-picker">
+          <div class="page-panel__head">
+            <div class="page-toolbar">
+              <!-- 宽度挂在包裹层上：el-select 自身 width:100%，在 flex-wrap 行里会独占一行 -->
+              <div class="w-56">
+                <el-select
+                  v-model="selectedName"
+                  :loading="loadingSets"
+                  filterable
+                  placeholder="选择规则集"
+                  class="w-full"
+                  :disabled="!canWrite || loadingDetail"
+                  @change="onNameChange"
+                >
+                  <el-option
+                    v-for="name in nameOptions"
+                    :key="name"
+                    :label="name"
+                    :value="name"
+                  />
+                </el-select>
+              </div>
+              <div class="w-44">
+                <el-select
+                  v-model="selectedId"
+                  placeholder="选择版本"
+                  class="w-full"
+                  :disabled="!selectedName || loadingDetail"
+                  @change="onVersionChange"
+                >
+                  <el-option
+                    v-for="item in versionOptions"
+                    :key="item.id"
+                    :label="`v${item.version}（#${item.id}）`"
+                    :value="item.id"
+                  />
+                </el-select>
+              </div>
+              <span class="page-hint"
+                >另存为新版本时同名版本号由后端自动 +1</span
+              >
+            </div>
           </div>
-          <div class="w-44">
-            <el-select
-              v-model="selectedId"
-              placeholder="选择版本"
-              class="w-full"
-              :disabled="!selectedName || loadingDetail"
-              @change="onVersionChange"
-            >
-              <el-option
-                v-for="item in versionOptions"
-                :key="item.id"
-                :label="`v${item.version}（#${item.id}）`"
-                :value="item.id"
-              />
-            </el-select>
-          </div>
-          <span class="text-xs text-gray-500">
-            另存为新版本时同名版本号由后端自动 +1
-          </span>
-        </div>
+        </section>
 
         <el-form
           v-loading="loadingDetail"
           :model="form"
           :disabled="!canWrite"
           label-width="110px"
+          class="rule-form"
         >
-          <el-row :gutter="12">
-            <!-- 8+8+4+4=24 恰好铺满一行；此前 编码/回退编码 各占 lg=3，扣掉
-                 label-width 110px 后输入框只剩约 35px，连 "utf-8" 都显示不全 -->
-            <el-col :xs="24" :sm="12" :lg="8">
+          <section class="page-panel">
+            <div class="page-form">
               <el-form-item label="规则集名称">
                 <el-input v-model="form.name" clearable />
               </el-form-item>
-            </el-col>
-            <el-col :xs="24" :sm="12" :lg="8">
               <el-form-item label="文件通配">
                 <el-input v-model="form.file_glob" placeholder="**/*" />
               </el-form-item>
-            </el-col>
-            <el-col :xs="12" :sm="6" :lg="4">
               <el-form-item label="编码">
                 <el-input v-model="form.encoding" />
               </el-form-item>
-            </el-col>
-            <el-col :xs="12" :sm="6" :lg="4">
               <el-form-item label="回退编码">
                 <el-input v-model="form.fallback_encoding" />
               </el-form-item>
-            </el-col>
-          </el-row>
+            </div>
+          </section>
 
-          <el-divider content-position="left">
-            规则（{{ form.rules.length }} 条）
-          </el-divider>
-          <RuleTable
-            :rows="form.rules"
-            :readonly="!canWrite"
-            @add="onAddRule"
-            @remove="onRemoveRule"
-            @move="onMoveRule"
-          />
+          <section class="page-panel page-panel--fill">
+            <el-divider content-position="left">
+              规则（{{ form.rules.length }} 条）
+            </el-divider>
+            <RuleTable
+              class="page-body"
+              :rows="form.rules"
+              :readonly="!canWrite"
+              @add="onAddRule"
+              @remove="onRemoveRule"
+              @move="onMoveRule"
+            />
 
-          <el-alert
-            v-if="backendError"
-            type="error"
-            :closable="false"
-            show-icon
-            class="mt-3"
-          >
-            <pre class="whitespace-pre-wrap">{{ backendError }}</pre>
-          </el-alert>
-
-          <div v-if="canWrite" class="mt-3 flex items-center gap-2">
-            <el-button
-              type="primary"
-              :loading="saving"
-              :disabled="!selectedId || !form.rules.length"
-              @click="onSave"
+            <el-alert
+              v-if="backendError"
+              type="error"
+              :closable="false"
+              show-icon
+              class="mt-3"
             >
-              另存为新版本
-            </el-button>
-            <span class="text-xs text-gray-500">
-              保存后留在当前编辑态，可继续调整；正则编译等校验以后端 422 为准。
-            </span>
-          </div>
+              <pre class="whitespace-pre-wrap">{{ backendError }}</pre>
+            </el-alert>
+
+            <div v-if="canWrite" class="page-foot">
+              <span
+                >保存后留在当前编辑态，可继续调整；正则编译等校验以后端 422
+                为准。</span
+              >
+              <div class="page-foot__actions">
+                <el-button
+                  type="primary"
+                  :loading="saving"
+                  :disabled="!selectedId || !form.rules.length"
+                  @click="onSave"
+                >
+                  另存为新版本
+                </el-button>
+              </div>
+            </div>
+          </section>
         </el-form>
       </el-tab-pane>
 
@@ -417,7 +421,7 @@ onMounted(async () => {
           @refresh="doSearch"
         >
           <template #buttons>
-            <div class="flex flex-wrap items-center gap-2">
+            <div class="page-toolbar">
               <el-input
                 v-model="search.keyword"
                 clearable
@@ -449,10 +453,11 @@ onMounted(async () => {
           <template v-slot="{ size }">
             <pure-table
               :size="size"
-              adaptive
+              height="100%"
               :loading="searching"
               :data="searchRows"
               :columns="searchColumns"
+              :header-cell-style="TABLE_HEADER_CELL_STYLE"
             >
               <template #type="{ row }">
                 <el-tag :size="size" effect="plain">{{ row.type }}</el-tag>
@@ -473,28 +478,28 @@ onMounted(async () => {
                 </el-button>
               </template>
             </pure-table>
-            <div class="mt-3 flex items-center justify-between text-sm">
-              <span class="text-gray-500">
-                {{
-                  searchSearched
-                    ? `后端列表接口不返回总数；第 ${searchPageIndex} 页，本页 ${searchRows.length} 条`
-                    : "跨版本检索是后端查询期解析 config，未执行检索"
-                }}
-              </span>
-              <div class="flex gap-2">
-                <el-button
-                  :disabled="searchPage.offset === 0 || searching"
-                  @click="searchPrev"
-                >
-                  上一页
-                </el-button>
-                <el-button
-                  :disabled="!searchHasNext || searching"
-                  @click="searchNext"
-                >
-                  下一页
-                </el-button>
-              </div>
+          </template>
+          <template #footer>
+            <span>
+              {{
+                searchSearched
+                  ? `后端列表接口不返回总数；第 ${searchPageIndex} 页，本页 ${searchRows.length} 条`
+                  : "跨版本检索是后端查询期解析 config，未执行检索"
+              }}
+            </span>
+            <div class="page-foot__actions">
+              <el-button
+                :disabled="searchPage.offset === 0 || searching"
+                @click="searchPrev"
+              >
+                上一页
+              </el-button>
+              <el-button
+                :disabled="!searchHasNext || searching"
+                @click="searchNext"
+              >
+                下一页
+              </el-button>
             </div>
           </template>
         </PureTableBar>
@@ -502,3 +507,43 @@ onMounted(async () => {
     </el-tabs>
   </div>
 </template>
+
+<style scoped>
+/*
+ * el-tabs 的根与内容区默认不参与撑高：.page 的剩余高度走到 el-tabs 就断了，
+ * 编辑页底部因此露出一整片灰底。这里把 tabs → content → pane 接成纵向 flex 链，
+ * 面板上的 .page-panel--grow / --fill 才有确定高度可依据。
+ */
+.el-tabs {
+  flex: 1 0 auto;
+  min-width: 0;
+}
+
+:deep(.el-tabs__content) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+:deep(.el-tab-pane) {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  gap: var(--pure-page-gap);
+  min-width: 0;
+}
+
+/* 编辑 Tab 的三个面板由 el-form 承载（disabled 靠 provide 下发），同样要接上这个节奏 */
+.rule-form {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  gap: var(--pure-page-gap);
+  min-width: 0;
+}
+
+/* 选取版本的面板只有一行标题行，标题行下方的 12px 预留是多余空白 */
+.rule-picker > .page-panel__head {
+  margin-bottom: 0;
+}
+</style>

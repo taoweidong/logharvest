@@ -5,6 +5,7 @@ import { getRuleSet } from "@/api/logharvestAdmin";
 import type { Rule, RuleSetDetail } from "@/api/logharvestTypes";
 import { formatDateTime, formatDetailError } from "../format";
 import { hasPerms } from "@/utils/auth";
+import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 
 defineOptions({ name: "RuleSetDetailDrawer" });
 
@@ -132,13 +133,13 @@ function goMaintenance() {
         </el-descriptions>
 
         <pure-table
-          class="mt-4"
+          class="mt-3"
           size="small"
           row-key="id"
-          adaptive
           :border="true"
           :data="state.detail.config.rules"
           :columns="ruleColumns"
+          :header-cell-style="TABLE_HEADER_CELL_STYLE"
         >
           <template #enabled="{ row }">
             <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="plain">
@@ -161,15 +162,15 @@ function goMaintenance() {
     </div>
 
     <template #footer>
-      <div class="flex items-center justify-between gap-3">
-        <span class="text-xs text-gray-500">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <span class="page-hint">
           {{
             canWrite
               ? "规则编辑已迁到「规则维护」整页：改完另存为新版本（同名版本 max+1）"
               : "当前账号只有只读权限，界面不提供任何写入口"
           }}
         </span>
-        <div class="flex gap-2">
+        <div class="page-foot__actions">
           <el-button @click="visible = false">关闭</el-button>
           <el-button
             v-if="canWrite"

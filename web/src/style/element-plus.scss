@@ -177,34 +177,39 @@
 /* ============================================================
  * 布局一致性：由设计令牌（style/tokens.scss）驱动
  *
- * 以下两条规则此前被 12 个页面 / 7 个列表页各写一份，出现三种内边距
- * 与两种表单项间距的分叉。收敛到全局后，窄屏由 tokens.scss 的
- * @media (width <= 768px) 自动收紧，无需各页面重复适配。
+ * 页面骨架的 .page / .page-panel / .search-form 等结构类在
+ * style/layout.scss；这里只留必须贴着 Element Plus 组件写的两条。
  * ============================================================ */
 
-/* 搜索表单容器 */
-.search-form {
-  padding: var(--pure-search-form-padding-y) var(--pure-search-form-padding-x) 0;
+/*
+ * el-card 与 .page-panel 对齐：Element Plus 默认 20px 内缩、4px 圆角，
+ * 和面板那套（16px / 6px）并排放在一起会看出两种盒子。
+ * 只改这两个变量，卡片自身的边框、底色仍走 EP 主题。
+ */
+.el-card {
+  --el-card-padding: var(--pure-panel-padding);
 
-  /*
-   * 注意：这里是**全局**样式表，不能写 :deep()。
-   * :deep() 由 @vitejs/plugin-vue 在编译 SFC 的 <style scoped> 时重写，
-   * 独立的 .scss 文件不会经过该处理，产物里会保留字面量 `:deep(...)`，
-   * 成为无效选择器并被浏览器整条丢弃。
-   */
-  .el-form-item {
-    margin-bottom: var(--pure-form-item-gap);
-  }
+  border-radius: var(--pure-panel-radius);
 }
 
 /*
- * 列表页主内容区外边距。
+ * 列表页主内容区。
+ *
+ * 两处修正：
+ * 1. 原先只给上、左、右三条边距，底边被写成 0（且带 !important），
+ *    页面最后一块面板永远贴着页脚，视觉上像被裁掉；四边统一取
+ *    --pure-content-margin。
+ * 2. flex: 1 0 auto —— 配合 lay-content 里 .grow 的 flex 纵向布局，
+ *    让内容不足一屏的页面由面板自己铺到视口底部，而不是留一片灰底。
+ *    用 0 收缩保证内容超长时仍然正常滚动，不会被压扁。
+ *
  * 注意：error / about 页的 `margin: 0 !important`、frame 页的 `2px 0 0`
  * 是**有意**的全屏与内嵌布局，写在其自带 scoped 样式中，
  * 特性值（.main-content[data-v-x]）高于本条，不会被覆盖。
  */
 .main-content {
-  margin: var(--pure-content-margin) var(--pure-content-margin) 0 !important;
+  flex: 1 0 auto;
+  margin: var(--pure-content-margin) !important;
 }
 
 /* 仿 el-scrollbar 滚动条样式，支持大多数浏览器，如Chrome、Edge、Firefox、Safari等。整体暗色风格在 src/style/dark.scss 文件进行了适配 */

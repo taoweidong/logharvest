@@ -7,17 +7,14 @@ import { apiErrorDetail } from "@/api/logharvest";
 import {
   createDataSource,
   listDataSources,
-  testDataSource
+  testDataSource,
 } from "@/api/logharvestAdmin";
 import type { DataSource, DataSourceTestResult } from "@/api/logharvestTypes";
 import { formatDateTime } from "../format";
-import { useAppStoreHook } from "@/store/modules/app";
 
 defineOptions({ name: "DataSources" });
 
 const router = useRouter();
-const appStore = useAppStoreHook();
-const isMobile = computed(() => appStore.device === "mobile");
 
 const loading = ref(false);
 const rows = ref<DataSource[]>([]);
@@ -36,17 +33,22 @@ const formRef = ref<FormInstance>();
 const createForm = reactive({
   name: "",
   root_path: "",
-  description: ""
+  description: "",
 });
 const createRules: FormRules = {
   name: [{ required: true, message: "请填写数据源名称", trigger: "blur" }],
-  root_path: [{ required: true, message: "请填写挂载点绝对路径", trigger: "blur" }]
+  root_path: [
+    { required: true, message: "请填写挂载点绝对路径", trigger: "blur" },
+  ],
 };
 
 async function load() {
   loading.value = true;
   try {
-    rows.value = await listDataSources({ limit: page.limit, offset: page.offset });
+    rows.value = await listDataSources({
+      limit: page.limit,
+      offset: page.offset,
+    });
   } catch (error) {
     rows.value = [];
     message(apiErrorDetail(error, "数据源列表加载失败"), { type: "error" });
@@ -72,7 +74,7 @@ async function onTest(row: DataSource) {
 const TEST_FLAG_LABELS: Record<"exists" | "is_dir" | "readable", string> = {
   exists: "存在",
   is_dir: "目录",
-  readable: "可读"
+  readable: "可读",
 };
 
 /**
@@ -101,7 +103,7 @@ async function onCreate() {
       root_path: createForm.root_path.trim(),
       // 后端 `read_only` 是 Literal[True]，只接受 true，界面不提供开关
       read_only: true,
-      description: createForm.description
+      description: createForm.description,
     });
     message(`数据源“${created.name}”已创建`, { type: "success" });
     createVisible.value = false;
@@ -120,139 +122,151 @@ async function onCreate() {
 function useForJob(row: DataSource) {
   router.push({
     path: "/logharvest/jobs",
-    query: { data_source_id: String(row.id) }
+    query: { data_source_id: String(row.id) },
   });
 }
-
-const cardClass = computed(() =>
-  isMobile.value ? "w-full" : "w-[calc(50%-0.5rem)] xl:w-[calc(33.333%-0.7rem)]"
-);
 
 onMounted(load);
 </script>
 
 <template>
-  <div class="p-4">
-    <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-      <div>
-        <span class="text-base font-medium">数据源</span>
-        <span class="ml-2 text-xs text-gray-500">
-          企业磁盘挂载点登记；后端强制只读，处理时不会回写源目录
-        </span>
-      </div>
-      <div class="flex items-center gap-2">
-        <el-button :disabled="loading" @click="load">刷新</el-button>
-        <el-button
-          v-perms="'datasources:write'"
-          type="primary"
-          @click="createVisible = true"
-        >
-          新建数据源
-        </el-button>
-      </div>
-    </div>
-
-    <div v-loading="loading" class="flex flex-wrap gap-4">
-      <el-card
-        v-for="row in rows"
-        :key="row.id"
-        shadow="never"
-        :class="cardClass"
-      >
-        <div class="flex items-start justify-between gap-2">
-          <div class="min-w-0">
-            <div class="truncate text-sm font-medium">
-              {{ row.name }}
-              <span class="text-xs text-gray-400">#{{ row.id }}</span>
-            </div>
-            <div class="mt-1 break-all font-mono text-xs text-gray-600 dark:text-gray-300">
-              {{ row.root_path }}
-            </div>
-          </div>
-          <div class="flex shrink-0 flex-col items-end gap-1">
-            <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="plain">
-              {{ row.enabled ? "启用" : "停用" }}
-            </el-tag>
-            <el-tag
-              :type="row.read_only ? 'success' : 'danger'"
-              size="small"
-              effect="plain"
-            >
-              登记只读：{{ row.read_only ? "是" : "否" }}
-            </el-tag>
-          </div>
-        </div>
-
-        <p v-if="row.description" class="mt-2 text-xs text-gray-500">
-          {{ row.description }}
+  <div class="page">
+    <section class="page-panel">
+      <div class="page-panel__head">
+        <p class="page-panel__title">
+          数据源
+          <span class="page-hint font-normal">
+            企业磁盘挂载点登记；后端强制只读，处理时不会回写源目录
+          </span>
         </p>
-
-        <div class="mt-2 min-h-[1.75rem]">
-          <div v-if="testResults[row.id]" class="flex flex-wrap gap-1">
-            <el-tag
-              v-for="flag in (['exists', 'is_dir', 'readable'] as const)"
-              :key="flag"
-              size="small"
-              :type="testResults[row.id][flag] ? 'success' : 'danger'"
-              effect="plain"
-            >
-              {{ TEST_FLAG_LABELS[flag] }}: {{ testResults[row.id][flag] ? "✓" : "✗" }}
-            </el-tag>
-            <el-tag
-              size="small"
-              :type="readonlyVerdict(testResults[row.id]).type"
-              effect="plain"
-            >
-              {{ readonlyVerdict(testResults[row.id]).text }}
-            </el-tag>
-          </div>
-          <span v-else class="text-xs text-gray-400">路径未测试</span>
+        <div class="page-toolbar__end">
+          <el-button :disabled="loading" @click="load">刷新</el-button>
+          <el-button
+            v-perms="'datasources:write'"
+            type="primary"
+            @click="createVisible = true"
+          >
+            新建数据源
+          </el-button>
         </div>
-
-        <div class="mt-3 flex items-center justify-between">
-          <span class="text-xs text-gray-400">{{ formatDateTime(row.created_at) }}</span>
-          <div class="flex gap-2">
-            <el-button
-              link
-              type="primary"
-              :loading="testing === row.id"
-              @click="onTest(row)"
-            >
-              测试路径
-            </el-button>
-            <el-button v-perms="'jobs:write'" link type="primary" @click="useForJob(row)">
-              用它建任务
-            </el-button>
-          </div>
-        </div>
-      </el-card>
-
-      <el-empty
-        v-if="!loading && rows.length === 0"
-        description="还没有登记任何数据源：先新建一个挂载点"
-        class="w-full"
-      />
-    </div>
-
-    <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
-      <span class="text-gray-500">
-        后端列表接口不返回总数；第 {{ pageIndex }} 页，本页 {{ rows.length }} 条
-      </span>
-      <div class="flex gap-2">
-        <el-button
-          :disabled="page.offset === 0 || loading"
-          @click="(page.offset -= page.limit), load()"
-        >
-          上一页
-        </el-button>
-        <el-button
-          :disabled="!hasNext || loading"
-          @click="(page.offset += page.limit), load()"
-        >
-          下一页
-        </el-button>
       </div>
-    </div>
+    </section>
+
+    <section class="page-panel page-panel--grow">
+      <div v-loading="loading" class="page-body">
+        <div v-if="rows.length" class="page-grid">
+          <el-card v-for="row in rows" :key="row.id" shadow="never">
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0">
+                <div class="truncate text-sm font-medium">
+                  {{ row.name }}
+                  <span class="page-hint">#{{ row.id }}</span>
+                </div>
+                <div
+                  class="mt-1 break-all font-mono text-xs text-[var(--el-text-color-secondary)]"
+                >
+                  {{ row.root_path }}
+                </div>
+              </div>
+              <div class="flex shrink-0 flex-col items-end gap-1">
+                <el-tag
+                  :type="row.enabled ? 'success' : 'info'"
+                  size="small"
+                  effect="plain"
+                >
+                  {{ row.enabled ? "启用" : "停用" }}
+                </el-tag>
+                <el-tag
+                  :type="row.read_only ? 'success' : 'danger'"
+                  size="small"
+                  effect="plain"
+                >
+                  登记只读：{{ row.read_only ? "是" : "否" }}
+                </el-tag>
+              </div>
+            </div>
+
+            <p v-if="row.description" class="page-hint mt-2">
+              {{ row.description }}
+            </p>
+
+            <div class="mt-2 min-h-[1.75rem]">
+              <div v-if="testResults[row.id]" class="flex flex-wrap gap-1">
+                <el-tag
+                  v-for="flag in ['exists', 'is_dir', 'readable'] as const"
+                  :key="flag"
+                  size="small"
+                  :type="testResults[row.id][flag] ? 'success' : 'danger'"
+                  effect="plain"
+                >
+                  {{ TEST_FLAG_LABELS[flag] }}:
+                  {{ testResults[row.id][flag] ? "✓" : "✗" }}
+                </el-tag>
+                <el-tag
+                  size="small"
+                  :type="readonlyVerdict(testResults[row.id]).type"
+                  effect="plain"
+                >
+                  {{ readonlyVerdict(testResults[row.id]).text }}
+                </el-tag>
+              </div>
+              <span v-else class="page-hint">路径未测试</span>
+            </div>
+
+            <div class="mt-3 flex items-center justify-between">
+              <span class="page-hint">{{
+                formatDateTime(row.created_at)
+              }}</span>
+              <div class="flex gap-2">
+                <el-button
+                  link
+                  type="primary"
+                  :loading="testing === row.id"
+                  @click="onTest(row)"
+                >
+                  测试路径
+                </el-button>
+                <el-button
+                  v-perms="'jobs:write'"
+                  link
+                  type="primary"
+                  @click="useForJob(row)"
+                >
+                  用它建任务
+                </el-button>
+              </div>
+            </div>
+          </el-card>
+        </div>
+
+        <el-empty
+          v-else-if="!loading"
+          description="还没有登记任何数据源：先新建一个挂载点"
+          class="page-empty"
+        />
+      </div>
+
+      <div class="page-foot">
+        <span>
+          后端列表接口不返回总数；第 {{ pageIndex }} 页，本页
+          {{ rows.length }} 条
+        </span>
+        <div class="page-foot__actions">
+          <el-button
+            :disabled="page.offset === 0 || loading"
+            @click="((page.offset -= page.limit), load())"
+          >
+            上一页
+          </el-button>
+          <el-button
+            :disabled="!hasNext || loading"
+            @click="((page.offset += page.limit), load())"
+          >
+            下一页
+          </el-button>
+        </div>
+      </div>
+    </section>
 
     <el-dialog
       v-model="createVisible"
@@ -261,9 +275,18 @@ onMounted(load);
       :close-on-click-modal="false"
       append-to-body
     >
-      <el-form ref="formRef" :model="createForm" :rules="createRules" label-width="100px">
+      <el-form
+        ref="formRef"
+        :model="createForm"
+        :rules="createRules"
+        label-width="100px"
+      >
         <el-form-item label="名称" prop="name">
-          <el-input v-model="createForm.name" clearable placeholder="唯一名称，重名返回 409" />
+          <el-input
+            v-model="createForm.name"
+            clearable
+            placeholder="唯一名称，重名返回 409"
+          />
         </el-form-item>
         <el-form-item label="根路径" prop="root_path">
           <el-input
@@ -276,7 +299,11 @@ onMounted(load);
           <el-input model-value="true（后端强制只读，不提供开关）" disabled />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="createForm.description" type="textarea" :rows="2" />
+          <el-input
+            v-model="createForm.description"
+            type="textarea"
+            :rows="2"
+          />
         </el-form-item>
       </el-form>
       <template #footer>

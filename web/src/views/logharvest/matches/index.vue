@@ -7,6 +7,7 @@ import { apiErrorDetail, listJobs, listMatches } from "@/api/logharvest";
 import { SEVERITY_OPTIONS, type Job, type Match } from "@/api/logharvestTypes";
 import { formatDateTime, severityTagType, toApiDateTime } from "../format";
 import { useAppStoreHook } from "@/store/modules/app";
+import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 
 defineOptions({ name: "Matches" });
 
@@ -34,16 +35,17 @@ const form = reactive({
   severity: "" as string,
   created_from: null as Date | string | number | null,
   created_to: null as Date | string | number | null,
-  limit: 50
+  limit: 50,
 });
 
 const hasRange = computed(() => !!form.created_from && !!form.created_to);
 const scopeOk = computed(() =>
-  scopeMode.value === "job" ? form.job_id !== undefined : hasRange.value
+  scopeMode.value === "job" ? form.job_id !== undefined : hasRange.value,
 );
 /** 时间范围只填了一半：明确告诉用户后端会 422，而不是让他试出来 */
 const rangeHalf = computed(
-  () => scopeMode.value === "range" && !!form.created_from !== !!form.created_to
+  () =>
+    scopeMode.value === "range" && !!form.created_from !== !!form.created_to,
 );
 
 const scopeHint = computed(() => {
@@ -83,7 +85,7 @@ const nextCursor = ref<Cursor | null>(null);
 const segment = ref(1);
 
 const hasNext = computed(
-  () => rows.value.length === form.limit && nextCursor.value !== null
+  () => rows.value.length === form.limit && nextCursor.value !== null,
 );
 
 async function load() {
@@ -97,7 +99,7 @@ async function load() {
       created_to: toApiDateTime(form.created_to),
       created_before: activeCursor.value?.created_before,
       id_before: activeCursor.value?.id_before,
-      limit: form.limit
+      limit: form.limit,
     });
     searched.value = true;
     const last = rows.value[rows.value.length - 1];
@@ -144,7 +146,7 @@ async function loadJobs() {
     jobs.value = [];
     jobsFailed.value = true;
     message(apiErrorDetail(error, "作业下拉加载失败，可改用时间范围查询"), {
-      type: "warning"
+      type: "warning",
     });
   }
 }
@@ -161,7 +163,7 @@ function goJob(jobId: number) {
 function goFileTask(row: Match) {
   router.push({
     path: `/logharvest/jobs/${row.job_id}`,
-    query: { file_task: String(row.file_task_id) }
+    query: { file_task: String(row.file_task_id) },
   });
 }
 
@@ -171,7 +173,7 @@ const columns = computed<TableColumnList>(() => [
     label: "时间",
     prop: "created_at",
     slot: "created_at",
-    width: isMobile.value ? 150 : 190
+    width: isMobile.value ? 150 : 190,
   },
   { label: "所属作业", prop: "job_id", slot: "job_id", width: 110 },
   {
@@ -179,30 +181,30 @@ const columns = computed<TableColumnList>(() => [
     prop: "file_name",
     slot: "file_name",
     minWidth: isMobile.value ? 140 : 180,
-    showOverflowTooltip: true
+    showOverflowTooltip: true,
   },
   {
     label: "包内路径",
     prop: "member_path",
     minWidth: 200,
-    showOverflowTooltip: true
+    showOverflowTooltip: true,
   },
   { label: "行号", prop: "line_no", width: 90 },
   {
     label: "规则",
     prop: "rule_id",
     minWidth: 150,
-    showOverflowTooltip: true
+    showOverflowTooltip: true,
   },
   { label: "级别", prop: "severity", slot: "severity", width: 100 },
   { label: "数值", prop: "numeric_value", slot: "numeric_value", width: 120 },
-  { label: "原始行", prop: "raw_line", slot: "raw_line", minWidth: 320 }
+  { label: "原始行", prop: "raw_line", slot: "raw_line", minWidth: 320 },
 ]);
 
 onMounted(async () => {
   // 作业详情「查看命中结果」带 job_id 跳过来：直接按该作业生效
   const jobId = Number(
-    typeof route.query.job_id === "string" ? route.query.job_id : ""
+    typeof route.query.job_id === "string" ? route.query.job_id : "",
   );
   if (Number.isInteger(jobId) && jobId > 0) {
     scopeMode.value = "job";
@@ -214,9 +216,14 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="p-4">
-    <el-card shadow="never" class="mb-3">
-      <el-form :inline="true" label-width="72px" @submit.prevent="onSearch">
+  <div class="page">
+    <section class="page-panel">
+      <el-form
+        :inline="true"
+        label-width="72px"
+        class="search-form"
+        @submit.prevent="onSearch"
+      >
         <el-form-item label="作用域">
           <el-radio-group v-model="scopeMode" @change="onScopeModeChange">
             <el-radio-button value="job">按作业</el-radio-button>
@@ -274,7 +281,12 @@ onMounted(async () => {
         </el-form-item>
         <el-form-item label="每屏">
           <el-select v-model="form.limit" class="w-28">
-            <el-option v-for="n in [50, 100, 200, 500]" :key="n" :label="n" :value="n" />
+            <el-option
+              v-for="n in [50, 100, 200, 500]"
+              :key="n"
+              :label="n"
+              :value="n"
+            />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -295,67 +307,89 @@ onMounted(async () => {
           </el-button>
         </el-form-item>
       </el-form>
+
       <el-alert
         v-if="!scopeOk"
         :title="scopeHint"
         type="warning"
         :closable="false"
         show-icon
+        class="mt-3"
       />
-      <p class="text-xs text-gray-500">
-        作用域必须二选一：后端 <code>/api/matches</code> 要么按
+
+      <p class="page-hint mt-3">
+        作用域必须二选一：<code>/api/matches</code> 要么按
         <code>job_id</code> 查，要么成对给出 <code>created_from</code> +
         <code>created_to</code>，只填一半返回 422，所以查询按钮会先禁用。<br />
-        级别筛选是单值：后端 `severity` 只接受一个字符串（`routes_matches.py:25`），
-        没有多选语义。<br />
-        后端列表接口返回裸数组、不带总数，所以这里没有“共 N 条”，也没有页码跳转；
-        只能顺着游标（本页最后一行的 `created_at` + `id`，按
+        级别筛选是单值：<code>severity</code>
+        只接受一个字符串，没有多选语义。<br />
+        列表接口返回裸数组、不带总数，所以这里没有“共 N 条”，也没有页码跳转；
+        只能顺着游标（本页最后一行的 <code>created_at</code> +
+        <code>id</code>，按
         <code>created_at DESC, id DESC</code>）往后翻。<br />
         <span v-if="jobsFailed">作业下拉加载失败，可改用时间范围查询。</span>
       </p>
-    </el-card>
+    </section>
 
     <!-- 窄屏（390 视口）表格横向放不下，改成卡片：一条命中一张卡，链接与字段都保留 -->
-    <div v-if="isMobile" class="space-y-3">
-      <el-card
-        v-for="row in rows"
-        :key="row.id"
-        shadow="never"
-        body-class="!p-3"
-      >
-        <div class="flex items-center justify-between gap-2">
-          <el-tag :type="severityTagType(row.severity)" size="small" effect="light">
-            {{ row.severity }}
+    <div v-if="isMobile" class="page-panel">
+      <div class="page-body space-y-3">
+        <el-card
+          v-for="row in rows"
+          :key="row.id"
+          shadow="never"
+          body-class="!p-3"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <el-tag
+              :type="severityTagType(row.severity)"
+              size="small"
+              effect="light"
+            >
+              {{ row.severity }}
+            </el-tag>
+            <span class="page-hint">{{ formatDateTime(row.created_at) }}</span>
+          </div>
+          <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+            <el-button link type="primary" @click="goJob(row.job_id)">
+              所属作业 #{{ row.job_id }}
+            </el-button>
+            <el-button link type="primary" @click="goFileTask(row)">
+              所属文件 {{ row.file_name }}
+            </el-button>
+            <span>行号 {{ row.line_no }}</span>
+            <span>规则 {{ row.rule_id }}</span>
+            <span>数值 {{ row.numeric_value ?? "-" }}</span>
+          </div>
+          <div class="page-hint mt-1">包内路径 {{ row.member_path }}</div>
+          <pre class="match-raw mt-2">{{ row.raw_line }}</pre>
+          <el-tag
+            v-if="row.raw_truncated"
+            size="small"
+            type="warning"
+            effect="plain"
+          >
+            原始行已截断
           </el-tag>
-          <span class="text-xs text-gray-500">{{ formatDateTime(row.created_at) }}</span>
-        </div>
-        <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-          <el-button link type="primary" @click="goJob(row.job_id)">
-            所属作业 #{{ row.job_id }}
-          </el-button>
-          <el-button link type="primary" @click="goFileTask(row)">
-            所属文件 {{ row.file_name }}
-          </el-button>
-          <span>行号 {{ row.line_no }}</span>
-          <span>规则 {{ row.rule_id }}</span>
-          <span>数值 {{ row.numeric_value ?? "-" }}</span>
-        </div>
-        <div class="mt-1 text-xs text-gray-500">包内路径 {{ row.member_path }}</div>
-        <pre class="match-raw mt-2">{{ row.raw_line }}</pre>
-        <el-tag v-if="row.raw_truncated" size="small" type="warning" effect="plain">
-          原始行已截断
-        </el-tag>
-      </el-card>
-      <el-empty v-if="!loading && rows.length === 0" :description="searched ? '本段没有命中行' : '尚未查询'" />
-      <div class="flex items-center justify-between text-sm">
-        <span class="text-gray-500">
+        </el-card>
+        <el-empty
+          v-if="!loading && rows.length === 0"
+          :description="searched ? '本段没有命中行' : '尚未查询'"
+        />
+      </div>
+      <div class="page-foot">
+        <span>
           <template v-if="searched">
             总数未知：第 {{ segment }} 段，本段 {{ rows.length }} 条
             <span v-if="!hasNext">（不足一屏，已到末尾）</span>
           </template>
           <template v-else>尚未查询：请先限定作业或时间范围</template>
         </span>
-        <el-button :disabled="!hasNext || loading" @click="onNext">下一页</el-button>
+        <div class="page-foot__actions">
+          <el-button :disabled="!hasNext || loading" @click="onNext">
+            下一页
+          </el-button>
+        </div>
       </div>
     </div>
 
@@ -364,27 +398,42 @@ onMounted(async () => {
         <pure-table
           :size="size"
           row-key="id"
-          adaptive
+          height="100%"
           :loading="loading"
           :data="rows"
           :columns="columns"
           :border="true"
+          :header-cell-style="TABLE_HEADER_CELL_STYLE"
         >
           <template #created_at="{ row }">
             {{ formatDateTime(row.created_at) }}
           </template>
           <template #job_id="{ row }">
-            <el-button :size="size" link type="primary" @click="goJob(row.job_id)">
+            <el-button
+              :size="size"
+              link
+              type="primary"
+              @click="goJob(row.job_id)"
+            >
               #{{ row.job_id }}
             </el-button>
           </template>
           <template #file_name="{ row }">
-            <el-button :size="size" link type="primary" @click="goFileTask(row)">
+            <el-button
+              :size="size"
+              link
+              type="primary"
+              @click="goFileTask(row)"
+            >
               {{ row.file_name }}
             </el-button>
           </template>
           <template #severity="{ row }">
-            <el-tag :type="severityTagType(row.severity)" :size="size" effect="light">
+            <el-tag
+              :type="severityTagType(row.severity)"
+              :size="size"
+              effect="light"
+            >
               {{ row.severity }}
             </el-tag>
           </template>
@@ -399,24 +448,26 @@ onMounted(async () => {
                 content="后端只保存截断后的原始行（raw_truncated = true）"
                 placement="top"
               >
-                <el-tag :size="size" type="warning" effect="plain">已截断</el-tag>
+                <el-tag :size="size" type="warning" effect="plain"
+                  >已截断</el-tag
+                >
               </el-tooltip>
             </div>
           </template>
         </pure-table>
-        <div class="mt-3 flex items-center justify-between text-sm">
-          <span class="text-gray-500">
-            <template v-if="searched">
-              总数未知：第 {{ segment }} 段，本段 {{ rows.length }} 条
-              <span v-if="!hasNext">（不足一屏，已到末尾）</span>
-            </template>
-            <template v-else>尚未查询：请先限定作业或时间范围</template>
-          </span>
-          <div class="flex gap-2">
-            <el-button :disabled="!hasNext || loading" @click="onNext">
-              下一页
-            </el-button>
-          </div>
+      </template>
+      <template #footer>
+        <span>
+          <template v-if="searched">
+            总数未知：第 {{ segment }} 段，本段 {{ rows.length }} 条
+            <span v-if="!hasNext">（不足一屏，已到末尾）</span>
+          </template>
+          <template v-else>尚未查询：请先限定作业或时间范围</template>
+        </span>
+        <div class="page-foot__actions">
+          <el-button :disabled="!hasNext || loading" @click="onNext">
+            下一页
+          </el-button>
         </div>
       </template>
     </PureTableBar>

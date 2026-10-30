@@ -112,14 +112,35 @@ Worker 都会显示 `—`。界面把 `NULL` 一律渲染成 `—`（未知）�
 `pnpm-workspace.yaml` 的 `patchedDependencies` 在 `pnpm install` 时自动应用。
 升级 `@pureadmin/table` 后需要重新生成补丁，否则安装时会提示补丁未匹配。
 
-### 列表页统一写法（对齐上游 vue-pure-admin）
+### 页面骨架与列表页统一写法
 
-系统管理各列表页与上游共用一套结构，新增列表页照此写：
+所有业务页共用 `src/style/layout.scss` 的一套结构类，数值全部取自 `src/style/tokens.scss`
+（页面内缩 16、面板间距 12、面板内缩 16、筛选横向 24、内容区外边距 8，窄屏 <=768px 自动收紧）。
+新增页面照此写，不要再自带间距魔法数：
 
-- 表格上方是 `form.search-form.bg-bg_color` 搜索卡片，输入框 `class="w-45!"`，
-  搜索/重置按钮带 `useRenderIcon` 图标；
-- 表头样式取 `src/views/system/table.ts` 的 `TABLE_HEADER_CELL_STYLE`，
-  表格加 `align-whole="center"`、`table-layout="auto"`、`adaptive`；
+- 根元素固定是 `<div class="page">`（flex 纵向容器）。**表格写 `height="100%"` 时它必须存在**：
+  确定高度由 `.page` → `.page-panel--fill` → `.page-body` 这条 flex 链给出，漏掉这一步表格塌成 0 高。
+- 一块白底 = 一个 `.page-panel`（16px 内缩、6px 圆角、`--el-border-color-lighter` 描边）。
+  `el-card` 已通过 `--el-card-padding` / `border-radius` 对齐到同一套，所以 e2e 需要数卡片的页面
+  可以继续用 `el-card` 当外壳，观感不变。
+  标题行用 `.page-panel__head` + `.page-panel__title`，操作按钮归到 `.page-toolbar__end`。
+- 筛选区：`<section class="page-panel"><el-form :inline="true" class="search-form">`。
+  `.search-form` 只管控件行（flex + 横向 24 / 换行 12，压过 Element Plus 写死的 `margin-right: 32px`），
+  底色描边来自 `.page-panel`。类名 `search-form` 同时是 e2e 的定位锚点，不要改名。
+- 表格：`height="100%"`、`:header-cell-style="TABLE_HEADER_CELL_STYLE"`（`src/config/table.ts`）、
+  `align-whole="center"`、`table-layout="auto"`。**不要用 `adaptive`**：它按
+  `window.innerHeight - 顶部位置 - offsetBottom` 写死像素高，`offsetBottom` 只能逐页手调
+  （历史上 14 个列表页各写 45 / 96 / 108，同一套面板底部留白差 12~63px），
+  提示行一换行就要重算，空结果时还会把「暂无数据」拉成一整屏空白。
+- 计数、上一页 / 下一页、收尾操作放进 `PureTableBar` 的 `#footer` 插槽（渲染成 `.page-foot`：
+  顶部自带分隔线、钉在面板底部），不要再写成表格下方孤立的 `div.mt-3`。
+- 说明文字统一 `.page-hint`（12px + `--el-text-color-secondary`，跟随暗色模式），
+  不要用 `text-gray-500` 这类写死的灰色。
+- 卡片栅格用 `.page-grid` / `.page-grid--4` / `.page-grid--2`，不要 `el-row :gutter` + `el-col :span`
+  混排——最后一行不满时会留下半行空洞，卡片高度也会参差。
+- 面板要不要撑满视口：列表页主面板由 `PureTableBar` 默认的 `.page-panel--fill` 负责；
+  正文就是一屏内容的页面（表单、图表）给最后一块面板加 `.page-panel--grow`（只放大不收缩）；
+  正文是多块内容的页面（分组表格、卡片列表）给 `PureTableBar` 传 `:fill="false"`，让面板随内容长高。
 - `pure-table` 必须绑定插槽给的 `dynamicColumns`（`v-slot="{ size, dynamicColumns }"`）。
   直接用 `columns` 会让「列设置」的显隐、拖拽排序、左右固定全部空转；
 - 行内操作按钮加 `class="reset-margin"`；按钮超过 3 个时把低频动作收进「更多」下拉，

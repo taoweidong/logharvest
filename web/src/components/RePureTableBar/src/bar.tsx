@@ -48,6 +48,14 @@ const props = {
     type: [String, Number] as PropType<string | number>,
     default: "0",
   },
+  /**
+   * 面板是否吃掉页面剩余高度。列表页默认开启：表格下方到视口底部之间
+   * 不应再露出灰底。嵌在抽屉/弹窗里或紧跟其他内容时可传 false 让面板收住。
+   */
+  fill: {
+    type: Boolean,
+    default: true,
+  },
 };
 
 export default defineComponent({
@@ -319,25 +327,26 @@ export default defineComponent({
           {...attrs}
           class={[
             "w-full",
-            "px-2",
-            "pb-2",
-            "bg-bg_color",
+            "page-panel",
+            props.fill && !isFullscreen.value ? ["page-panel--fill"] : "",
             isFullscreen.value
               ? ["h-full!", "z-2002", "fixed", "inset-0"]
-              : "mt-2",
+              : "",
           ]}
         >
-          {/* min-h 而不是 h：#buttons 里的控件在窄屏会换行，固定高度会让换出来的
-              第二行被下面的表格盖住（既看不见也点不到）。 */}
-          <div class="flex items-center justify-between w-full min-h-15 p-4">
+          {/* 标题行：min-height 而不是固定高度，#buttons 里的控件在窄屏会换行，
+              写死高度会让换出来的第二行被下面的表格盖住（既看不见也点不到）。 */}
+          <div class="page-panel__head">
             {slots?.title ? (
               slots.title()
             ) : (
-              <p class="font-bold truncate">{transformI18n(props.title)}</p>
+              <p class="page-panel__title truncate min-w-0">
+                {transformI18n(props.title)}
+              </p>
             )}
             <div class="flex-ac">
               {slots?.buttons ? (
-                <div class="flex mr-4">{slots.buttons()}</div>
+                <div class="page-toolbar mr-3">{slots.buttons()}</div>
               ) : null}
               {props.tableRef?.size ? (
                 <>
@@ -504,10 +513,15 @@ export default defineComponent({
               />
             </div>
           </div>
-          {slots.default({
-            size: size.value,
-            dynamicColumns: dynamicColumns.value,
-          })}
+          <div class="page-body">
+            {slots.default({
+              size: size.value,
+              dynamicColumns: dynamicColumns.value,
+            })}
+          </div>
+          {slots.footer ? (
+            <div class="page-foot">{slots.footer()}</div>
+          ) : null}
         </div>
       </>
     );

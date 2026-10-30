@@ -1,6 +1,7 @@
 @use "tokens"; /* 设计令牌：间距 / 动效 / 圆角阴影 / 层级，必须先于其他样式 */
 @use "theme";
 @use "transition";
+@use "layout"; /* 页面骨架：.page / .page-panel / .page-toolbar / .page-foot */
 @use "element-plus";
 @use "sidebar";
 @use "dark";

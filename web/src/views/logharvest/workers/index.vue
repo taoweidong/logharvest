@@ -8,7 +8,7 @@ import {
   drainVersion,
   drainWorker,
   listWorkers,
-  resumeWorker
+  resumeWorker,
 } from "@/api/logharvest";
 import type { WorkerInfo, WorkerStatus } from "@/api/logharvestTypes";
 import {
@@ -18,9 +18,10 @@ import {
   formatDiskFreeGB,
   formatMemoryMB,
   fromNow,
-  workerStatusTagType
+  workerStatusTagType,
 } from "../format";
 import { useAppStoreHook } from "@/store/modules/app";
+import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 
 defineOptions({ name: "Workers" });
 
@@ -37,7 +38,7 @@ const WORKER_STATUS_OPTIONS: WorkerStatus[] = [
   "online",
   "busy",
   "draining",
-  "offline"
+  "offline",
 ];
 
 /** 后端 `GET /api/workers` 的 `limit` 上限是 200 */
@@ -48,19 +49,19 @@ const pageIndex = computed(() => Math.floor(page.offset / page.limit) + 1);
 /** 与后端 `system_status` 同一定义：未离线即视为存活（含 draining） */
 const alive = computed(
   () =>
-    rows.value.filter(item =>
-      (["online", "busy", "draining"] as WorkerStatus[]).includes(item.status)
-    ).length
+    rows.value.filter((item) =>
+      (["online", "busy", "draining"] as WorkerStatus[]).includes(item.status),
+    ).length,
 );
 
 const versions = computed(() =>
-  Array.from(new Set(rows.value.map(item => item.version))).sort()
+  Array.from(new Set(rows.value.map((item) => item.version))).sort(),
 );
 
 const filteredRows = computed(() =>
   statusFilter.value
-    ? rows.value.filter(item => item.status === statusFilter.value)
-    : rows.value
+    ? rows.value.filter((item) => item.status === statusFilter.value)
+    : rows.value,
 );
 
 /**
@@ -69,7 +70,7 @@ const filteredRows = computed(() =>
  */
 const groups = computed(() => {
   const byVersion = new Map<string, WorkerInfo[]>();
-  filteredRows.value.forEach(item => {
+  filteredRows.value.forEach((item) => {
     const list = byVersion.get(item.version);
     if (list) list.push(item);
     else byVersion.set(item.version, [item]);
@@ -79,9 +80,11 @@ const groups = computed(() => {
     .map(([version, items]) => ({
       version,
       items,
-      alive: items.filter(
-        item => (["online", "busy", "draining"] as WorkerStatus[]).includes(item.status)
-      ).length
+      alive: items.filter((item) =>
+        (["online", "busy", "draining"] as WorkerStatus[]).includes(
+          item.status,
+        ),
+      ).length,
     }));
 });
 
@@ -106,7 +109,7 @@ async function onDrain(row: WorkerInfo) {
     await ElMessageBox.confirm(
       `确认排空 Worker ${row.id}？它跑完当前文件任务后不再领取新任务。`,
       "排空 Worker",
-      { type: "warning", confirmButtonText: "排空", cancelButtonText: "取消" }
+      { type: "warning", confirmButtonText: "排空", cancelButtonText: "取消" },
     );
   } catch {
     return;
@@ -116,7 +119,7 @@ async function onDrain(row: WorkerInfo) {
     const result = await drainWorker(row.id);
     message(
       `${result.id}：drain_requested=${result.drain_requested}，状态 ${result.status}`,
-      { type: "success" }
+      { type: "success" },
     );
     await load();
   } catch (error) {
@@ -132,7 +135,7 @@ async function onResume(row: WorkerInfo) {
   try {
     const result = await resumeWorker(row.id);
     message(`${result.id} 已恢复领取（状态 ${result.status}）`, {
-      type: "success"
+      type: "success",
     });
     await load();
   } catch (error) {
@@ -156,7 +159,7 @@ async function onDrainVersion() {
     await ElMessageBox.confirm(
       `确认排空版本 ${version} 的全部 Worker？离线机器也会被记下标记，重启后生效。`,
       "按版本排空",
-      { type: "warning", confirmButtonText: "排空", cancelButtonText: "取消" }
+      { type: "warning", confirmButtonText: "排空", cancelButtonText: "取消" },
     );
   } catch {
     return;
@@ -166,7 +169,7 @@ async function onDrainVersion() {
     const result = await drainVersion(version);
     message(
       `版本 ${version}：已排空 ${result.drained} 台，标记 ${result.flagged} 台离线（重启后生效）`,
-      { type: "success" }
+      { type: "success" },
     );
     await load();
   } catch (error) {
@@ -186,7 +189,7 @@ const columns = computed<TableColumnList>(() => [
     label: "Worker",
     prop: "id",
     minWidth: isMobile.value ? 140 : 200,
-    showOverflowTooltip: true
+    showOverflowTooltip: true,
   },
   ...(isMobile.value
     ? []
@@ -195,35 +198,40 @@ const columns = computed<TableColumnList>(() => [
           label: "主机名",
           prop: "hostname",
           minWidth: 160,
-          showOverflowTooltip: true
-        }
+          showOverflowTooltip: true,
+        },
       ] as TableColumnList)),
   { label: "状态", prop: "status", slot: "status", width: 110 },
   {
     label: "当前文件任务",
     prop: "current_task_id",
     slot: "current_task_id",
-    width: 130
+    width: 130,
   },
   ...(isMobile.value
     ? []
     : ([
         { label: "并发上限", prop: "max_concurrent_copies", width: 110 },
         { label: "CPU", prop: "cpu_percent", slot: "cpu_percent", width: 100 },
-        { label: "内存", prop: "memory_bytes", slot: "memory_bytes", width: 120 },
+        {
+          label: "内存",
+          prop: "memory_bytes",
+          slot: "memory_bytes",
+          width: 120,
+        },
         {
           label: "临时盘空闲",
           prop: "temp_disk_free_bytes",
           slot: "temp_disk_free_bytes",
-          width: 140
-        }
+          width: 140,
+        },
       ] as TableColumnList)),
   { label: "心跳", prop: "last_heartbeat", slot: "last_heartbeat", width: 190 },
   {
     label: "排空标记",
     prop: "drain_requested",
     slot: "drain_requested",
-    width: 110
+    width: 110,
   },
   ...(isMobile.value
     ? []
@@ -233,16 +241,16 @@ const columns = computed<TableColumnList>(() => [
           prop: "last_error",
           slot: "last_error",
           minWidth: 180,
-          showOverflowTooltip: true
-        }
+          showOverflowTooltip: true,
+        },
       ] as TableColumnList)),
   {
     label: "操作",
     prop: "operation",
     slot: "operation",
     width: isMobile.value ? 120 : 170,
-    fixed: isMobile.value ? undefined : "right"
-  }
+    fixed: isMobile.value ? undefined : "right",
+  },
 ]);
 
 /**
@@ -253,84 +261,87 @@ const columns = computed<TableColumnList>(() => [
 const metricReported = computed(
   () =>
     filteredRows.value.filter(
-      item =>
+      (item) =>
         typeof item.cpu_percent === "number" ||
         typeof item.memory_bytes === "number" ||
-        typeof item.temp_disk_free_bytes === "number"
-    ).length
+        typeof item.temp_disk_free_bytes === "number",
+    ).length,
 );
 
 onMounted(load);
 </script>
 
 <template>
-  <div class="p-4">
-    <el-alert
-      class="mb-3"
-      type="info"
-      :closable="false"
-      show-icon
-      title="这里不执行任何部署"
-      description="本界面只做「排空 / 恢复领取」的运维标记。Worker 镜像的替换与重启由
-        Jenkins 流水线 + Docker Compose 完成；「按版本排空」用于滚动升级时先让旧版本的
-        Worker 跑完手头的文件任务，离线机器上的标记会在其重启后生效。"
-    />
+  <div class="page">
+    <section class="page-panel">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="这里不执行任何部署"
+        description="本界面只做「排空 / 恢复领取」的运维标记。Worker 镜像的替换与重启由
+          Jenkins 流水线 + Docker Compose 完成；「按版本排空」用于滚动升级时先让旧版本的
+          Worker 跑完手头的文件任务，离线机器上的标记会在其重启后生效。"
+      />
 
-    <el-alert
-      class="mb-3"
-      type="info"
-      :closable="false"
-      show-icon
-      title="CPU / 内存 / 临时盘空闲 / 最近错误：`—` 是「没有上报过」，不是 0"
-      description="这四列在 workers 表里一直存在，但直到 M2c Task 4 才有写入方——此前的心跳语句只更新
-        status / current_task_id / last_heartbeat。因此升级前留下的行、以及升级后还没重启的 Worker
-        都会显示破折号（未知）；把它读成「CPU 空闲」或「临时盘已满」就是本界面刻意避免的误判。
-        数值来自 Worker 自身采样（进程 CPU/内存 RSS、临时目录所在盘的剩余空间），不是 NAS 侧指标。"
-    />
+      <el-alert
+        class="mt-3"
+        type="info"
+        :closable="false"
+        show-icon
+        title="CPU / 内存 / 临时盘空闲 / 最近错误：`—` 是「没有上报过」，不是 0"
+        description="这四列在 workers 表里一直存在，但直到 M2c Task 4 才有写入方——此前的心跳语句只更新
+          status / current_task_id / last_heartbeat。因此升级前留下的行、以及升级后还没重启的 Worker
+          都会显示破折号（未知）；把它读成「CPU 空闲」或「临时盘已满」就是本界面刻意避免的误判。
+          数值来自 Worker 自身采样（进程 CPU/内存 RSS、临时目录所在盘的剩余空间），不是 NAS 侧指标。"
+      />
+    </section>
 
-    <PureTableBar title="Worker（按版本分组）" :columns="columns" @refresh="load">
+    <PureTableBar
+      title="Worker（按版本分组）"
+      :columns="columns"
+      @refresh="load"
+    >
       <template #buttons>
-        <div class="flex flex-wrap items-center justify-end gap-2">
-          <!-- 宽度挂在包裹层上：el-select 根节点自带 width:100%，直接加 w-36 会被
-               盖掉而横向撑满，把同排的按钮挤下去逐个堆叠（jobs/stats 页同款处理）。 -->
-          <div class="w-32 sm:w-36">
-            <el-select
-              v-model="statusFilter"
-              clearable
-              placeholder="状态筛选"
-              class="w-full"
-            >
-              <el-option
-                v-for="item in WORKER_STATUS_OPTIONS"
-                :key="item"
-                :label="item"
-                :value="item"
-              />
-            </el-select>
-          </div>
-          <div class="w-36 sm:w-40">
-            <el-select
-              v-model="versionInput"
-              filterable
-              allow-create
-              default-first-option
-              clearable
-              placeholder="版本号"
-              class="w-full"
-            >
-              <el-option v-for="v in versions" :key="v" :label="v" :value="v" />
-            </el-select>
-          </div>
-          <el-button
-            v-perms="'workers:operate'"
-            type="warning"
-            :loading="drainingVersion"
-            :disabled="!versionInput.trim()"
-            @click="onDrainVersion"
+        <!-- 宽度挂在包裹层上：el-select 根节点自带 width:100%，直接加 w-36 会被
+             盖掉而横向撑满，把同排的按钮挤下去逐个堆叠（jobs/stats 页同款处理）。 -->
+        <div class="w-32 sm:w-36">
+          <el-select
+            v-model="statusFilter"
+            clearable
+            placeholder="状态筛选"
+            class="w-full"
           >
-            按版本排空
-          </el-button>
+            <el-option
+              v-for="item in WORKER_STATUS_OPTIONS"
+              :key="item"
+              :label="item"
+              :value="item"
+            />
+          </el-select>
         </div>
+        <div class="w-36 sm:w-40">
+          <el-select
+            v-model="versionInput"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            placeholder="版本号"
+            class="w-full"
+          >
+            <el-option v-for="v in versions" :key="v" :label="v" :value="v" />
+          </el-select>
+        </div>
+        <el-button
+          v-perms="'workers:operate'"
+          type="warning"
+          :loading="drainingVersion"
+          :disabled="!versionInput.trim()"
+          @click="onDrainVersion"
+        >
+          按版本排空
+        </el-button>
       </template>
       <template v-slot="{ size }">
         <el-empty
@@ -339,10 +350,10 @@ onMounted(load);
           :image-size="80"
         />
         <el-card
-          v-for="group in groups"
+          v-for="(group, gi) in groups"
           :key="group.version"
-          class="mb-3"
           shadow="never"
+          :class="gi === groups.length - 1 ? 'page-panel--grow' : 'mb-3'"
         >
           <template #header>
             <div class="flex flex-wrap items-center justify-between gap-2">
@@ -352,7 +363,7 @@ onMounted(load);
                   {{ group.items.length }} 台
                 </el-tag>
               </span>
-              <span class="text-xs text-gray-500">
+              <span class="page-hint">
                 存活（online/busy/draining）{{ group.alive }} 台 · 离线
                 {{ group.items.length - group.alive }} 台
                 <el-button
@@ -360,7 +371,7 @@ onMounted(load);
                   link
                   type="warning"
                   :size="size"
-                  @click="(versionInput = group.version), onDrainVersion()"
+                  @click="((versionInput = group.version), onDrainVersion())"
                 >
                   排空该版本
                 </el-button>
@@ -374,6 +385,7 @@ onMounted(load);
             :data="group.items"
             :columns="columns"
             :border="true"
+            :header-cell-style="TABLE_HEADER_CELL_STYLE"
           >
             <template #status="{ row }">
               <el-tag
@@ -397,13 +409,22 @@ onMounted(load);
               {{ formatDiskFreeGB(row.temp_disk_free_bytes) }}
             </template>
             <template #last_error="{ row }">
-              <el-tooltip v-if="row.last_error" :content="row.last_error" placement="top">
-                <span class="text-red-500">{{ row.last_error }}</span>
+              <el-tooltip
+                v-if="row.last_error"
+                :content="row.last_error"
+                placement="top"
+              >
+                <span class="text-[var(--el-color-danger)]">{{
+                  row.last_error
+                }}</span>
               </el-tooltip>
               <span v-else>{{ UNKNOWN_TEXT }}</span>
             </template>
             <template #last_heartbeat="{ row }">
-              <el-tooltip :content="formatDateTime(row.last_heartbeat)" placement="top">
+              <el-tooltip
+                :content="formatDateTime(row.last_heartbeat)"
+                placement="top"
+              >
                 <span>{{ fromNow(row.last_heartbeat) }}</span>
               </el-tooltip>
             </template>
@@ -459,28 +480,32 @@ onMounted(load);
             </template>
           </pure-table>
         </el-card>
-        <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
-          <span class="text-gray-500">
-            后端列表接口不返回总数：状态筛选只作用于本页；第
-            {{ pageIndex }} 页，本页 {{ rows.length }} 条，共 {{ groups.length }}
-            个版本，存活（online/busy/draining）{{ alive }} 台；至少上报过一项资源的
-            {{ metricReported }} 台（其余显示「{{ UNKNOWN_TEXT }}」= 该 Worker
-            尚未上报，需升级到 M2c Task 4 的 Worker 并重启后才有数据）
-          </span>
-          <div class="flex gap-2">
-            <el-button
-              :disabled="page.offset === 0 || loading"
-              @click="(page.offset -= page.limit), load()"
-            >
-              上一页
-            </el-button>
-            <el-button
-              :disabled="!hasNext || loading"
-              @click="(page.offset += page.limit), load()"
-            >
-              下一页
-            </el-button>
-          </div>
+      </template>
+      <template #footer>
+        <span>
+          后端列表接口不返回总数：状态筛选只作用于本页；第
+          {{ pageIndex }} 页，本页 {{ rows.length }} 条，共
+          {{ groups.length }} 个版本，存活（online/busy/draining）{{
+            alive
+          }}
+          台；至少上报过一项资源的 {{ metricReported }} 台（其余显示「{{
+            UNKNOWN_TEXT
+          }}」= 该 Worker 尚未上报，需升级到 M2c Task 4 的 Worker
+          并重启后才有数据）
+        </span>
+        <div class="page-foot__actions">
+          <el-button
+            :disabled="page.offset === 0 || loading"
+            @click="((page.offset -= page.limit), load())"
+          >
+            上一页
+          </el-button>
+          <el-button
+            :disabled="!hasNext || loading"
+            @click="((page.offset += page.limit), load())"
+          >
+            下一页
+          </el-button>
         </div>
       </template>
     </PureTableBar>

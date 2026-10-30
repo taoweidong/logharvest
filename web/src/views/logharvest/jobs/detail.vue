@@ -11,7 +11,7 @@ import {
   getJob,
   listJobFiles,
   listTaskAttempts,
-  retryFailedFiles
+  retryFailedFiles,
 } from "@/api/logharvest";
 import {
   JOB_STATUS_OPTIONS,
@@ -19,7 +19,7 @@ import {
   type FileTask,
   type FileTaskAttempt,
   type Job,
-  type ProgressEvent
+  type ProgressEvent,
 } from "@/api/logharvestTypes";
 import { streamJobProgress } from "@/utils/sse";
 import {
@@ -28,8 +28,9 @@ import {
   formatDateTime,
   formatGB,
   statusTagType,
-  textOrUnknown
+  textOrUnknown,
 } from "../format";
+import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 
 defineOptions({ name: "JobDetail" });
 
@@ -51,7 +52,7 @@ let controller: AbortController | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const terminal = computed(() =>
-  job.value ? TERMINAL_JOB_STATUSES.includes(job.value.status) : false
+  job.value ? TERMINAL_JOB_STATUSES.includes(job.value.status) : false,
 );
 
 /** 进度：已终态的文件任务数 / 总数（SSE 快照里的 by_status） */
@@ -59,7 +60,7 @@ const doneCount = computed(() => {
   const byStatus = progress.value?.by_status ?? {};
   return TERMINAL_JOB_STATUSES.reduce(
     (sum, status) => sum + (byStatus[status] ?? 0),
-    0
+    0,
   );
 });
 
@@ -81,7 +82,7 @@ const hasNext = computed(() => files.value.length === page.limit);
 const failedCount = computed(
   () =>
     progress.value?.by_status?.failed ??
-    files.value.filter(item => item.status === "failed").length
+    files.value.filter((item) => item.status === "failed").length,
 );
 
 /**
@@ -92,7 +93,12 @@ const failedCount = computed(
  */
 const columns: TableColumnList = [
   { label: "ID", prop: "id", width: 90 },
-  { label: "文件", prop: "file_name", minWidth: 220, showOverflowTooltip: true },
+  {
+    label: "文件",
+    prop: "file_name",
+    minWidth: 220,
+    showOverflowTooltip: true,
+  },
   { label: "状态", prop: "status", slot: "status", width: 110 },
   { label: "大小", prop: "size_bytes", slot: "size_bytes", width: 120 },
   { label: "尝试", prop: "attempts", slot: "attempts", width: 90 },
@@ -102,7 +108,7 @@ const columns: TableColumnList = [
     prop: "worker_id",
     slot: "worker_id",
     width: 160,
-    showOverflowTooltip: true
+    showOverflowTooltip: true,
   },
   { label: "已处理行", prop: "processed_lines", width: 120 },
   { label: "命中行", prop: "matched_rows", width: 110 },
@@ -110,15 +116,15 @@ const columns: TableColumnList = [
     label: "心跳",
     prop: "heartbeat_at",
     slot: "heartbeat_at",
-    width: 180
+    width: 180,
   },
   {
     label: "错误",
     prop: "error",
     slot: "error",
     minWidth: 180,
-    showOverflowTooltip: true
-  }
+    showOverflowTooltip: true,
+  },
 ];
 
 /**
@@ -138,7 +144,7 @@ const attempts = reactive({
   fileName: "",
   rows: [] as FileTaskAttempt[],
   /** 递增的请求号：快速切换任务时丢弃过期响应，避免把上一个任务的历史画到当前任务上 */
-  requestId: 0
+  requestId: 0,
 });
 
 const attemptColumns: TableColumnList = [
@@ -148,14 +154,14 @@ const attemptColumns: TableColumnList = [
     prop: "worker_id",
     slot: "worker_id",
     minWidth: 150,
-    showOverflowTooltip: true
+    showOverflowTooltip: true,
   },
   {
     label: "版本",
     prop: "worker_version",
     slot: "worker_version",
     width: 110,
-    showOverflowTooltip: true
+    showOverflowTooltip: true,
   },
   { label: "状态", prop: "status", slot: "status", width: 100 },
   { label: "开始时间", prop: "started_at", slot: "started_at", width: 170 },
@@ -164,7 +170,7 @@ const attemptColumns: TableColumnList = [
     label: "已处理行",
     prop: "processed_lines",
     slot: "processed_lines",
-    width: 110
+    width: 110,
   },
   { label: "命中行", prop: "matched_rows", slot: "matched_rows", width: 100 },
   {
@@ -172,8 +178,8 @@ const attemptColumns: TableColumnList = [
     prop: "error",
     slot: "error",
     minWidth: 220,
-    showOverflowTooltip: true
-  }
+    showOverflowTooltip: true,
+  },
 ];
 
 function attemptErrorText(error: unknown): string {
@@ -241,10 +247,14 @@ function openAttempts(row: FileTask) {
  * 但尝试历史接口按 `task_id` 查，所以照常打开，只是标题里带不出文件名。
  */
 function openAttemptFromQuery() {
-  const raw = typeof route.query.file_task === "string" ? route.query.file_task : "";
+  const raw =
+    typeof route.query.file_task === "string" ? route.query.file_task : "";
   const taskId = Number(raw);
   if (!Number.isInteger(taskId) || taskId <= 0) return;
-  openAttemptsFor(taskId, files.value.find(item => item.id === taskId)?.file_name ?? "");
+  openAttemptsFor(
+    taskId,
+    files.value.find((item) => item.id === taskId)?.file_name ?? "",
+  );
 }
 
 function closeAttempts() {
@@ -269,7 +279,7 @@ async function loadFiles() {
     files.value = await listJobFiles(jobId, {
       limit: page.limit,
       offset: page.offset,
-      ...(statusFilter.value ? { status: statusFilter.value } : {})
+      ...(statusFilter.value ? { status: statusFilter.value } : {}),
     });
   } catch (error) {
     files.value = [];
@@ -315,7 +325,7 @@ async function startStream() {
   try {
     const last = await streamJobProgress(
       jobId,
-      event => {
+      (event) => {
         progress.value = event;
         if (job.value) job.value.status = event.status;
         // 快照只带计数，终态时的时间/错误字段还是要从作业详情取
@@ -323,7 +333,7 @@ async function startStream() {
           void refreshJobAndFiles().then(stopAll);
         }
       },
-      controller.signal
+      controller.signal,
     );
     // 流结束但收尾路径没跑（例如作业被删除、代理中途切断）：
     // 只有看到终态快照才算"作业已完成"，否则必须继续跟进，
@@ -335,7 +345,7 @@ async function startStream() {
       stopAll();
       if (!endedTerminal) {
         message("实时进度连接已结束，但作业尚未进入终态，已改为每 5 秒轮询", {
-          type: "warning"
+          type: "warning",
         });
         startPolling();
       }
@@ -354,7 +364,7 @@ async function startStream() {
 async function onCancel() {
   try {
     await ElMessageBox.confirm("确认请求取消该作业？", "取消作业", {
-      type: "warning"
+      type: "warning",
     });
   } catch {
     return;
@@ -374,13 +384,14 @@ async function onRetryFailed() {
     await ElMessageBox.confirm(
       "确认重试该作业全部失败的文件任务？失败任务会重置为待处理并重新排队。",
       "重试失败文件",
-      { type: "warning" }
+      { type: "warning" },
     );
   } catch {
     return;
   }
   try {
-    const { retried, remaining_failed: remaining } = await retryFailedFiles(jobId);
+    const { retried, remaining_failed: remaining } =
+      await retryFailedFiles(jobId);
     // 后端单次只重置 200 个任务，剩下的要如实说出来，否则一次点击会被当成"全部重试完了"
     let summary = `已重新排队 ${retried} 个失败文件`;
     let level: "success" | "warning" | "info" = "success";
@@ -404,7 +415,10 @@ async function onRetryFailed() {
 
 /** 「查看命中结果」：带上 job_id，日志分析页会直接按本作业查询 */
 function goMatches() {
-  router.push({ path: "/logharvest/matches", query: { job_id: String(jobId) } });
+  router.push({
+    path: "/logharvest/matches",
+    query: { job_id: String(jobId) },
+  });
 }
 
 onMounted(async () => {
@@ -430,18 +444,25 @@ onBeforeUnmount(stopAll);
 </script>
 
 <template>
-  <div class="p-4">
-    <el-card v-loading="loading" shadow="never">
+  <div class="page">
+    <el-card
+      v-loading="loading"
+      shadow="never"
+      header-class="pb-0!"
+      body-class="pt-3!"
+    >
       <template #header>
-        <div class="flex items-center justify-between">
-          <span class="font-medium">
+        <div class="page-panel__head">
+          <p class="page-panel__title">
             作业 #{{ job?.id }} · {{ job?.name ?? "加载中" }}
-          </span>
-          <div class="flex flex-wrap items-center justify-end gap-2">
+          </p>
+          <div class="page-toolbar__end">
             <el-tag v-if="job" :type="statusTagType(job.status)" effect="light">
               {{ job.status }}
             </el-tag>
-            <el-tag v-if="streaming" type="success" effect="plain">实时进度</el-tag>
+            <el-tag v-if="streaming" type="success" effect="plain"
+              >实时进度</el-tag
+            >
             <el-tag v-else-if="pollingFallback" type="warning" effect="plain">
               轮询降级
             </el-tag>
@@ -471,12 +492,18 @@ onBeforeUnmount(stopAll);
       </template>
 
       <el-descriptions :column="3" border size="small">
-        <el-descriptions-item label="数据源">#{{ job?.data_source_id }}</el-descriptions-item>
-        <el-descriptions-item label="规则集">#{{ job?.rule_set_id }}</el-descriptions-item>
+        <el-descriptions-item label="数据源"
+          >#{{ job?.data_source_id }}</el-descriptions-item
+        >
+        <el-descriptions-item label="规则集"
+          >#{{ job?.rule_set_id }}</el-descriptions-item
+        >
         <el-descriptions-item label="来源目录">
           {{ job?.source_path ?? "-" }}
         </el-descriptions-item>
-        <el-descriptions-item label="文件数">{{ job?.total_files ?? 0 }}</el-descriptions-item>
+        <el-descriptions-item label="文件数">{{
+          job?.total_files ?? 0
+        }}</el-descriptions-item>
         <el-descriptions-item label="总字节">
           {{ formatGB(job?.total_bytes) }}
         </el-descriptions-item>
@@ -489,19 +516,28 @@ onBeforeUnmount(stopAll);
         <el-descriptions-item label="结束时间">
           {{ formatDateTime(job?.finished_at) }}
         </el-descriptions-item>
-        <el-descriptions-item label="创建人">{{ job?.created_by ?? "-" }}</el-descriptions-item>
+        <el-descriptions-item label="创建人">{{
+          job?.created_by ?? "-"
+        }}</el-descriptions-item>
         <el-descriptions-item label="错误" :span="3">
           {{ job?.error ?? "-" }}
         </el-descriptions-item>
       </el-descriptions>
 
-      <div class="mt-4">
-        <div class="mb-1 text-sm text-gray-600 dark:text-gray-400">
-          进度 {{ doneCount }} / {{ progress?.total ?? job?.total_files ?? 0 }} ·
-          已处理行数 {{ progress?.processed_lines ?? 0 }} · 命中行数
+      <div class="mt-3">
+        <p class="page-hint">
+          进度 {{ doneCount }} /
+          {{ progress?.total ?? job?.total_files ?? 0 }} · 已处理行数
+          {{ progress?.processed_lines ?? 0 }} · 命中行数
           {{ progress?.matched_rows ?? 0 }}
-        </div>
-        <el-progress :percentage="percent" :stroke-width="14" striped striped-flow />
+        </p>
+        <el-progress
+          class="mt-2"
+          :percentage="percent"
+          :stroke-width="14"
+          striped
+          striped-flow
+        />
         <div v-if="progress" class="mt-2 flex flex-wrap gap-2">
           <el-tag
             v-for="(count, status) in progress.by_status"
@@ -515,96 +551,111 @@ onBeforeUnmount(stopAll);
       </div>
     </el-card>
 
-    <div class="mt-4">
-      <PureTableBar title="文件任务" :columns="columns" @refresh="loadFiles">
-        <template #buttons>
-          <el-select
-            v-model="statusFilter"
-            clearable
-            placeholder="状态筛选"
-            class="w-36"
-            @change="onStatusFilterChange"
+    <PureTableBar title="文件任务" :columns="columns" @refresh="loadFiles">
+      <template #buttons>
+        <el-select
+          v-model="statusFilter"
+          clearable
+          placeholder="状态筛选"
+          class="w-36!"
+          @change="onStatusFilterChange"
+        >
+          <el-option
+            v-for="item in JOB_STATUS_OPTIONS"
+            :key="item"
+            :label="item"
+            :value="item"
+          />
+        </el-select>
+      </template>
+      <template v-slot="{ size }">
+        <pure-table
+          :size="size"
+          row-key="id"
+          height="100%"
+          :data="files"
+          :columns="columns"
+          :header-cell-style="TABLE_HEADER_CELL_STYLE"
+        >
+          <template #status="{ row }">
+            <el-tag
+              :type="statusTagType(row.status)"
+              :size="size"
+              effect="light"
+            >
+              {{ row.status }}
+            </el-tag>
+          </template>
+          <template #size_bytes="{ row }">
+            {{ formatGB(row.size_bytes) }}
+          </template>
+          <template #attempts="{ row }">
+            {{ row.attempts }} / {{ row.max_attempts }}
+          </template>
+          <template #history="{ row }">
+            <el-button
+              :size="size"
+              link
+              type="primary"
+              @click="openAttempts(row)"
+            >
+              历史
+            </el-button>
+          </template>
+          <template #worker_id="{ row }">
+            {{ row.worker_id ?? "-" }}
+          </template>
+          <template #heartbeat_at="{ row }">
+            {{ formatDateTime(row.heartbeat_at) }}
+          </template>
+          <template #error="{ row }">
+            {{ row.error ?? "-" }}
+          </template>
+        </pure-table>
+      </template>
+      <template #footer>
+        <span>
+          状态筛选已下推到后端（<code>?status=</code>，非法值返回
+          422）；接口无总数，所以仍是窗口式翻页。失败文件可用上方
+          “重试失败文件”重新排队（{{
+            failedCount
+          }}
+          个失败）；“历史”打开该任务的尝试记录
+        </span>
+        <div class="page-foot__actions">
+          <el-button
+            :disabled="page.offset === 0"
+            @click="((page.offset -= page.limit), loadFiles())"
           >
-            <el-option
-              v-for="item in JOB_STATUS_OPTIONS"
-              :key="item"
-              :label="item"
-              :value="item"
-            />
-          </el-select>
-        </template>
-        <template v-slot="{ size }">
-          <pure-table
-            :size="size"
-            row-key="id"
-            adaptive
-            :data="files"
-            :columns="columns"
+            上一页
+          </el-button>
+          <el-button
+            :disabled="!hasNext"
+            @click="((page.offset += page.limit), loadFiles())"
           >
-            <template #status="{ row }">
-              <el-tag :type="statusTagType(row.status)" :size="size" effect="light">
-                {{ row.status }}
-              </el-tag>
-            </template>
-            <template #size_bytes="{ row }">
-              {{ formatGB(row.size_bytes) }}
-            </template>
-            <template #attempts="{ row }">
-              {{ row.attempts }} / {{ row.max_attempts }}
-            </template>
-            <template #history="{ row }">
-              <el-button :size="size" link type="primary" @click="openAttempts(row)">
-                历史
-              </el-button>
-            </template>
-            <template #worker_id="{ row }">
-              {{ row.worker_id ?? "-" }}
-            </template>
-            <template #heartbeat_at="{ row }">
-              {{ formatDateTime(row.heartbeat_at) }}
-            </template>
-            <template #error="{ row }">
-              {{ row.error ?? "-" }}
-            </template>
-          </pure-table>
-          <div class="mt-3 flex items-center justify-between text-sm">
-            <span class="text-gray-500">
-              状态筛选已下推到后端（<code>?status=</code>，非法值返回
-              422）；接口无总数，所以仍是窗口式翻页。失败文件可用上方
-              “重试失败文件”重新排队（{{ failedCount }} 个失败）；“历史”打开该任务的尝试记录
-            </span>
-            <div class="flex gap-2">
-              <el-button :disabled="page.offset === 0" @click="(page.offset -= page.limit), loadFiles()">
-                上一页
-              </el-button>
-              <el-button :disabled="!hasNext" @click="(page.offset += page.limit), loadFiles()">
-                下一页
-              </el-button>
-            </div>
-          </div>
-        </template>
-      </PureTableBar>
-    </div>
+            下一页
+          </el-button>
+        </div>
+      </template>
+    </PureTableBar>
 
     <el-drawer
       v-model="attempts.visible"
-      size="920px"
-      :title="
-        `尝试历史 · 文件任务 #${attempts.taskId ?? '-'}${
-          attempts.fileName ? `（${attempts.fileName}）` : ''
-        }`
-      "
+      size="min(920px, 94vw)"
+      :title="`尝试历史 · 文件任务 #${attempts.taskId ?? '-'}${
+        attempts.fileName ? `（${attempts.fileName}）` : ''
+      }`"
       @close="closeAttempts"
     >
       <div v-loading="attempts.loading" style="min-height: 8rem">
-        <p class="mb-3 text-xs text-gray-500">
+        <p class="page-hint mb-3">
           作业 #{{ jobId }}。一行 = Worker 的一次领取：领取时写
-          <code>running</code>，结束时改写为
-          <code>succeeded</code> / <code>failed</code> /
-          <code>cancelled</code>，Worker 失联被维护任务回收时写
-          <code>timeout</code>。<br />
-          <b>“{{ UNKNOWN_TEXT }}” 表示该列没有值</b>（例如仍在执行的尝试没有结束时间、
-          成功的一次没有错误文案），不会用 0 或空文案顶替。
+          <code>running</code>，结束时改写为 <code>succeeded</code> /
+          <code>failed</code> / <code>cancelled</code>，Worker
+          失联被维护任务回收时写 <code>timeout</code>。<br />
+          <b>“{{ UNKNOWN_TEXT }}” 表示该列没有值</b
+          >（例如仍在执行的尝试没有结束时间、 成功的一次没有错误文案），不会用 0
+          或空文案顶替。
         </p>
 
         <el-alert
@@ -622,10 +673,10 @@ onBeforeUnmount(stopAll);
           v-else-if="attempts.rows.length > 0"
           size="small"
           row-key="attempt_no"
-          adaptive
           :border="true"
           :data="attempts.rows"
           :columns="attemptColumns"
+          :header-cell-style="TABLE_HEADER_CELL_STYLE"
         >
           <template #attempt_no="{ row }">
             {{ countOrUnknown(row.attempt_no) }}
@@ -649,7 +700,9 @@ onBeforeUnmount(stopAll);
             {{ row.started_at ? formatDateTime(row.started_at) : UNKNOWN_TEXT }}
           </template>
           <template #finished_at="{ row }">
-            {{ row.finished_at ? formatDateTime(row.finished_at) : UNKNOWN_TEXT }}
+            {{
+              row.finished_at ? formatDateTime(row.finished_at) : UNKNOWN_TEXT
+            }}
           </template>
           <template #processed_lines="{ row }">
             {{ countOrUnknown(row.processed_lines) }}
@@ -658,7 +711,9 @@ onBeforeUnmount(stopAll);
             {{ countOrUnknown(row.matched_rows) }}
           </template>
           <template #error="{ row }">
-            <span v-if="row.error" class="text-red-500">{{ row.error }}</span>
+            <span v-if="row.error" class="text-[var(--el-color-danger)]">{{
+              row.error
+            }}</span>
             <span v-else>{{ UNKNOWN_TEXT }}</span>
           </template>
         </pure-table>
@@ -670,8 +725,8 @@ onBeforeUnmount(stopAll);
         />
       </div>
       <template #footer>
-        <div class="flex items-center justify-between gap-3">
-          <span class="text-xs text-gray-500">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <span class="page-hint">
             {{
               attempts.error
                 ? "接口没有返回数据，表格已隐藏（不显示为空表）"

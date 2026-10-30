@@ -210,7 +210,7 @@ watch(loginDay, value => {
 
             <Motion :delay="200">
               <el-form-item>
-                <div class="w-full h-5 flex-bc">
+                <div class="w-full min-h-5 flex-bc">
                   <el-checkbox v-model="checked">
                     <span class="flex">
                       <select
@@ -288,6 +288,22 @@ watch(loginDay, value => {
   .check-en {
     position: absolute;
     left: 20px;
+  }
+}
+
+/*
+ * 只做两件事，不碰整屏构图：
+ * 1. login.css 里 .login-form 是 360px 定宽，390 视口扣掉容器 2rem 内边距只剩
+ *    326px，右侧会被 .login-box 的 overflow:hidden 裁掉；max-width 让它在有
+ *    余量时保持原样，仅在放不下时收到可用宽度。
+ * 2. el-form-item 的 18px 默认下边距和「登录」按钮的 mt-4（16px）不同一刻度，
+ *    统一收到 --pure-space-4。
+ */
+.login-form {
+  max-width: 100%;
+
+  :deep(.el-form-item) {
+    margin-bottom: var(--pure-space-4);
   }
 }
 </style>

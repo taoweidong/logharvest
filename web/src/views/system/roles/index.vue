@@ -25,7 +25,7 @@ import {
   menuTypeMeta,
   type RoleFilters
 } from "../filters";
-import { ADAPTIVE_OFFSET_BOTTOM, TABLE_HEADER_CELL_STYLE } from "../table";
+import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 
 import Refresh from "~icons/ep/refresh";
 import AddFill from "~icons/ri/add-circle-line";
@@ -344,59 +344,65 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="p-4">
-    <el-form
-      :inline="true"
-      :model="filters"
-      class="search-form bg-bg_color mb-2"
-      @submit.prevent
-    >
-      <el-form-item label="角色名称：" prop="name">
-        <el-input
-          v-model="filters.name"
-          placeholder="请输入角色名称"
-          clearable
-          class="w-45!"
-          @keyup.enter="onSearch"
-        />
-      </el-form-item>
-      <el-form-item label="角色标识：" prop="code">
-        <el-input
-          v-model="filters.code"
-          placeholder="请输入角色标识"
-          clearable
-          class="w-45!"
-          @keyup.enter="onSearch"
-        />
-      </el-form-item>
-      <el-form-item label="状态：" prop="status">
-        <el-select
-          v-model="filters.status"
-          placeholder="请选择状态"
-          clearable
-          class="w-45!"
-        >
-          <el-option label="已启用" value="active" />
-          <el-option label="已停用" value="inactive" />
-        </el-select>
-      </el-form-item>
-      <el-form-item>
-        <el-button
-          type="primary"
-          :icon="useRenderIcon('ri/search-line')"
-          :loading="loading"
-          @click="onSearch"
-        >
-          搜索
-        </el-button>
-        <el-button :icon="useRenderIcon(Refresh)" @click="onResetSearch">
-          重置
-        </el-button>
-      </el-form-item>
-    </el-form>
+  <div class="page">
+    <section class="page-panel">
+      <el-form
+        :inline="true"
+        :model="filters"
+        class="search-form"
+        @submit.prevent
+      >
+        <el-form-item label="角色名称：" prop="name">
+          <el-input
+            v-model="filters.name"
+            placeholder="请输入角色名称"
+            clearable
+            class="w-45!"
+            @keyup.enter="onSearch"
+          />
+        </el-form-item>
+        <el-form-item label="角色标识：" prop="code">
+          <el-input
+            v-model="filters.code"
+            placeholder="请输入角色标识"
+            clearable
+            class="w-45!"
+            @keyup.enter="onSearch"
+          />
+        </el-form-item>
+        <el-form-item label="状态：" prop="status">
+          <el-select
+            v-model="filters.status"
+            placeholder="请选择状态"
+            clearable
+            class="w-45!"
+          >
+            <el-option label="已启用" value="active" />
+            <el-option label="已停用" value="inactive" />
+          </el-select>
+        </el-form-item>
+        <el-form-item>
+          <el-button
+            type="primary"
+            :icon="useRenderIcon('ri/search-line')"
+            :loading="loading"
+            @click="onSearch"
+          >
+            搜索
+          </el-button>
+          <el-button :icon="useRenderIcon(Refresh)" @click="onResetSearch">
+            重置
+          </el-button>
+        </el-form-item>
+      </el-form>
+    </section>
 
-    <div :class="['flex', isMobile ? 'flex-wrap' : '']">
+    <!-- 两列共用一条 flex 行：grow 让行吃掉页面剩余高度，align-items 默认 stretch
+         使表格列与权限面板等高（面板内容更高时以内容为准，不裁树）。
+         表格列必须是 flex 纵向容器，里面的 .page-panel--fill 才有确定高度可撑。 -->
+    <div class="flex grow gap-3" :class="isMobile ? 'flex-wrap' : ''">
       <div
+        class="flex min-h-0 min-w-0 flex-col"
         :style="{
           width: panelVisible && !isMobile ? '62%' : '100%',
           transition: 'width 220ms cubic-bezier(0.4, 0, 0.2, 1)'
@@ -416,8 +422,7 @@ onMounted(load);
           <template v-slot="{ size, dynamicColumns }">
             <pure-table
               row-key="id"
-              adaptive
-              :adaptiveConfig="{ offsetBottom: ADAPTIVE_OFFSET_BOTTOM }"
+              height="100%"
               align-whole="center"
               showOverflowTooltip
               table-layout="auto"
@@ -442,7 +447,7 @@ onMounted(load);
                   </span>
                   <span
                     v-if="row.description"
-                    class="max-w-45 truncate text-xs text-gray-400"
+                    class="max-w-45 truncate text-xs text-[var(--el-text-color-secondary)]"
                     :title="row.description"
                   >
                     {{ row.description }}
@@ -495,12 +500,12 @@ onMounted(load);
                 </el-button>
               </template>
             </pure-table>
-            <div class="mt-3 flex items-center justify-between text-sm">
-              <span class="text-gray-500">
-                内置角色由系统维护：不可删除，角色代码、启用状态与菜单权限均只读。
-              </span>
-              <span class="text-gray-500">共 {{ filteredRows.length }} 条</span>
-            </div>
+          </template>
+          <template #footer>
+            <span>
+              内置角色由系统维护：不可删除，角色代码、启用状态与菜单权限均只读。
+            </span>
+            <span>共 {{ filteredRows.length }} 条</span>
           </template>
         </PureTableBar>
       </div>
@@ -509,11 +514,14 @@ onMounted(load);
         v-if="panelVisible"
         ref="panelRef"
         v-loading="panelLoading"
-        class="bg-bg_color px-2 pb-2"
-        :class="isMobile ? 'mt-2 w-full' : 'ml-2 min-w-0 flex-1'"
+        class="page-panel min-w-0 flex-1"
+        :class="isMobile ? 'w-full' : ''"
       >
-        <div class="flex w-full items-center justify-between px-3 pt-5 pb-4">
-          <div class="flex items-center">
+        <div class="page-panel__head">
+          <p class="page-panel__title truncate">
+            菜单权限{{ currentRole ? `（${currentRole.name}）` : "" }}
+          </p>
+          <div class="page-toolbar__end">
             <span
               class="panel-icon"
               role="button"
@@ -525,7 +533,7 @@ onMounted(load);
             </span>
             <span
               v-if="!isReadonlyRole"
-              class="panel-icon ml-2"
+              class="panel-icon"
               :class="panelSaving ? 'pointer-events-none opacity-50' : ''"
               role="button"
               aria-label="保存菜单权限"
@@ -535,9 +543,6 @@ onMounted(load);
               <IconifyIconOffline :icon="Check" width="18" height="18" />
             </span>
           </div>
-          <p class="truncate font-bold">
-            菜单权限{{ currentRole ? `（${currentRole.name}）` : "" }}
-          </p>
         </div>
 
         <el-alert
@@ -546,68 +551,76 @@ onMounted(load);
           :closable="false"
           show-icon
           title="内置角色的菜单权限由系统维护，此处只读查看。"
-          class="mb-2"
+          class="mb-3"
         />
 
-        <el-input
-          v-model="treeKeyword"
-          placeholder="请输入菜单名称、权限码或路径进行搜索"
-          class="mb-1"
-          clearable
-          @input="onTreeQueryChanged"
-        />
+        <div class="page-body">
+          <el-input
+            v-model="treeKeyword"
+            placeholder="请输入菜单名称、权限码或路径进行搜索"
+            clearable
+            @input="onTreeQueryChanged"
+          />
 
-        <div class="flex flex-wrap">
-          <el-checkbox v-model="isExpandAll" @change="applyExpanded">
-            展开/折叠
-          </el-checkbox>
-          <template v-if="!isReadonlyRole">
-            <el-checkbox v-model="isSelectAll" @change="applyChecked">
-              全选/全不选
+          <div class="mt-3 flex flex-wrap">
+            <el-checkbox v-model="isExpandAll" @change="applyExpanded">
+              展开/折叠
             </el-checkbox>
-            <el-checkbox v-model="isLinkage" v-tippy="{ content: '开启后勾选父级会联动勾选子级；后端按精确授权存储' }">
-              父子联动
-            </el-checkbox>
-          </template>
+            <template v-if="!isReadonlyRole">
+              <el-checkbox v-model="isSelectAll" @change="applyChecked">
+                全选/全不选
+              </el-checkbox>
+              <el-checkbox v-model="isLinkage" v-tippy="{ content: '开启后勾选父级会联动勾选子级；后端按精确授权存储' }">
+                父子联动
+              </el-checkbox>
+            </template>
+          </div>
+
+          <el-tree-v2
+            ref="treeRef"
+            :data="rawTree"
+            :props="treeProps"
+            :height="treeHeight"
+            :show-checkbox="!isReadonlyRole"
+            :check-strictly="!isLinkage"
+            :filter-method="filterMethod"
+            :expand-on-click-node="false"
+          >
+            <template #default="{ node }">
+              <span class="flex items-center gap-2">
+                <span>{{ node.data.title }}</span>
+                <el-tag
+                  size="small"
+                  :type="menuTypeMeta(node.data.menu_type).tag"
+                  effect="plain"
+                >
+                  {{ menuTypeMeta(node.data.menu_type).label }}
+                </el-tag>
+                <el-tag
+                  v-if="!node.data.is_active"
+                  size="small"
+                  type="info"
+                  effect="plain"
+                >
+                  停用
+                </el-tag>
+                <el-tag
+                  v-if="isReadonlyRole && grantedIdSet.has(node.data.id)"
+                  size="small"
+                  type="success"
+                  effect="plain"
+                >
+                  已授权
+                </el-tag>
+                <span class="text-xs text-[var(--el-text-color-secondary)]">
+                  {{ node.data.name || "—" }}
+                </span>
+              </span>
+            </template>
+          </el-tree-v2>
         </div>
 
-        <el-tree-v2
-          ref="treeRef"
-          :data="rawTree"
-          :props="treeProps"
-          :height="treeHeight"
-          :show-checkbox="!isReadonlyRole"
-          :check-strictly="!isLinkage"
-          :filter-method="filterMethod"
-          :expand-on-click-node="false"
-        >
-          <template #default="{ node }">
-            <span class="flex items-center gap-2">
-              <span>{{ node.data.title }}</span>
-              <el-tag
-                size="small"
-                :type="menuTypeMeta(node.data.menu_type).tag"
-                effect="plain"
-              >
-                {{ menuTypeMeta(node.data.menu_type).label }}
-              </el-tag>
-              <el-tag v-if="!node.data.is_active" size="small" type="info" effect="plain">
-                停用
-              </el-tag>
-              <el-tag
-                v-if="isReadonlyRole && grantedIdSet.has(node.data.id)"
-                size="small"
-                type="success"
-                effect="plain"
-              >
-                已授权
-              </el-tag>
-              <span class="text-xs text-gray-400">{{ node.data.name || "—" }}</span>
-            </span>
-          </template>
-        </el-tree-v2>
-
-        <p v-if="!isReadonlyRole" class="mt-2 text-xs text-gray-500">
+        <p v-if="!isReadonlyRole" class="page-hint mt-3">
           精确授权：默认不联动，勾选父级不会自动勾选子级；目录、页面与权限码需分别勾选。
         </p>
       </div>
@@ -642,7 +655,7 @@ onMounted(load);
           />
           <span
             v-if="!isCreate && editingRole?.is_system"
-            class="ml-2 text-xs text-gray-500"
+            class="page-hint ml-2"
           >
             内置角色的启用状态不可修改
           </span>

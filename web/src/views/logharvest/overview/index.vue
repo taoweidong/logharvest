@@ -6,13 +6,13 @@ import {
   apiErrorDetail,
   overview as fetchOverview,
   runMaintenance,
-  systemStatus
+  systemStatus,
 } from "@/api/logharvest";
 import {
   JOB_STATUS_OPTIONS,
   type MaintenanceResult,
   type Overview,
-  type SystemStatus
+  type SystemStatus,
 } from "@/api/logharvestTypes";
 import { formatDuration, statusTagType } from "../format";
 
@@ -41,32 +41,34 @@ function sum(counts: Record<string, number | undefined> | undefined): number {
   if (!counts) return 0;
   return Object.values(counts).reduce(
     (total, value) => total + (value ?? 0),
-    0
+    0,
   );
 }
 
 const fileTasks = computed<Record<string, number | undefined>>(
-  () => data.value?.file_tasks ?? fallback.value?.file_tasks ?? {}
+  () => data.value?.file_tasks ?? fallback.value?.file_tasks ?? {},
 );
 
 const jobTasks = computed<Record<string, number | undefined>>(
-  () => data.value?.jobs ?? {}
+  () => data.value?.jobs ?? {},
 );
 
 const jobTotal = computed(() => sum(jobTasks.value));
 const fileTotal = computed(() => sum(fileTasks.value));
 
 const workersOnline = computed(
-  () => data.value?.workers.online ?? fallback.value?.workers_online ?? 0
+  () => data.value?.workers.online ?? fallback.value?.workers_online ?? 0,
 );
 
 const oldestPending = computed(
   () =>
-    data.value?.oldest_pending_seconds ?? fallback.value?.pending_oldest_seconds ?? null
+    data.value?.oldest_pending_seconds ??
+    fallback.value?.pending_oldest_seconds ??
+    null,
 );
 
 const pendingWarning = computed(
-  () => (oldestPending.value ?? 0) > PENDING_WARN_SECONDS
+  () => (oldestPending.value ?? 0) > PENDING_WARN_SECONDS,
 );
 
 const versionRows = computed(() => {
@@ -77,7 +79,7 @@ const versionRows = computed(() => {
     .map(([version, count]) => ({
       version,
       count,
-      percent: Math.round((count / total) * 100)
+      percent: Math.round((count / total) * 100),
     }));
 });
 
@@ -85,32 +87,32 @@ const versionRows = computed(() => {
 function distribution(
   counts: Record<string, number | undefined>,
   total: number,
-  order: string[]
+  order: string[],
 ) {
-  const keys = Object.keys(counts).filter(key => counts[key]);
+  const keys = Object.keys(counts).filter((key) => counts[key]);
   const ordered = [
-    ...order.filter(item => keys.includes(item)),
-    ...keys.filter(key => !order.includes(key))
+    ...order.filter((item) => keys.includes(item)),
+    ...keys.filter((key) => !order.includes(key)),
   ];
-  return ordered.map(status => ({
+  return ordered.map((status) => ({
     status,
     count: counts[status] ?? 0,
-    percent: total ? Math.round(((counts[status] ?? 0) / total) * 100) : 0
+    percent: total ? Math.round(((counts[status] ?? 0) / total) * 100) : 0,
   }));
 }
 
 const jobDistribution = computed(() =>
-  distribution(jobTasks.value, jobTotal.value, JOB_STATUS_OPTIONS)
+  distribution(jobTasks.value, jobTotal.value, JOB_STATUS_OPTIONS),
 );
 const fileDistribution = computed(() =>
-  distribution(fileTasks.value, fileTotal.value, TASK_STATUS_OPTIONS)
+  distribution(fileTasks.value, fileTotal.value, TASK_STATUS_OPTIONS),
 );
 
 const degradedDescription = computed(
   () =>
     `GET /api/system/overview 请求失败（${loadError.value}）。` +
     "“作业状态分布 / 24 小时命中数 / Worker 版本分布”依赖概览接口，" +
-    "本次只显示后端已有 /api/system/status 能提供的字段。"
+    "本次只显示后端已有 /api/system/status 能提供的字段。",
 );
 
 async function load() {
@@ -128,7 +130,9 @@ async function load() {
       fallback.value = await systemStatus();
     } catch (innerError) {
       fallback.value = null;
-      message(apiErrorDetail(innerError, "系统状态加载失败"), { type: "error" });
+      message(apiErrorDetail(innerError, "系统状态加载失败"), {
+        type: "error",
+      });
     }
   } finally {
     loadedAt.value = new Date().toLocaleTimeString();
@@ -141,7 +145,7 @@ async function onMaintenance() {
     await ElMessageBox.confirm(
       "执行一次维护：回收心跳超时的文件任务、把失联 Worker 记为离线、收尾停滞的作业。确认继续？",
       "执行维护",
-      { type: "warning", confirmButtonText: "执行", cancelButtonText: "取消" }
+      { type: "warning", confirmButtonText: "执行", cancelButtonText: "取消" },
     );
   } catch {
     return;
@@ -153,7 +157,7 @@ async function onMaintenance() {
       `维护完成：回收 ${maintenanceResult.value.recovered} 个文件任务，` +
         `降级 ${maintenanceResult.value.workers_demoted} 台 Worker，` +
         `收尾 ${maintenanceResult.value.jobs_finalized} 个作业`,
-      { type: "success" }
+      { type: "success" },
     );
     await load();
   } catch (error) {
@@ -167,28 +171,29 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="p-4">
-    <div class="mb-3 flex items-center justify-between">
-      <h2 class="text-lg font-medium">运行概览</h2>
-      <div class="flex items-center gap-2">
-        <span class="text-xs text-gray-500">
-          {{ loading ? "加载中…" : `数据截至 ${loadedAt}` }}
-        </span>
-        <el-button :loading="loading" @click="load">刷新</el-button>
-        <el-button
-          v-perms="'system:operate'"
-          type="primary"
-          :loading="maintaining"
-          @click="onMaintenance"
-        >
-          执行维护
-        </el-button>
+  <div class="page">
+    <section class="page-panel">
+      <div class="page-panel__head">
+        <h2 class="page-panel__title">运行概览</h2>
+        <div class="page-toolbar__end">
+          <span class="page-hint">
+            {{ loading ? "加载中…" : `数据截至 ${loadedAt}` }}
+          </span>
+          <el-button :loading="loading" @click="load">刷新</el-button>
+          <el-button
+            v-perms="'system:operate'"
+            type="primary"
+            :loading="maintaining"
+            @click="onMaintenance"
+          >
+            执行维护
+          </el-button>
+        </div>
       </div>
-    </div>
+    </section>
 
     <el-alert
       v-if="degraded"
-      class="mb-3"
       type="warning"
       :closable="false"
       show-icon
@@ -197,102 +202,122 @@ onMounted(load);
     />
     <el-alert
       v-if="maintenanceResult"
-      class="mb-3"
       type="success"
       :closable="true"
       show-icon
       :title="`上次维护：回收 ${maintenanceResult.recovered} 个文件任务，降级 ${maintenanceResult.workers_demoted} 台 Worker，收尾 ${maintenanceResult.jobs_finalized} 个作业`"
     />
 
-    <el-row :gutter="12">
-      <el-col :span="6">
-        <el-card shadow="never">
-          <div class="text-sm text-gray-500">作业总数</div>
-          <div class="text-2xl font-medium">
-            <template v-if="data">{{ jobTotal }}</template>
-            <span v-else class="text-gray-400">未知</span>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="never">
-          <div class="text-sm text-gray-500">24 小时命中行数</div>
-          <div class="text-2xl font-medium">
-            <template v-if="data">{{ data.matches_24h }}</template>
-            <span v-else class="text-gray-400">未知</span>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="never">
-          <div class="text-sm text-gray-500">存活 Worker</div>
-          <div class="text-2xl font-medium">{{ workersOnline }}</div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="never">
-          <div class="text-sm text-gray-500">最老 pending 等待</div>
-          <div
-            class="text-2xl font-medium"
-            :class="pendingWarning ? 'text-red-600' : 'text-green-700'"
+    <div class="page-grid page-grid--4">
+      <el-card shadow="never">
+        <div class="text-sm text-[var(--el-text-color-secondary)]">
+          作业总数
+        </div>
+        <div class="text-2xl font-medium">
+          <template v-if="data">{{ jobTotal }}</template>
+          <span v-else class="text-[var(--el-text-color-placeholder)]"
+            >未知</span
           >
-            {{ formatDuration(oldestPending) }}
-            <el-tag v-if="pendingWarning" type="danger" size="small" effect="dark">
-              积压
-            </el-tag>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+        </div>
+      </el-card>
+      <el-card shadow="never">
+        <div class="text-sm text-[var(--el-text-color-secondary)]">
+          24 小时命中行数
+        </div>
+        <div class="text-2xl font-medium">
+          <template v-if="data">{{ data.matches_24h }}</template>
+          <span v-else class="text-[var(--el-text-color-placeholder)]"
+            >未知</span
+          >
+        </div>
+      </el-card>
+      <el-card shadow="never">
+        <div class="text-sm text-[var(--el-text-color-secondary)]">
+          存活 Worker
+        </div>
+        <div class="text-2xl font-medium">{{ workersOnline }}</div>
+      </el-card>
+      <el-card shadow="never">
+        <div class="text-sm text-[var(--el-text-color-secondary)]">
+          最老 pending 等待
+        </div>
+        <div
+          class="text-2xl font-medium"
+          :class="
+            pendingWarning
+              ? 'text-[var(--el-color-danger)]'
+              : 'text-[var(--el-color-success)]'
+          "
+        >
+          {{ formatDuration(oldestPending) }}
+          <el-tag
+            v-if="pendingWarning"
+            type="danger"
+            size="small"
+            effect="dark"
+          >
+            积压
+          </el-tag>
+        </div>
+      </el-card>
+    </div>
 
-    <el-row :gutter="12" class="mt-3">
-      <el-col :span="12">
-        <el-card shadow="never">
-          <template #header>作业状态分布</template>
-          <div v-if="jobDistribution.length">
-            <div v-for="item in jobDistribution" :key="item.status" class="mb-2">
-              <div class="flex items-center justify-between text-sm">
-                <el-tag :type="statusTagType(item.status)" size="small" effect="light">
-                  {{ item.status }}
-                </el-tag>
-                <span>{{ item.count }}（{{ item.percent }}%）</span>
-              </div>
-              <el-progress
-                :percentage="item.percent"
-                :stroke-width="10"
-                :show-text="false"
-              />
+    <div class="page-grid page-grid--2">
+      <el-card shadow="never">
+        <template #header>作业状态分布</template>
+        <div v-if="jobDistribution.length">
+          <div v-for="item in jobDistribution" :key="item.status" class="mb-2">
+            <div class="flex items-center justify-between text-sm">
+              <el-tag
+                :type="statusTagType(item.status)"
+                size="small"
+                effect="light"
+              >
+                {{ item.status }}
+              </el-tag>
+              <span>{{ item.count }}（{{ item.percent }}%）</span>
             </div>
-            <p class="text-xs text-gray-500">共 {{ jobTotal }} 个作业</p>
+            <el-progress
+              :percentage="item.percent"
+              :stroke-width="10"
+              :show-text="false"
+            />
           </div>
-          <el-empty v-else description="概览接口未返回作业分布" :image-size="60" />
-        </el-card>
-      </el-col>
-      <el-col :span="12">
-        <el-card shadow="never">
-          <template #header>文件任务状态分布</template>
-          <div v-if="fileDistribution.length">
-            <div v-for="item in fileDistribution" :key="item.status" class="mb-2">
-              <div class="flex items-center justify-between text-sm">
-                <el-tag :type="statusTagType(item.status)" size="small" effect="light">
-                  {{ item.status }}
-                </el-tag>
-                <span>{{ item.count }}（{{ item.percent }}%）</span>
-              </div>
-              <el-progress
-                :percentage="item.percent"
-                :stroke-width="10"
-                :show-text="false"
-              />
+          <p class="page-hint">共 {{ jobTotal }} 个作业</p>
+        </div>
+        <el-empty
+          v-else
+          description="概览接口未返回作业分布"
+          :image-size="60"
+        />
+      </el-card>
+      <el-card shadow="never">
+        <template #header>文件任务状态分布</template>
+        <div v-if="fileDistribution.length">
+          <div v-for="item in fileDistribution" :key="item.status" class="mb-2">
+            <div class="flex items-center justify-between text-sm">
+              <el-tag
+                :type="statusTagType(item.status)"
+                size="small"
+                effect="light"
+              >
+                {{ item.status }}
+              </el-tag>
+              <span>{{ item.count }}（{{ item.percent }}%）</span>
             </div>
-            <p class="text-xs text-gray-500">共 {{ fileTotal }} 个文件任务</p>
+            <el-progress
+              :percentage="item.percent"
+              :stroke-width="10"
+              :show-text="false"
+            />
           </div>
-          <el-empty v-else description="暂无文件任务" :image-size="60" />
-        </el-card>
-      </el-col>
-    </el-row>
+          <p class="page-hint">共 {{ fileTotal }} 个文件任务</p>
+        </div>
+        <el-empty v-else description="暂无文件任务" :image-size="60" />
+      </el-card>
+    </div>
 
-    <el-card shadow="never" class="mt-3">
+    <el-card shadow="never" class="page-panel--grow">
       <template #header>Worker 版本分布</template>
       <div v-if="versionRows.length" class="flex flex-wrap gap-3">
         <el-tag v-for="item in versionRows" :key="item.version" size="large">
@@ -300,9 +325,10 @@ onMounted(load);
         </el-tag>
       </div>
       <el-empty v-else description="概览接口未返回版本分布" :image-size="60" />
-      <p class="mt-2 text-xs text-gray-500">
+      <p class="page-hint mt-2">
         存活口径与后端一致：`online|busy|draining` 都算存活，`offline` 不计。
-        滚动升级请到「Worker 管理」用“按版本排空”，镜像替换由 Jenkins + Docker Compose 完成。
+        滚动升级请到「Worker 管理」用“按版本排空”，镜像替换由 Jenkins + Docker
+        Compose 完成。
       </p>
     </el-card>
   </div>

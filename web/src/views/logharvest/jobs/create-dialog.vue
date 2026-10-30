@@ -288,172 +288,175 @@ function goDataSources() {
     :close-on-click-modal="false"
     append-to-body
   >
-    <el-steps :active="step" align-center finish-status="success" class="mb-4">
-      <el-step title="数据源与目录" />
-      <el-step title="规则集" />
-      <el-step title="过滤与确认" />
-    </el-steps>
+    <div class="flex flex-col gap-3">
+      <el-steps :active="step" align-center finish-status="success">
+        <el-step title="数据源与目录" />
+        <el-step title="规则集" />
+        <el-step title="过滤与确认" />
+      </el-steps>
 
-    <el-form
-      v-show="step === 0"
-      ref="step0Ref"
-      :model="form"
-      :rules="step0Rules"
-      label-width="100px"
-    >
-      <el-form-item label="作业名称" prop="name">
-        <el-input v-model="form.name" clearable placeholder="例如：web01 一周错误日志" />
-      </el-form-item>
-      <el-form-item label="数据源" prop="data_source_id">
-        <el-select v-model="form.data_source_id" class="w-full" placeholder="选择挂载点">
-          <el-option
-            v-for="item in dataSources"
-            :key="item.id"
-            :label="`${item.name}（${item.root_path}）${item.enabled ? '' : ' 已停用'}`"
-            :value="item.id"
-          />
-        </el-select>
-        <div v-if="selectedSource && !selectedSource.enabled" class="mt-1 text-xs text-red-500">
-          该数据源已停用，后端提交时会返回 404（data source not found or disabled）
-        </div>
-      </el-form-item>
-      <el-form-item label="扫描目录" prop="source_path">
-        <el-input
-          v-model="form.source_path"
-          clearable
-          placeholder="数据源 root_path 之内的绝对路径"
-        />
-        <div class="mt-1 text-xs text-gray-500">
-          {{
-            selectedRootHint
-          }}
-        </div>
-      </el-form-item>
-      <el-form-item label="路径判定">
-        <div class="flex flex-wrap items-center gap-2">
-          <el-button
-            :loading="testing"
-            :disabled="form.data_source_id === undefined"
-            @click="onTestPath"
-          >
-            测试数据源根路径
-          </el-button>
-          <span class="text-xs text-gray-500">
-            后端只校验数据源的 root_path（符号链接、点目录会被跳过）
-          </span>
-        </div>
-        <div v-if="testResult" class="mt-2 flex flex-wrap gap-1">
-          <el-tag
-            v-for="flag in (['exists', 'is_dir', 'readable'] as const)"
-            :key="flag"
-            size="small"
-            :type="testResult[flag] ? 'success' : 'danger'"
-            effect="plain"
-          >
-            {{ { exists: "存在", is_dir: "目录", readable: "可读" }[flag] }}:
-            {{ testResult[flag] ? "✓" : "✗" }}
-          </el-tag>
-          <el-tag size="small" :type="readonlyVerdict(testResult).type" effect="plain">
-            {{ readonlyVerdict(testResult).text }}
-          </el-tag>
-        </div>
-        <div v-else-if="testError" class="mt-2 text-xs text-red-500">
-          {{ testError }}
-        </div>
-      </el-form-item>
-      <el-alert
-        v-if="optionsLoaded && dataSources.length === 0"
-        type="warning"
-        :closable="false"
-        show-icon
-        title="还没有任何数据源"
+      <el-form
+        v-show="step === 0"
+        ref="step0Ref"
+        :model="form"
+        :rules="step0Rules"
+        label-width="100px"
       >
-        <template #default>
-          <span class="text-xs">
-            需要先登记一个企业磁盘挂载点。
-            <el-button link type="primary" @click="goDataSources">去建数据源</el-button>
-          </span>
-        </template>
-      </el-alert>
-    </el-form>
-
-    <el-form
-      v-show="step === 1"
-      ref="step1Ref"
-      :model="form"
-      :rules="step1Rules"
-      label-width="100px"
-    >
-      <el-form-item label="规则集版本" prop="rule_set_id">
-        <el-select v-model="form.rule_set_id" filterable class="w-full">
-          <el-option
-            v-for="item in ruleSets"
-            :key="item.id"
-            :label="`${item.name} v${item.version}（#${item.id}）`"
-            :value="item.id"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="规则条数">
-        <el-tag v-if="typeof selectedRuleCount === 'number'" effect="plain">
-          {{ selectedRuleCount }} 条
-        </el-tag>
-        <span v-else class="text-xs text-gray-500">
-          {{ ruleCountText }}（列表接口不返回规则内容，选中后才取详情）
-        </span>
-      </el-form-item>
-    </el-form>
-
-    <div v-show="step === 2">
-      <el-form :model="form" label-width="100px">
-        <el-form-item label="递归扫描">
-          <el-switch v-model="form.recursive" />
+        <el-form-item label="作业名称" prop="name">
+          <el-input v-model="form.name" clearable placeholder="例如：web01 一周错误日志" />
         </el-form-item>
-        <el-form-item label="最大深度">
-          <el-input-number v-model="form.max_depth" :min="1" :max="20" />
-          <span class="ml-2 text-xs text-gray-500">1–20，达到该深度的目录不再下探</span>
-        </el-form-item>
-        <el-form-item label="文件后缀">
-          <el-input
-            v-model="form.suffixesText"
-            clearable
-            placeholder="留空=后端默认的全部压缩包后缀，例如 .gz .tar.gz"
-          />
-          <div class="mt-1 text-xs text-gray-500">
-            只接受后端支持的压缩包后缀（.zip、.tar/.tar.gz/.tar.bz2/.tar.xz/.tgz/.tbz2/.txz、
-            .gz/.bz2/.xz）；填了却没有一个合法就返回 400，原文会列出国支持集合。
+        <el-form-item label="数据源" prop="data_source_id">
+          <el-select v-model="form.data_source_id" class="w-full" placeholder="选择挂载点">
+            <el-option
+              v-for="item in dataSources"
+              :key="item.id"
+              :label="`${item.name}（${item.root_path}）${item.enabled ? '' : ' 已停用'}`"
+              :value="item.id"
+            />
+          </el-select>
+          <div v-if="selectedSource && !selectedSource.enabled" class="mt-1 text-xs text-[var(--el-color-danger)]">
+            该数据源已停用，后端提交时会返回 404（data source not found or disabled）
           </div>
         </el-form-item>
-        <el-form-item label="最大文件数">
-          <el-input-number v-model="form.max_files" :min="1" :max="20000" :step="1000" />
-          <span class="ml-2 text-xs text-gray-500">超出后后端立即中止扫描并返回 400</span>
+        <el-form-item label="扫描目录" prop="source_path">
+          <el-input
+            v-model="form.source_path"
+            clearable
+            placeholder="数据源 root_path 之内的绝对路径"
+          />
+          <p class="page-hint mt-1">
+            {{
+              selectedRootHint
+            }}
+          </p>
+        </el-form-item>
+        <el-form-item label="路径判定">
+          <div class="flex flex-wrap items-center gap-2">
+            <el-button
+              :loading="testing"
+              :disabled="form.data_source_id === undefined"
+              @click="onTestPath"
+            >
+              测试数据源根路径
+            </el-button>
+            <span class="page-hint">
+              后端只校验数据源的 root_path（符号链接、点目录会被跳过）
+            </span>
+          </div>
+          <div v-if="testResult" class="mt-2 flex flex-wrap gap-1">
+            <el-tag
+              v-for="flag in (['exists', 'is_dir', 'readable'] as const)"
+              :key="flag"
+              size="small"
+              :type="testResult[flag] ? 'success' : 'danger'"
+              effect="plain"
+            >
+              {{ { exists: "存在", is_dir: "目录", readable: "可读" }[flag] }}:
+              {{ testResult[flag] ? "✓" : "✗" }}
+            </el-tag>
+            <el-tag size="small" :type="readonlyVerdict(testResult).type" effect="plain">
+              {{ readonlyVerdict(testResult).text }}
+            </el-tag>
+          </div>
+          <div v-else-if="testError" class="mt-2 text-xs text-[var(--el-color-danger)]">
+            {{ testError }}
+          </div>
+        </el-form-item>
+        <el-alert
+          v-if="optionsLoaded && dataSources.length === 0"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="还没有任何数据源"
+        >
+          <template #default>
+            <span class="text-xs">
+              需要先登记一个企业磁盘挂载点。
+              <el-button link type="primary" @click="goDataSources">去建数据源</el-button>
+            </span>
+          </template>
+        </el-alert>
+      </el-form>
+
+      <el-form
+        v-show="step === 1"
+        ref="step1Ref"
+        :model="form"
+        :rules="step1Rules"
+        label-width="100px"
+      >
+        <el-form-item label="规则集版本" prop="rule_set_id">
+          <el-select v-model="form.rule_set_id" filterable class="w-full">
+            <el-option
+              v-for="item in ruleSets"
+              :key="item.id"
+              :label="`${item.name} v${item.version}（#${item.id}）`"
+              :value="item.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="规则条数">
+          <el-tag v-if="typeof selectedRuleCount === 'number'" effect="plain">
+            {{ selectedRuleCount }} 条
+          </el-tag>
+          <span v-else class="page-hint">
+            {{ ruleCountText }}（列表接口不返回规则内容，选中后才取详情）
+          </span>
         </el-form-item>
       </el-form>
 
-      <el-descriptions :column="1" border size="small" title="提交摘要">
-        <el-descriptions-item v-for="(line, index) in summaryLines" :key="index">
-          {{ line }}
-        </el-descriptions-item>
-      </el-descriptions>
+      <div v-show="step === 2">
+        <el-form :model="form" label-width="100px">
+          <el-form-item label="递归扫描">
+            <el-switch v-model="form.recursive" />
+          </el-form-item>
+          <el-form-item label="最大深度">
+            <el-input-number v-model="form.max_depth" :min="1" :max="20" />
+            <span class="page-hint ml-2">1–20，达到该深度的目录不再下探</span>
+          </el-form-item>
+          <el-form-item label="文件后缀">
+            <el-input
+              v-model="form.suffixesText"
+              clearable
+              placeholder="留空=后端默认的全部压缩包后缀，例如 .gz .tar.gz"
+            />
+            <p class="page-hint mt-1">
+              只接受后端支持的压缩包后缀（.zip、.tar/.tar.gz/.tar.bz2/.tar.xz/.tgz/.tbz2/.txz、
+              .gz/.bz2/.xz）；填了却没有一个合法就返回 400，原文会列出国支持集合。
+            </p>
+          </el-form-item>
+          <el-form-item label="最大文件数">
+            <el-input-number v-model="form.max_files" :min="1" :max="20000" :step="1000" />
+            <span class="page-hint ml-2">超出后后端立即中止扫描并返回 400</span>
+          </el-form-item>
+        </el-form>
+
+        <!-- 摘要行没有 label，border 会多渲染一整列空的 .el-descriptions__label，
+             在 680px 对话框里等于白占一条竖向槽位，所以这里用无边框形态。 -->
+        <el-descriptions :column="1" size="small" title="提交摘要">
+          <el-descriptions-item v-for="(line, index) in summaryLines" :key="index">
+            {{ line }}
+          </el-descriptions-item>
+        </el-descriptions>
+      </div>
+
+      <el-alert
+        v-if="backendError"
+        type="error"
+        :closable="false"
+        show-icon
+        title="提交未成功"
+      >
+        <pre class="whitespace-pre-wrap">{{ backendError }}</pre>
+      </el-alert>
     </div>
 
-    <el-alert
-      v-if="backendError"
-      class="mt-3"
-      type="error"
-      :closable="false"
-      show-icon
-      title="提交未成功"
-    >
-      <pre class="whitespace-pre-wrap">{{ backendError }}</pre>
-    </el-alert>
-
     <template #footer>
-      <div class="flex items-center justify-between gap-2">
-        <span class="text-xs text-gray-500">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <span class="page-hint min-w-0">
           {{ step + 1 }} / 3 · 提交后直接进入作业详情并跟随实时进度
         </span>
-        <div class="flex gap-2">
+        <div class="page-foot__actions">
           <el-button @click="visible = false">取消</el-button>
           <el-button v-show="step > 0" @click="onPrev">上一步</el-button>
           <el-button v-show="step < 2" type="primary" @click="onNext">下一步</el-button>
