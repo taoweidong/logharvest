@@ -13,7 +13,7 @@ name: logharvest-db
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: logharvest-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-logharvest}
@@ -42,7 +42,7 @@ services:
   # 可选：每日定时 pg_dump 归档到 /usr1/logharvest/postgres/backup，按天保留
   # 启用：--profile backup
   backup:
-    image: prodrigestivill/postgres-backup-local:16
+    image: prodrigestivill/postgres-backup-local:18
     profiles: ["backup"]
     depends_on:
       postgres:

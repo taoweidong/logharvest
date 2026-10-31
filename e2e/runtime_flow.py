@@ -153,8 +153,12 @@ def drain_all(ledger: Ledger, api: ApiClient) -> list[dict[str, Any]]:
     ``drain_requested`` 由 API 置位，``status`` 要等 Worker 下一轮心跳自报
     （up.sh 把轮询压到 1s），所以两个字段分开断言——只看 API 侧置位会把
     "Worker 根本没消费这个标记"这类缺陷放过去。
+
+    只排空在线 Worker：limits 套件的紧预算演练停掉 worker3 容器后，它的行仍保留
+    在 /workers 里（status=offline，没有容器就没有心跳，永远等不来 draining 自报），
+    把它算进"全部 draining"会让收尾等待必然超时、整个阶段在半路夭折。
     """
-    workers = workers_of(api)
+    workers = [w for w in workers_of(api) if w["status"] != "offline"]
     ledger.check("排空前有可用 Worker", len(workers) >= 2, f"workers={[w['id'] for w in workers]}")
     for worker in workers:
         body = api.post(f"/workers/{worker['id']}/drain", expect_status=200)
@@ -178,17 +182,32 @@ def drain_all(ledger: Ledger, api: ApiClient) -> list[dict[str, Any]]:
 
 
 def resume_all(ledger: Ledger, api: ApiClient) -> None:
-    """恢复认领，并确认标记真的清零——遗留的 drain 标记会让后面的作业永远 pending。"""
+    """恢复认领，并确认标记真的清零——遗留的 drain 标记会让后面的作业永远 pending。
+
+    离线行必须跳过：后端契约对离线机器 resume 一律 409（与 Worker 管理页禁用
+    「恢复」按钮同一条规则，api_flow 也钉了这条 409）。对遗留的离线行照常 POST
+    会抛 ApiError 让整个阶段在半路夭折，后面的阶段全部踩进未收尾的状态；
+    其 drain_requested 同样不参与清零等待（没有容器来消费它）。
+    """
     for worker in workers_of(api):
+        if worker["status"] == "offline":
+            expect_error(
+                ledger,
+                f"离线行 {worker['id']} resume → 409（契约拒绝，跳过恢复）",
+                lambda wid=worker["id"]: api.post(f"/workers/{wid}/resume"),
+                409,
+                contains="worker is offline",
+            )
+            continue
         body = api.post(f"/workers/{worker['id']}/resume", expect_status=200)
         ledger.equal(f"resume worker {worker['id']} 复位", (body["drain_requested"], body["status"]), (False, "online"))
     wait_until(
-        lambda: not any(w["drain_requested"] for w in workers_of(api)),
+        lambda: not any(w["drain_requested"] for w in workers_of(api) if w["status"] != "offline"),
         timeout=30.0,
-        name="全部 Worker 的 drain 标记清零",
+        name="全部在线 Worker 的 drain 标记清零",
         interval=1.0,
     )
-    ledger.check("恢复后无 drain 标记", True, "drain_requested 全为 False")
+    ledger.check("恢复后无 drain 标记（离线行除外）", True, "在线 Worker 的 drain_requested 全为 False")
 
 
 def bootstrap(ledger: Ledger, api: ApiClient) -> dict[str, Any]:

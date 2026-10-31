@@ -67,7 +67,7 @@ curl -s http://127.0.0.1:8000/api/jobs -H "Authorization: Bearer <accessToken>"
 | `LOGHARVEST_REFRESH_TOKEN_EXPIRE_DAYS` | `7` | `refreshToken` 有效期（天） |
 | `LOGHARVEST_ADMIN_USERNAME` | `admin` | `scripts/seed_admin` 创建的管理员用户名；登录本身只校验库中已有的用户 |
 | `LOGHARVEST_ADMIN_PASSWORD` | `""` | 种子脚本读取的口令来源；非 `dev`/`test` 环境必须显式配置（留空在配置校验阶段报错），少于 8 位时种子脚本拒绝执行 |
-| `LOGHARVEST_DATABASE_URL` | `sqlite:///./logharvest.db` | 相对路径基于启动目录；控制面 API 测试使用内存 SQLite。**启动 Worker 必须改为 PostgreSQL 连接串**，队列 SQL 依赖 PostgreSQL 语法 |
+| `LOGHARVEST_DATABASE_URL` | `sqlite:///./logharvest.db` | **数据库分层**：本地开发/控制面单测默认 SQLite（相对路径基于启动目录；API 测试用内存 SQLite）；生产与 e2e 一律指向 **PostgreSQL 18** 连接串。**启动 Worker 必须改为 PostgreSQL 连接串**——队列 SQL（SKIP LOCKED / ON CONFLICT / advisory lock）是 PG 专有语法，且引擎层只对 PG 附加连接池加固（pre_ping/容量/回收） |
 | `LOGHARVEST_AUTO_CREATE_TABLES` | `true` | 现在表示**应用启动时执行 `alembic upgrade head`**（`src/main.py` 的 lifespan），不再是"未接入的开关"；置为 `false` 时启动不动表结构。测试夹具通过 autouse fixture 强制关掉它，改用内存 SQLite 的 `create_all`，因此跑测试不会碰到开发库 |
 | `LOGHARVEST_WORKER_ID` | 主机名 | Worker 标识；同机启动多个 Worker 进程时必须逐个设为唯一值，否则会共用 `workers` 表的同一行 |
 | `LOGHARVEST_WORKER_VERSION` | `0.1.0` | Worker 版本号，注册与任务尝试记录都会写入 |
@@ -321,7 +321,7 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 
 ### PostgreSQL 集成门禁（CI）
 
-`tests/integration/` 默认跳过；CI 使用 `scripts/run_pg_integration.sh` 启动一次性 `postgres:16` 容器，
+`tests/integration/` 默认跳过；CI 使用 `scripts/run_pg_integration.sh` 启动一次性 `postgres:18` 容器，
 先对空库执行 `alembic upgrade head` 并断言 `file_tasks` 的领取/回收索引存在，再运行全部集成用例，
 退出时删除容器。Jenkins 的「PostgreSQL 集成测试」阶段已接入该脚本。
 

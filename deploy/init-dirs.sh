@@ -32,7 +32,7 @@ mkdir -p \
   "$BASE/worker/tmp" \
   "$BASE/server/logs"
 
-# postgres:16-alpine 的服务账户是 uid/gid 70；数据与备份目录必须归它所有
+# postgres:18-alpine 的服务账户是 uid/gid 70；数据与备份目录必须归它所有
 echo "==> chown 70:70 postgres/{data,backup}"
 chown 70:70 "$BASE/postgres/data" "$BASE/postgres/backup"
 

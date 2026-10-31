@@ -9,7 +9,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3.5-4FC08D?logo=vuedotjs&logoColor=white)
 ![Element Plus](https://img.shields.io/badge/Element%20Plus-2.14-409EFF?logo=elementplus&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-686%20collected%20%2F%20102%20vitest-brightgreen)
 
 </div>
@@ -37,7 +37,7 @@ flowchart TB
     subgraph SRV["FastAPI Server :8000"]
       api["REST API + SSE"]
     end
-    subgraph PG["PostgreSQL 16"]
+    subgraph PG["PostgreSQL 18"]
       tables["13 张表（业务 7 + RBAC 5 + 审计 1）"]
       queue["file_tasks 队列：SKIP LOCKED"]
     end

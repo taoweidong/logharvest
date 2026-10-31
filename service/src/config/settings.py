@@ -24,6 +24,10 @@ class Settings(BaseSettings):
 
     app_name: str = "LogHarvest"
     environment: str = "dev"
+    # 数据库分层：本地开发/单测默认 SQLite（零依赖起步，见 service/README「本地运行」）；
+    # 生产与 e2e 一律通过 LOGHARVEST_DATABASE_URL 指向 PostgreSQL 18——任务队列的
+    # SKIP LOCKED 领取、ON CONFLICT 注册、advisory lock 迁移都是 PG 专有语法，
+    # Worker 只能在 PG 上运行（engine 层对 PG 附加连接池加固，SQLite 保持默认）。
     database_url: str = "sqlite:///./logharvest.db"
     auto_create_tables: bool = True
     worker_poll_seconds: float = 1.0

@@ -405,14 +405,26 @@ async function phase_jobs(ledger, st) {
 
   const heads = await tableHeaderTexts(page);
   ledger.check('列集合=ID/名称/状态/文件数/总字节/创建时间/操作', ['ID', '名称', '状态', '文件数', '总字节', '创建时间', '操作'].every((t) => heads.includes(t)), JSON.stringify(heads));
+  // 断言不写死 50：全新栈（--fresh）上作业总数可能不足一页，第一页行数应与
+  // 后端第一页如实相等；翻页断言只在"取满 50"时才有意义，不足时跳过并注明。
+  const apiFirstPage = await st.api.get('/jobs?limit=50&offset=0');
+  const expectRows = Math.min(apiFirstPage.length, 50);
   const rows0 = await page.locator('.el-table__body .el-table__row').count();
-  ledger.equal('默认窗口取满 limit=50', rows0, 50);
+  ledger.equal('默认窗口行数 = 后端第一页行数', rows0, expectRows);
   const foot0 = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
-  ledger.check('底部"列表接口不返回总数：第 N 页，本页 M 条"', /列表接口不返回总数[：:].*第 1 页，本页 50 条/.test(foot0), foot0.match(/列表接口不返回总数[^，]{0,90}/)?.[0] ?? foot0.slice(0, 200));
+  ledger.check('底部"列表接口不返回总数：第 N 页，本页 M 条"',
+    new RegExp(`列表接口不返回总数[：:].*第 1 页，本页 ${expectRows} 条`).test(foot0),
+    foot0.match(/列表接口不返回总数[^，]{0,90}/)?.[0] ?? foot0.slice(0, 200));
   const prev = page.getByRole('button', { name: '上一页' });
   const next = page.getByRole('button', { name: '下一页' });
   ledger.check('第 1 页「上一页」disabled', await prev.isDisabled(), 'enabled');
-  ledger.check('本页取满 50 → 「下一页」enabled', !(await next.isDisabled()), 'disabled');
+  ledger.check(expectRows === 50 ? '本页取满 50 → 「下一页」enabled' : '未取满一页 → 「下一页」disabled',
+    expectRows === 50 ? !(await next.isDisabled()) : await next.isDisabled(), String(await next.isDisabled()));
+  const canPage = expectRows === 50;
+  if (!canPage) {
+    ledger.skip('后端第一页不足 50 条（全新栈数据量未到），翻页分支跳过',
+      `本页 ${expectRows} 条；连续跑完整套套件（或造满 50 个作业）后翻页分支自动恢复`);
+  }
 
   // 关键字只过滤本页，不发请求
   const before = (await recentRequests(page, /\/api\/jobs/)).length;
@@ -469,25 +481,27 @@ async function phase_jobs(ledger, st) {
   ledger.check('关闭标签后 URL 同步清掉 date', !/date=/.test(page.url()), page.url());
   ledger.check('标签消失后本页行重新出现（不再被日期提示过滤）', (await page.locator('.el-table__body .el-table__row').count()) > 0, String(await page.locator('.el-table__body .el-table__row').count()));
 
-  // 翻页
-  await go(page, '/logharvest/jobs', { reload: true, waitText: '分析作业' });
-  const p1 = (await recentRequests(page, /\/api\/jobs\?/)).length;
-  await next.click();
-  await waitFor(async () => (await recentRequests(page, /\/api\/jobs\?/)).length > p1, { label: '下一页触发 GET /jobs?offset=50', timeout: 10000 });
-  const p2req = (await recentRequests(page, /\/api\/jobs\?/)).at(-1);
-  ledger.check('下一页请求 offset=50', /offset=50/.test(p2req.url), p2req.url);
-  // goNext 同步改 offset：页脚「第 2 页」在响应回来之前就会渲染，那一刻 loading=true、
-  // 上一页仍禁用（index.vue:340 disabled= offset===0 || loading）。断言前必须等稳定态
-  // ——文案出现且上一页可用——否则是在给过渡帧拍快照。
-  await waitFor(async () => {
-    const body = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
-    return body.includes('第 2 页，本页') && !(await prev.isDisabled()) ? true : null;
-  }, { label: '第 2 页稳定态（文案出现且上一页可用）', timeout: 8000 });
-  const foot2 = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
-  ledger.check('第 2 页文案且上一页可用', /第 2 页，本页 \d+ 条/.test(foot2) && !(await prev.isDisabled()), foot2.match(/第 \d+ 页，本页 \d+ 条[^)]{0,40}/)?.[0] ?? '');
-  await prev.click();
-  await page.waitForTimeout(1200);
-  ledger.check('上一页回到第 1 页', /第 1 页，本页 50 条/.test((await page.locator('body').innerText()).replace(/\s+/g, ' ')), page.url());
+  // 翻页（只在第一页取满 50 时执行；不足一页时"下一页"本来就 disabled）
+  if (canPage) {
+    await go(page, '/logharvest/jobs', { reload: true, waitText: '分析作业' });
+    const p1 = (await recentRequests(page, /\/api\/jobs\?/)).length;
+    await next.click();
+    await waitFor(async () => (await recentRequests(page, /\/api\/jobs\?/)).length > p1, { label: '下一页触发 GET /jobs?offset=50', timeout: 10000 });
+    const p2req = (await recentRequests(page, /\/api\/jobs\?/)).at(-1);
+    ledger.check('下一页请求 offset=50', /offset=50/.test(p2req.url), p2req.url);
+    // goNext 同步改 offset：页脚「第 2 页」在响应回来之前就会渲染，那一刻 loading=true、
+    // 上一页仍禁用（index.vue:340 disabled= offset===0 || loading）。断言前必须等稳定态
+    // ——文案出现且上一页可用——否则是在给过渡帧拍快照。
+    await waitFor(async () => {
+      const body = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
+      return body.includes('第 2 页，本页') && !(await prev.isDisabled()) ? true : null;
+    }, { label: '第 2 页稳定态（文案出现且上一页可用）', timeout: 8000 });
+    const foot2 = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
+    ledger.check('第 2 页文案且上一页可用', /第 2 页，本页 \d+ 条/.test(foot2) && !(await prev.isDisabled()), foot2.match(/第 \d+ 页，本页 \d+ 条[^)]{0,40}/)?.[0] ?? '');
+    await prev.click();
+    await page.waitForTimeout(1200);
+    ledger.check('上一页回到第 1 页', /第 1 页，本页 50 条/.test((await page.locator('body').innerText()).replace(/\s+/g, ' ')), page.url());
+  }
 
   // 详情链接
   await page.getByPlaceholder('关键字（本页）').fill(st.jobClean.name);

@@ -354,6 +354,11 @@ async function usersLoop(ledger, st, page) {
   await step(ledger, 'U12-用户 列表口径', async () => {
     ledger.equal('用户表头（含固定操作列）', (await tableHeaderTexts(page)).join('|'),
       'ID|用户名|昵称|角色|状态|创建时间|操作');
+    // waitText 只保证骨架渲染；首屏数据在飞时脚注会短暂显示「本页 0 条」，
+    // 断言前必须等行数真的追上接口基线。
+    await waitFor(async () =>
+      ((await page.locator('.el-table__body .el-table__row').count()) === baseline.length ? true : null),
+      { label: '用户首屏行渲染到位', timeout: 15000 });
     const foot = norm(await page.locator('.page-foot span').first().innerText());
     ledger.check('脚注是窗口式口径（无总数）+ 本页条数等于接口返回条数',
       /^后端列表接口不返回总数；第 1 页，本页 \d+ 条$/.test(foot) && foot.endsWith(`${baseline.length} 条`),
@@ -857,7 +862,7 @@ async function menusLoop(ledger, st, page) {
   });
 
   await step(ledger, 'U12-菜单 新菜单进侧边栏并真的能打开', async () => {
-    const fresh = await go(page, '/system/menus', { reload: true, waitText: '菜单管理' });
+    const fresh = await go(page, '/system/menus', { reload: true, waitText: '名称/权限码' });
     const menu = await menuTexts(fresh);
     // pure-admin 的 SidebarItem 对"只有一个可见子页"的目录折叠成叶子项（不渲染分组标题），
     // 自建目录只有一个页面，所以侧边栏出现的是页面项而不是目录分组——这是框架行为不是缺陷。
@@ -945,9 +950,13 @@ async function rolesLoop(ledger, st, page) {
 
   await step(ledger, 'U12-角色 列表口径', async () => {
     ledger.equal('角色表头五列', (await tableHeaderTexts(page)).join('|'), 'ID|角色名|角色标识|状态|操作');
+    const baseline = await apiRoles();
+    // 同 usersLoop：先等行数追上接口基线，再读页脚，避免拍到「共 0 条」的过渡帧。
+    await waitFor(async () =>
+      ((await roleRows(page).count()) === baseline.length ? true : null),
+      { label: '角色首屏行渲染到位', timeout: 15000 });
     const foot = await footSpans(page);
     ledger.equal('脚注写明内置口径', foot[0], '内置角色由系统维护：不可删除，角色代码、启用状态与菜单权限均只读。');
-    const baseline = await apiRoles();
     ledger.equal('「共 N 条」等于后端行数', totalOf(foot[1] ?? ''), baseline.length);
     ledger.equal('可见行数等于后端行数', await roleRows(page).count(), baseline.length);
 
@@ -1093,13 +1102,13 @@ async function phase_system(ledger, st, { PHASE_LABEL }) {
 
   // 顺序 = 视图清单顺序（§13 用户 → §14 角色 → §15 菜单）。
   // 三个循环彼此独立：users 删掉自建用户、roles/menus 的自建行由收尾清理。
-  await go(page, '/system/users', { waitText: '用户管理' });
+  await go(page, '/system/users', { waitText: '昵称' });
   await usersLoop(ledger, st, page);
 
-  await go(page, '/system/roles', { waitText: '角色管理' });
+  await go(page, '/system/roles', { waitText: '角色标识' });
   await rolesLoop(ledger, st, page);
 
-  await go(page, '/system/menus', { waitText: '菜单管理' });
+  await go(page, '/system/menus', { waitText: '名称/权限码' });
   await menusLoop(ledger, st, page);
   await shot(page, ledger, 'system_final');
 }
@@ -1133,7 +1142,7 @@ async function phase_audit(ledger, st, { PHASE_LABEL }) {
   const page = st.adminPage ?? await useSession(ledger, st, 'admin');
   const LIST_RE = /\/api\/operation-logs(\?|$)/;
 
-  await go(page, '/system/audit-logs', { waitText: '操作日志' });
+  await go(page, '/system/audit-logs', { waitText: '时间范围' });
 
   await step(ledger, 'U13 页面口径与首屏请求', async () => {
     const body = await bodyText(page);

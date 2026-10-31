@@ -27,7 +27,7 @@ SERVICE_IMAGE="${SERVICE_IMAGE:-lh-e2e/service:e2e}"          # target=server
 WORKER_IMAGE="${WORKER_IMAGE:-lh-e2e/service:worker}"          # target=worker
 WORKER_V2_IMAGE="${WORKER_V2_IMAGE:-lh-e2e/service:worker-v2}" # 升级演练用的"新版本"镜像
 WEB_IMAGE="${WEB_IMAGE:-lh-e2e/web:e2e}"
-PG_IMAGE="${PG_IMAGE:-docker.m.daocloud.io/library/postgres:16-alpine}"
+PG_IMAGE="${PG_IMAGE:-docker.m.daocloud.io/library/postgres:18-alpine}"
 
 # Dockerfile 里 FROM 的名字；本机直连 Docker Hub 会超时，所以上游镜像统一走
 # DaoCloud 镜像站拉取，再 tag 回 Dockerfile 期望的名字（见 up.sh 的 ensure_base）。
