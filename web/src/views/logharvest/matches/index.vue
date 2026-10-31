@@ -375,6 +375,7 @@ onMounted(async () => {
         <el-empty
           v-if="!loading && rows.length === 0"
           :description="searched ? '本段没有命中行' : '尚未查询'"
+          :image-size="72"
         />
       </div>
       <div class="page-foot">

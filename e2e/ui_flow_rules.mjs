@@ -757,7 +757,7 @@ async function phase_rules(ledger, st, { PHASE_LABEL }) {
   const bRow = rowsOf(t).nth(0);
   const bCls = (await bRow.getAttribute('class').catch(() => '')) ?? '';
   const { panel: bPanel } = await expandRow(page, t, 0);
-  const bErr = norm(await bPanel.locator('.text-red-600').first().innerText().catch(() => ''));
+  const bErr = norm(await bPanel.locator('[class*=--el-color-danger]').first().innerText().catch(() => ''));
   ledger.check(
     '「添加规则」出来的空行立即整行标红 + 展开面板红字「规则 id 必填」（设计 §11 逐行标红）',
     (await rowsOf(t).count()) === 1 && /rule-row-error/.test(bCls) && bErr === '规则 id 必填',
@@ -874,7 +874,7 @@ async function phase_rules(ledger, st, { PHASE_LABEL }) {
   // 清空后 rowHint 出现 ⇒ rowClassName 变化 ⇒ 行重建，旧 p2 可能已脱离 DOM，重新解析再读红字。
   const panelStillMounted = (await p2.count()) > 0;
   const p2v = await livePanel(page, 1);
-  const patErr = norm(await p2v.locator('.text-red-600').first().innerText().catch(() => ''));
+  const patErr = norm(await p2v.locator('[class*=--el-color-danger]').first().innerText().catch(() => ''));
   ledger.check(
     '清空正则模式即时整行标红 + 面板红字「正则模式不能为空」（必填由前端拦）',
     /rule-row-error/.test(emptyCls) && patErr === '正则模式不能为空',
@@ -905,7 +905,7 @@ async function phase_rules(ledger, st, { PHASE_LABEL }) {
   // 开关一点 rowError 就出现 ⇒ 行重建 ⇒ 面板/开关可能全部脱旧，重新解析后再读再点。
   const p1b = await livePanel(page, 0, 'input[placeholder="字段（正则命名分组）"]');
   const kwThrSwitch2 = fieldItem(page, '数值阈值', p1b).locator('.el-switch').first();
-  const kwErr = norm(await p1b.locator('.text-red-600').first().innerText().catch(() => ''));
+  const kwErr = norm(await p1b.locator('[class*=--el-color-danger]').first().innerText().catch(() => ''));
   const kwCls = (await rowsOf(visTable(page)).nth(0).getAttribute('class').catch(() => '')) ?? '';
   ledger.check(
     '关键字规则开「数值阈值」：阈值三项出现 + 面板红字原文「阈值依赖正则命名分组，关键字规则没有可提取字段」+ 整行标红',

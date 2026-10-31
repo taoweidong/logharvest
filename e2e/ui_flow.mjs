@@ -446,7 +446,11 @@ async function phase_jobs(ledger, st) {
 
   // UTC 日标签（统计页条形点击带来的 ?date=）：源码 index.vue:43 明说后端 /jobs 没有
   // date 参数，它只在本页 displayRows 里过滤，界面文案也照此标注。
+  // 断言不写死 50 行：套件在 UTC 零点后跑时，第一页属于"今天"的行可能只有几条
+  // （库里的作业多建在前一天）。先取无过滤基线，再断言过滤后与基线一致。
   const today = new Date().toISOString().slice(0, 10);
+  await go(page, '/logharvest/jobs', { reload: true, waitText: '分析作业' });
+  const todayBase = await page.locator('.el-table__body .el-table__row', { hasText: today }).count();
   await go(page, `/logharvest/jobs?date=${today}`, { reload: true, waitText: '分析作业' });
   const tagText = `UTC 日：${today}`;
   ledger.check('URL 带 ?date= 时出现可关闭标签', (await page.getByText(tagText).count()) > 0, await page.locator('body').innerText().then((t) => t.replace(/\s+/g, ' ').slice(0, 200)));
@@ -456,7 +460,7 @@ async function phase_jobs(ledger, st) {
   await go(page, '/logharvest/jobs?date=2000-01-01', { reload: true, waitText: 'UTC 日：2000-01-01' });
   await page.waitForTimeout(600);
   const rowsOtherDay = await page.locator('.el-table__body .el-table__row').count();
-  ledger.check('日期提示在本页内过滤（无匹配则空态）', rowsToday === 50 && rowsOtherDay === 0, JSON.stringify({ rowsToday, rowsOtherDay }));
+  ledger.check('日期提示在本页内过滤（无匹配则空态）', rowsToday === todayBase && rowsOtherDay === 0, JSON.stringify({ todayBase, rowsToday, rowsOtherDay }));
   ledger.check('空态文案「暂无数据」随日期提示出现', (await page.locator('body').innerText()).includes('暂无数据'), 'no empty text');
 
   // 标签的关闭按钮：el-tag(closable) 渲染 .el-tag__close，点它 → clearDayHint() 同时 router.replace 抹掉 URL 里的 date

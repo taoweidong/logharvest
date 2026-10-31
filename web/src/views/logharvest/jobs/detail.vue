@@ -22,6 +22,7 @@ import {
   type ProgressEvent,
 } from "@/api/logharvestTypes";
 import { streamJobProgress } from "@/utils/sse";
+import { useAppStoreHook } from "@/store/modules/app";
 import {
   UNKNOWN_TEXT,
   countOrUnknown,
@@ -33,6 +34,9 @@ import {
 import { TABLE_HEADER_CELL_STYLE } from "@/config/table";
 
 defineOptions({ name: "JobDetail" });
+
+const appStore = useAppStoreHook();
+const isMobile = computed(() => appStore.device === "mobile");
 
 const route = useRoute();
 const router = useRouter();
@@ -491,7 +495,8 @@ onBeforeUnmount(stopAll);
         </div>
       </template>
 
-      <el-descriptions :column="3" border size="small">
+      <!-- 窄屏 3 列会把标签压成竖排单字，降为单列 -->
+      <el-descriptions :column="isMobile ? 1 : 3" border size="small">
         <el-descriptions-item label="数据源"
           >#{{ job?.data_source_id }}</el-descriptions-item
         >

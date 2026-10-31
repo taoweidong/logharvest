@@ -708,7 +708,7 @@ const JOB_TAG = { pending: 'info', running: 'primary', succeeded: 'success', par
 const QUICK_JUMP = [['running', '运行中'], ['succeeded', '成功'], ['partial', '部分成功'], ['failed', '失败'], ['cancelled', '已取消']];
 
 const cardByLabel = (page, label) => page.locator('.el-card')
-  .filter({ has: page.locator(`div.text-sm.text-gray-500:text-is("${label}")`) }).first();
+  .filter({ has: page.locator(`div.text-sm:text-is("${label}")`) }).first();
 const cardValue = (page, label) => cardByLabel(page, label).locator('.text-2xl').first();
 
 /**
@@ -806,7 +806,7 @@ async function phase_stats(ledger, st, { PHASE_LABEL }) {
 
     // ---- ① 四张指标卡：页面显示的每个数都必须等于 /api/stats/jobs 现场返回的数 ----
     ledger.equal('「作业数」= totals.jobs', norm(await cardValue(page, '作业数').innerText()), String(t.jobs));
-    const jumpTags = page.locator('.el-card').filter({ has: page.locator('div.text-sm.text-gray-500:text-is("作业数")') })
+    const jumpTags = page.locator('.el-card').filter({ has: page.locator('div.text-sm:text-is("作业数")') })
       .first().locator('.mt-2 .el-tag');
     const jumpTexts = (await jumpTags.allInnerTexts()).map(norm);
     ledger.equal('快捷跳转 5 个 tag 的顺序与文案逐字（运行中/成功/部分成功/失败/已取消）',
@@ -823,7 +823,7 @@ async function phase_stats(ledger, st, { PHASE_LABEL }) {
     const rateText = rate === null ? '未知' : `${rate.toFixed(1)}%`;
     ledger.equal('「文件失败率」= files_failed/(succeeded+failed) 的一位小数', norm(await cardValue(page, '文件失败率').innerText()), rateText);
     ledger.check('失败率 ≤10% 用绿色、>10% 用红色（配色承载"要不要紧张"的判断）',
-      rate !== null && (rate > 10 ? /text-red-600/.test(norm(await cardValue(page, '文件失败率').innerHTML())) : /text-green-700/.test(norm(await cardValue(page, '文件失败率').innerHTML()))),
+      rate !== null && (rate > 10 ? /--el-color-danger/.test(norm(await cardValue(page, '文件失败率').innerHTML())) : /--el-color-success/.test(norm(await cardValue(page, '文件失败率').innerHTML()))),
       `rate=${rate} html=${norm(await cardValue(page, '文件失败率').innerHTML())}`);
     ledger.check('「文件失败率」副行「成功 A / 失败 B」',
       (await bodyText(page)).includes(`成功 ${t.file_succeeded} / 失败 ${t.file_failed}`), `s=${t.file_succeeded} f=${t.file_failed}`);
@@ -939,8 +939,8 @@ async function phase_stats(ledger, st, { PHASE_LABEL }) {
       ledger.equal('零作业时「处理字节」是 0.00 GB（真实零，不是未知的「—」）', norm(await cardValue(page, '处理字节').innerText()), zeroExpect.bytes);
       ledger.equal('零作业时「命中行数」显示 0', norm(await cardValue(page, '命中行数').innerText()), zeroExpect.lines);
       ledger.equal('失败率分母为 0 时显示「未知」而不是 0.0%（不冒充好消息）', norm(await cardValue(page, '文件失败率').innerText()), zeroExpect.rate);
-      ledger.check('「未知」用 text-gray-400 弱化（与真实数字区分）',
-        /text-gray-400/.test(norm(await cardValue(page, '文件失败率').innerHTML())), norm(await cardValue(page, '文件失败率').innerHTML()));
+      ledger.check('「未知」用弱化灰（--el-text-color-placeholder）与真实数字区分',
+        /--el-text-color-placeholder/.test(norm(await cardValue(page, '文件失败率').innerHTML())), norm(await cardValue(page, '文件失败率').innerHTML()));
       ledger.equal('趋势卡空态文案「该时间段没有作业」', await page.locator('.el-empty__description:visible').filter({ hasText: '该时间段没有作业' }).count(), 1);
       ledger.equal('Top 规则空态文案「该时间段没有命中」', await page.locator('.el-empty__description:visible').filter({ hasText: '该时间段没有命中' }).count(), 1);
       ledger.equal('空态下 Top 规则表格整体不渲染（v-if 让位给 el-empty）', await page.locator('.el-table').count(), 0);
@@ -1303,7 +1303,7 @@ async function phase_overview(ledger, st, { PHASE_LABEL }) {
       ledger.equal('420 秒显示「7 分」（formatDuration 的分钟档，不含角标文本）',
         await cardNumber(page, '最老 pending 等待'), fmtDuration(420));
       ledger.check('超过 300 秒变红并挂出「积压」角标',
-        norm(await pend.getAttribute('class')).includes('text-red-600')
+        norm(await pend.getAttribute('class')).includes('--el-color-danger')
           && hasTag(norm(await pend.locator('.el-tag').getAttribute('class').catch(() => '')), 'danger'),
         norm(await pend.getAttribute('class')));
       ledger.check('角标文案就是「积压」两个字', (await bodyText(page)).includes('积压'), '');
@@ -1315,7 +1315,7 @@ async function phase_overview(ledger, st, { PHASE_LABEL }) {
       ledger.equal('恰好 300 秒显示「5 分」', await cardNumber(page, '最老 pending 等待'), fmtDuration(300));
       ledger.check('恰好 300 秒不告警（判定是严格 ">"，阈值本身不算积压）',
         (await cardValue(page, '最老 pending 等待').locator('.el-tag').count()) === 0
-          && norm(await cardValue(page, '最老 pending 等待').getAttribute('class')).includes('text-green-700'),
+          && norm(await cardValue(page, '最老 pending 等待').getAttribute('class')).includes('--el-color-success'),
         norm(await cardValue(page, '最老 pending 等待').getAttribute('class')));
 
       synthBody = { ...synth, oldest_pending_seconds: null };
@@ -1365,7 +1365,7 @@ async function phase_overview(ledger, st, { PHASE_LABEL }) {
       ledger.equal('概览挂掉时「24 小时命中行数」显示「未知」',
         norm(await cardValue(page, '24 小时命中行数').innerText()), '未知');
       ledger.equal('「未知」用灰色弱化（text-gray-400），与真实数字一眼能分',
-        await cardByLabel(page, '作业总数').locator('.text-2xl span.text-gray-400').count(), 1);
+        await cardByLabel(page, '作业总数').locator('.text-2xl span[class*=--el-text-color-placeholder]').count(), 1);
       await waitCardText('存活 Worker', String(stt2.workers_online));
       ledger.equal('「存活 Worker」用 status 兜底（这个字段概览挂了也有）',
         norm(await cardValue(page, '存活 Worker').innerText()), String(stt2.workers_online));
@@ -1410,7 +1410,7 @@ async function phase_overview(ledger, st, { PHASE_LABEL }) {
       if (onlineTxt === '0') {
         ledger.check('[产品缺陷] 概览与 status 双挂时「存活 Worker」显示 0（把"不知道"渲染成"一台都没有"）', true,
           `实测文案=${onlineTxt}；证据 overview/index.vue:59-61 的 workersOnline 用 \`?? 0\` 兜底，`
-          + '而同页 :213/:222 的「作业总数」「24 小时命中行数」走 text-gray-400 的「未知」，'
+          + '而同页「作业总数」「24 小时命中行数」的「未知」用弱化灰（--el-text-color-placeholder），'
           + 'format.ts:8-20 也写明"NULL 绝不退化成 0"。运营看到 0 会以为 Worker 全掉线并去重启，实际是接口都挂了。');
       } else {
         ledger.equal('双失败时「存活 Worker」不再谎报 0（缺陷未显现）', onlineTxt, '未知');

@@ -60,6 +60,11 @@
   gap: var(--pure-page-gap);
   min-height: var(--pure-head-min-height);
   margin-bottom: var(--pure-page-gap);
+
+  /* --fill 面板高度受限时 flex 会按比例压缩子项：头部一旦因窄屏换行被压回
+     min-height，工具栏内容就溢出叠在正文上。头部保持自然高度，收缩全部交给
+     .page-body（min-height: 0，表格在内部滚动）。 */
+  flex-shrink: 0;
 }
 
 .page-panel__title {
@@ -202,6 +207,10 @@
   border-top: 1px solid var(--el-border-color-lighter);
   font-size: 13px;
   color: var(--el-text-color-secondary);
+
+  /* 同 .page-panel__head：--fill 面板里不许被 flex 压扁，说明文字换行时
+     整体保持自然高度，否则会叠到表格上 */
+  flex-shrink: 0;
 }
 
 .page-foot__actions {
