@@ -2,16 +2,30 @@
 # 构建上下文 = service/；server 与 worker 通过 --target 选择。
 #   docker build -f service/Dockerfile --target server -t logharvest-server ./service
 #   docker build -f service/Dockerfile --target worker -t logharvest-worker ./service
+#
+# 基础镜像约束：生产环境只提供 python:3.12 等白名单镜像（见 docs/deployment-docker.md §3），
+# builder 与 runtime 统一用 python:3.12——同一基座消除 glibc/路径差异，uv.lock 里的
+# manylinux wheel（hyperscan 等）在两个阶段完全一致。
+# pip/uv 源可配置：PIP_INDEX_URL 默认对齐 uv.lock 锁定的源（mirrors.aliyun.com）；
+# 换源时 --build-arg PIP_INDEX_URL=<index>（或 compose 的 PIP_INDEX_URL 变量），
+# 构建期 scripts/uv_lock_index.py 会把锁内主源 URL 一并改写到该源（版本与 sha256 不变，
+# uv sync --frozen 只认锁内 URL，仅换 pip 索引是不够的）。
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+FROM python:3.12 AS builder
+
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 
 WORKDIR /app
 
+RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" uv
+
 # 先只拷贝依赖清单，利用层缓存：uv.lock 变了才重装依赖
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-dev --compile-bytecode
+COPY scripts/uv_lock_index.py /tmp/uv_lock_index.py
+RUN python /tmp/uv_lock_index.py uv.lock --index "$PIP_INDEX_URL" && \
+    uv sync --frozen --no-dev --compile-bytecode
 
-FROM python:3.12-slim-bookworm AS base
+FROM python:3.12 AS base
 
 # 非 root 运行（uid/gid 10001，与 deploy/init-dirs.sh 的数据盘属主规划一致）：
 # server 无本地写需求；worker 只写 LOGHARVEST_WORK_DIR 挂载点（属主 10001）。

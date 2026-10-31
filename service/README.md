@@ -321,7 +321,7 @@ data: {"job_id":1,"status":"running","total":12,"by_status":{"pending":3,"runnin
 
 ### PostgreSQL 集成门禁（CI）
 
-`tests/integration/` 默认跳过；CI 使用 `scripts/run_pg_integration.sh` 启动一次性 `postgres:18` 容器，
+`tests/integration/` 默认跳过；CI 使用 `scripts/run_pg_integration.sh` 启动一次性 `postgres:18.6` 容器，
 先对空库执行 `alembic upgrade head` 并断言 `file_tasks` 的领取/回收索引存在，再运行全部集成用例，
 退出时删除容器。Jenkins 的「PostgreSQL 集成测试」阶段已接入该脚本。
 

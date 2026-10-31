@@ -408,13 +408,13 @@ sequenceDiagram
 flowchart TB
     subgraph HOST["宿主机（Linux + Docker）"]
         subgraph DBSTACK["栈 logharvest-db（deploy/postgres）"]
-            PGC["postgres 容器（PG16）<br/>logharvest-postgres"]
+            PGC["postgres 容器（postgres:18.6）<br/>logharvest-postgres"]
             PGDATA[("/usr1/logharvest/postgres/data<br/>PGDATA bind mount")]
             BACKUP[("/usr1/logharvest/postgres/backup<br/>pg_dump 归档，含 Jenkins 升级前备份")]
         end
 
         subgraph APPSTACK["栈 logharvest-app（deploy/server）"]
-            WEB["web 容器（nginx:1.27）:80<br/>前端静态资源 dist/<br/>nginx.conf：/api 反代、SSE 禁缓冲"]
+            WEB["web 容器（nginx:1.20）:80<br/>前端静态资源 dist/<br/>nginx.conf：/api 反代、SSE 禁缓冲"]
             SERVER["server 容器（uvicorn :8000）<br/>FastAPI 应用（启动即迁移+种子）"]
             SLOG[("/usr1/logharvest/server/logs<br/>日志归档位")]
         end

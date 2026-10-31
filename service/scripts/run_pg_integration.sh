@@ -15,7 +15,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 CONTAINER="${LOGHARVEST_PG_CONTAINER:-logharvest-ci-pg-$$}"
-IMAGE="${LOGHARVEST_PG_IMAGE:-postgres:18}"
+IMAGE="${LOGHARVEST_PG_IMAGE:-postgres:18.6}"
 DB_USER="${LOGHARVEST_PG_USER:-logharvest_ci}"
 DB_PASSWORD="${LOGHARVEST_PG_PASSWORD:-logharvest-ci-password-0123456789}"
 DB_NAME="${LOGHARVEST_PG_DB:-logharvest_ci}"

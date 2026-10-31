@@ -2,15 +2,17 @@
 # 同一个 /usr/share/nginx/html 布局、同样 8080 端口与健康检查），
 # 唯一区别是把 node 构建阶段换成宿主侧 `pnpm build` 已经产出的 dist/。
 #
-# 为什么：node:22-bookworm-slim 基础镜像在本机（wslc，无原生 docker）多次拉取超时，
+# 为什么：node:20 基础镜像在本机（wslc，无原生 docker）多次拉取超时，
 # 且容器内 pnpm install 要重下整个 vue-pure-admin 依赖树。宿主已有 node 24 + web/node_modules，
 # 构建产物与容器内构建同源（同一份源码、同一个 vite 配置），只是执行位置不同。
 # 用 docker 方式构建：E2E_WEB_BUILD=docker bash e2e/up.sh（需要 node 基础镜像就位）。
-FROM nginx:1.27-alpine
+# 运行基座与生产一致用 nginx:1.20（生产镜像白名单）；它不带 wget/curl，
+# 健康检查用 bash 内建 /dev/tcp。
+FROM nginx:1.20
 
 COPY nginx.conf /etc/nginx/nginx.conf
 COPY dist /usr/share/nginx/html
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1
+  CMD timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf "GET / HTTP/1.0\r\n\r\n" >&3 && grep -q " 200 " <&3'

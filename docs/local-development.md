@@ -54,7 +54,7 @@ pnpm dev          # http://localhost:8848，/api 代理到 127.0.0.1:8000
 # 1) 起 PostgreSQL（任选其一）
 docker run -d --name logharvest-pg -p 5432:5432 \
   -e POSTGRES_USER=logharvest -e POSTGRES_PASSWORD=logharvest \
-  -e POSTGRES_DB=logharvest postgres:16-alpine
+  -e POSTGRES_DB=logharvest postgres:18.6
 
 # 2) 后端指向 PG 并迁移 + 种子
 cd service

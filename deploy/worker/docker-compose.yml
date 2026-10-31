@@ -18,6 +18,10 @@ services:
       context: ../../service
       dockerfile: Dockerfile
       target: worker
+      args:
+        # pip/uv 包源：默认对齐 uv.lock 锁定的源；换源在 .env 设 PIP_INDEX_URL，
+        # 构建期会把 uv.lock 内主源 URL 一并改写（见 service/scripts/uv_lock_index.py）
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
     image: ${REGISTRY:-local}/logharvest-worker:${IMAGE_TAG:-latest}
     environment:
       LOGHARVEST_ENVIRONMENT: ${LOGHARVEST_ENVIRONMENT:-production}

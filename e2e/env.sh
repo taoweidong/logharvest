@@ -27,14 +27,15 @@ SERVICE_IMAGE="${SERVICE_IMAGE:-lh-e2e/service:e2e}"          # target=server
 WORKER_IMAGE="${WORKER_IMAGE:-lh-e2e/service:worker}"          # target=worker
 WORKER_V2_IMAGE="${WORKER_V2_IMAGE:-lh-e2e/service:worker-v2}" # 升级演练用的"新版本"镜像
 WEB_IMAGE="${WEB_IMAGE:-lh-e2e/web:e2e}"
-PG_IMAGE="${PG_IMAGE:-docker.m.daocloud.io/library/postgres:18-alpine}"
+PG_IMAGE="${PG_IMAGE:-postgres:18.6}"
 
-# Dockerfile 里 FROM 的名字；本机直连 Docker Hub 会超时，所以上游镜像统一走
-# DaoCloud 镜像站拉取，再 tag 回 Dockerfile 期望的名字（见 up.sh 的 ensure_base）。
-BASE_UV="${BASE_UV:-ghcr.m.daocloud.io/astral-sh/uv:python3.12-bookworm-slim}"
-BASE_PYTHON="${BASE_PYTHON:-docker.m.daocloud.io/library/python:3.12-slim-bookworm}"
-BASE_NODE="${BASE_NODE:-docker.m.daocloud.io/library/node:22-bookworm-slim}"
-BASE_NGINX="${BASE_NGINX:-docker.m.daocloud.io/library/nginx:1.27-alpine}"
+# Dockerfile 里 FROM 的名字：与生产镜像白名单一致（python:3.12 / node:20 / nginx:1.20 /
+# postgres:18.6，见 service/Dockerfile 与 web/Dockerfile）。本机镜像未就位时，可用
+# BASE_* 覆盖成镜像站地址（如 docker.m.daocloud.io/library/python:3.12），
+# up.sh 的 ensure_base 会把它 tag 回 Dockerfile 期望的名字。
+BASE_PYTHON="${BASE_PYTHON:-python:3.12}"
+BASE_NODE="${BASE_NODE:-node:20}"
+BASE_NGINX="${BASE_NGINX:-nginx:1.20}"
 
 # ---- 宿主端口 ---------------------------------------------------------------
 PG_HOST_PORT="${PG_HOST_PORT:-15544}"     # 与开发库 5433 完全隔离，避免误 DROP

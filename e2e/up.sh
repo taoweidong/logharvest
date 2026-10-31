@@ -44,7 +44,7 @@ fi
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 # 前端构建方式：host = 宿主 pnpm build + nginx-only 镜像（默认，node 基础镜像本机拉不动）
-#                docker = 走 web/Dockerfile 的 node 多阶段构建（需 node:22-bookworm-slim）
+#                docker = 走 web/Dockerfile 的 node 多阶段构建（需 node:20）
 E2E_WEB_BUILD="${E2E_WEB_BUILD:-host}"
 
 if [ "$FRESH" = "1" ]; then
@@ -53,27 +53,28 @@ if [ "$FRESH" = "1" ]; then
 fi
 
 # ---- 1. 基础镜像 ------------------------------------------------------------
-# 本机直连 registry-1.docker.io 会超时，所以先走镜像站，再 tag 回 Dockerfile 里的名字。
-ensure_base() { # ensure_base <镜像站名> <Dockerfile 期望名>
-  local mirror="$1" wanted="$2"
+# 生产镜像白名单基座（python:3.12 / node:20 / nginx:1.20，与 Dockerfile FROM 一一对应）。
+# 本地已就位则直接复用；缺失时拉取 BASE_*（默认即白名单名，必要时可覆盖成镜像站地址）
+# 并 tag 回 Dockerfile 期望的名字。
+ensure_base() { # ensure_base <可拉取名> <Dockerfile 期望名>
+  local have="$1" wanted="$2"
   if wslc image inspect "$wanted" >/dev/null 2>&1; then
     echo "base ok   : $wanted"
     return
   fi
-  if ! wslc image inspect "$mirror" >/dev/null 2>&1; then
-    echo "pulling   : $mirror"
-    wslc pull "$mirror"
+  if ! wslc image inspect "$have" >/dev/null 2>&1; then
+    echo "pulling   : $have"
+    wslc pull "$have"
   fi
-  wslc tag "$mirror" "$wanted"
-  echo "base tagged: $mirror -> $wanted"
+  wslc tag "$have" "$wanted"
+  echo "base tagged: $have -> $wanted"
 }
 
 step "1/5 基础镜像"
-ensure_base "$BASE_UV" "ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
-ensure_base "$BASE_PYTHON" "python:3.12-slim-bookworm"
-ensure_base "$BASE_NGINX" "nginx:1.27-alpine"
+ensure_base "$BASE_PYTHON" "python:3.12"
+ensure_base "$BASE_NGINX" "nginx:1.20"
 if [ "$SKIP_WEB" = "0" ] && [ "$E2E_WEB_BUILD" = "docker" ]; then
-  ensure_base "$BASE_NODE" "node:22-bookworm-slim"
+  ensure_base "$BASE_NODE" "node:20"
 fi
 if ! wslc image inspect "$PG_IMAGE" >/dev/null 2>&1; then
   echo "pulling   : $PG_IMAGE"
@@ -127,9 +128,13 @@ else
   prepare_service_ctx
   SERVER_CTX="$(hostpath "$SERVICE_CTX_DIR")"
   # 上下文里没有 Dockerfile 副本（避免旧句柄占用同一文件），显式 -f 指生产 Dockerfile。
+  # 上下文的 uv.lock 已改写到 pypi.org（见 prepare_service_ctx），uv 引导安装的 pip 源
+  # 也用 PIP_INDEX_URL 显式对齐，不依赖 Dockerfile 里面向生产的 aliyun 默认值。
   SERVICE_DOCKERFILE="$(hostfile "$REPO_DIR/service/Dockerfile")"
-  time wslc build --target server -f "$SERVICE_DOCKERFILE" -t "$SERVICE_IMAGE" "$SERVER_CTX"
-  time wslc build --target worker -f "$SERVICE_DOCKERFILE" -t "$WORKER_IMAGE" "$SERVER_CTX"
+  time wslc build --target server -f "$SERVICE_DOCKERFILE" \
+    --build-arg PIP_INDEX_URL=https://pypi.org/simple -t "$SERVICE_IMAGE" "$SERVER_CTX"
+  time wslc build --target worker -f "$SERVICE_DOCKERFILE" \
+    --build-arg PIP_INDEX_URL=https://pypi.org/simple -t "$WORKER_IMAGE" "$SERVER_CTX"
   # 升级演练用的"新版本"镜像：同一份代码 + 一个构建期标记文件，
   # 证明 worker 是换了镜像被替换，而不只是改了环境变量。
   time wslc build -t "$WORKER_V2_IMAGE" -f "$(hostpath "$E2E_DIR")/Dockerfile.worker-v2" "$SERVER_CTX"

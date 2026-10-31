@@ -13,7 +13,8 @@ name: logharvest-db
 
 services:
   postgres:
-    image: postgres:18-alpine
+    # 生产镜像白名单固定版本（postgres:18.6，Debian 版）；数据目录属主见 deploy/init-dirs.sh
+    image: postgres:18.6
     container_name: logharvest-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-logharvest}
@@ -39,10 +40,15 @@ services:
     networks:
       - logharvest-net
 
-  # 可选：每日定时 pg_dump 归档到 /usr1/logharvest/postgres/backup，按天保留
+  # 可选：每日定时 pg_dump 归档到 /usr1/logharvest/postgres/backup，按天保留。
+  # 备份镜像由 postgres:18.6 本地构建（deploy/postgres/backup/），pg_dump 与服务器同版本
+  # （pg_dump 客户端必须 >= 服务器大版本），不依赖任何外部第三方镜像。
   # 启用：--profile backup
   backup:
-    image: prodrigestivill/postgres-backup-local:18
+    build:
+      context: ./backup
+      dockerfile: Dockerfile
+    image: logharvest-pg-backup:latest
     profiles: ["backup"]
     depends_on:
       postgres:
@@ -55,7 +61,6 @@ services:
       SCHEDULE: ${BACKUP_SCHEDULE:-@daily}
       BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
       BACKUP_DIR: /backups
-      HEALTHCHECK_PORT: 8080
     volumes:
       - ${PG_BACKUP_DIR:-/usr1/logharvest/postgres/backup}:/backups
     restart: unless-stopped

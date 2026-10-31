@@ -5,7 +5,7 @@
 # 用法：sudo bash deploy/init-dirs.sh [--base /usr1/logharvest]
 #
 # 目录规划（所有可归档数据一律落数据盘 /usr1）：
-#   /usr1/logharvest/postgres/data    PostgreSQL 数据目录（PG alpine 镜像 uid 70）
+#   /usr1/logharvest/postgres/data    PostgreSQL 数据目录（postgres:18.6 镜像 uid 999）
 #   /usr1/logharvest/postgres/backup  pg_dump 归档（Jenkins 升级前备份 + 每日定时）
 #   /usr1/logharvest/worker/tmp       Worker 解压临时盘（uid 10001，任务结束自动清理）
 #   /usr1/logharvest/server/logs      Server 日志归档位（当前日志走 stdout，可接收集器落盘）
@@ -32,9 +32,11 @@ mkdir -p \
   "$BASE/worker/tmp" \
   "$BASE/server/logs"
 
-# postgres:18-alpine 的服务账户是 uid/gid 70；数据与备份目录必须归它所有
-echo "==> chown 70:70 postgres/{data,backup}"
-chown 70:70 "$BASE/postgres/data" "$BASE/postgres/backup"
+# postgres:18.6（Debian 版官方镜像）的服务账户是 uid/gid 999；数据与备份目录必须归它所有。
+# 容器以 root 启动时 entrypoint 会自动 chown 数据目录，这里保持宿主机侧属主一致，
+# 便于备份目录的宿主机侧读写（pg_dump 归档、Jenkins 升级前备份）。
+echo "==> chown 999:999 postgres/{data,backup}"
+chown 999:999 "$BASE/postgres/data" "$BASE/postgres/backup"
 
 # 临时盘归 10001（service/Dockerfile 的非 root app 用户）；日志目录归 root
 chmod 750 "$BASE/worker/tmp" "$BASE/server/logs"

@@ -8,7 +8,7 @@
 
 | 栈 | compose 文件 | 内容 | 数据落点（/usr1） |
 |---|---|---|---|
-| 数据库 | `deploy/postgres/docker-compose.yml` | PostgreSQL 16 + 可选每日备份容器（`--profile backup`） | `/usr1/logharvest/postgres/data`（数据）、`/usr1/logharvest/postgres/backup`（pg_dump 归档） |
+| 数据库 | `deploy/postgres/docker-compose.yml` | PostgreSQL 18.6 + 可选每日备份容器（`--profile backup`） | `/usr1/logharvest/postgres/data`（数据）、`/usr1/logharvest/postgres/backup`（pg_dump 归档） |
 | 控制面 | `deploy/server/docker-compose.yml` | FastAPI server（含 Alembic 迁移 + RBAC 种子）+ Nginx 前端 | `/usr1/logharvest/server/logs`（日志归档位） |
 | Worker | `deploy/worker/docker-compose.yml` | 领取/解压/匹配进程池（`--scale worker=N`） | `/usr1/logharvest/worker/tmp`（解压临时盘，任务结束自动清理） |
 
@@ -28,7 +28,7 @@ flowchart TB
             wproc["领取/解压/匹配"]
             tmp[("/usr1/logharvest/worker/tmp<br/>本地临时盘")]
         end
-        subgraph PGC["postgres:16 容器（logharvest-postgres）"]
+        subgraph PGC["postgres:18.6 容器（logharvest-postgres）"]
             pg[("pg-data：/usr1/logharvest/postgres/data")]
         end
     end
@@ -50,8 +50,8 @@ flowchart TB
 
 | 目录 | 内容 | 属主 | 说明 |
 |---|---|---|---|
-| `/usr1/logharvest/postgres/data` | PostgreSQL 数据目录 | uid 70（pg alpine） | `PGDATA` 子目录结构由镜像初始化 |
-| `/usr1/logharvest/postgres/backup` | pg_dump 归档 | uid 70 | Jenkins 升级前自动备份 + 定时备份（`--profile backup`）共用 |
+| `/usr1/logharvest/postgres/data` | PostgreSQL 数据目录 | uid 999（postgres:18.6） | `PGDATA` 子目录结构由镜像初始化 |
+| `/usr1/logharvest/postgres/backup` | pg_dump 归档 | uid 999 | Jenkins 升级前自动备份 + 定时备份（`--profile backup`）共用 |
 | `/usr1/logharvest/worker/tmp` | 解压临时盘 | **uid 10001**（750） | 容器内挂载为 `/local-tmp`，归 `service/Dockerfile` 的非 root `app` 用户；按任务隔离、任务结束自动删除 |
 | `/usr1/logharvest/server/logs` | Server 日志归档位 | root（750） | 当前日志走 stdout（docker logs / 收集器）；需要落盘时挂给容器 |
 
@@ -59,11 +59,22 @@ flowchart TB
 
 ## 3. 镜像与编排物
 
+**基础镜像白名单**：生产环境只提供以下镜像，所有构建与部署都只能基于它们（`builder` 阶段所需的 uv 经 pip 源引导安装；pip/uv 源可用 `PIP_INDEX_URL` 配置，构建期会同步改写 `uv.lock` 内的源，见 `service/scripts/uv_lock_index.py`）：
+
+| 基础镜像 | 用途 |
+|---|---|
+| `python:3.12` | `service/Dockerfile` builder 与 runtime（server / worker） |
+| `node:20` | `web/Dockerfile` builder（`pnpm build`） |
+| `nginx:1.20` | `web/Dockerfile` runtime（托管 `dist/`，非 root 监听 8080） |
+| `postgres:18.6` | 数据库栈；定时备份镜像 `deploy/postgres/backup/` 亦基于它本地构建 |
+
+`redis:7.2.11`、`mongo:8.2.3`、`ubuntu:latest` 当前架构未使用：限流为进程内计数（`src/domain/services/rate_limit.py`），队列/存储仅依赖 PostgreSQL——引入任一项都属架构变更，不在白名单合规范围内。
+
 | 文件 | 作用 |
 |---|---|
-| `service/Dockerfile` | 后端多阶段构建：`builder`（uv 同步依赖）→ `server` / `worker` 两个 target；镜像内含 Alembic 迁移，启动时自动 `upgrade head` + RBAC 种子；**非 root uid 10001 运行** |
-| `web/Dockerfile` | 前端两阶段：node:22 `pnpm build` → nginx:1.27-alpine 托管 `dist/`；**非 root nginx 监听 8080**（宿主机端口由 `WEB_PORT` 映射，默认 80） |
-| `web/nginx.conf` | 完整主配置（pid/缓存落 /tmp 支持非 root）；SPA 回退；`/api/**` 反代；**SSE 禁缓冲 + 1h 读超时**；安全响应头 nosniff / SAMEORIGIN / Referrer-Policy（CSP 模板注释待浏览器验证） |
+| `service/Dockerfile` | 后端多阶段构建：`builder`（python:3.12 + pip 装 uv，按 `PIP_INDEX_URL` 改写锁内源后 `uv sync --frozen` 同步依赖）→ `server` / `worker` 两个 target；镜像内含 Alembic 迁移，启动时自动 `upgrade head` + RBAC 种子；**非 root uid 10001 运行** |
+| `web/Dockerfile` | 前端两阶段：node:20 `pnpm build` → nginx:1.20 托管 `dist/`；**非 root nginx 监听 8080**（宿主机端口由 `WEB_PORT` 映射，默认 80） |
+| `web/nginx.conf` | 完整主配置（pid/缓存落 /tmp，worker 固定以 nginx 用户运行）；SPA 回退；`/api/**` 反代；**SSE 禁缓冲 + 1h 读超时**；安全响应头 nosniff / SAMEORIGIN / Referrer-Policy（CSP 模板注释待浏览器验证） |
 | `deploy/init-dirs.sh` | /usr1 目录规划 + 属主 + 外部网络（幂等） |
 | `deploy/<栈>/.env.example` | 各栈环境变量样例 |
 | `Jenkinsfile` | 门禁 → 镜像 → 升级前备份 → 三栈发布 → 冒烟 |
@@ -122,12 +133,13 @@ docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env
 |---|---|---|---|
 | postgres | `POSTGRES_PASSWORD` | ✅ | 缺省时 compose 直接报错退出 |
 | postgres | `PG_DATA_DIR` / `PG_BACKUP_DIR` | 建议 | 默认即 /usr1 规划路径，改路径需同步 init-dirs.sh |
-| postgres | `BACKUP_SCHEDULE` / `BACKUP_KEEP_DAYS` | 可选 | `--profile backup` 时的每日备份计划与保留天数（默认 @daily / 14 天） |
+| postgres | `BACKUP_SCHEDULE` / `BACKUP_KEEP_DAYS` | 可选 | `--profile backup` 时的备份计划与保留天数（默认 @daily / 14 天；SCHEDULE 支持 @daily / @hourly / 每日 "HH:MM"） |
 | server | `LOGHARVEST_JWT_SECRET_KEY` | ✅ | ≥32 字符；`python -c "import secrets; print(secrets.token_urlsafe(48))"` |
 | server | `LOGHARVEST_ADMIN_PASSWORD` | ✅ | 管理员初始口令（≥8 位），仅首次建号使用 |
 | server | `POSTGRES_PASSWORD` | ✅ | 与 postgres 栈一致（拼进连接串） |
 | server | `LOGHARVEST_TRUSTED_PROXY_CIDRS` | nginx 部署必填 | 可信反向代理 CIDR（逗号分隔）。默认空 = 不信任任何转发头；经本栈 nginx 访问时必须填 nginx 容器地址或 `logharvest-net` 网段，否则**所有登录共享代理 IP 的限流桶**（一个客户端可锁死全部用户），也不要把 8000 端口直接暴露公网 |
 | server | `IMAGE_TAG` / `REGISTRY` | 可选 | Jenkins 推送后拉取指定版本 |
+| server / worker | `PIP_INDEX_URL` | 可选 | 本机 `build` 时的 pip/uv 包源，默认对齐 `uv.lock` 锁定的 mirrors.aliyun.com；换源时构建期同步改写锁内源（已推送镜像则不生效） |
 | worker | `NAS_LOGS_DIR` | ✅ | 宿主机 NAS 目录，容器内**只读**挂载到 `/nas` |
 | worker | `WORK_TMP_DIR` | 建议 | 默认 `/usr1/logharvest/worker/tmp` |
 | worker | `LOGHARVEST_ADMIN_PASSWORD` | ✅ | Settings 在生产环境强制校验非空（Worker 进程共用该配置） |
