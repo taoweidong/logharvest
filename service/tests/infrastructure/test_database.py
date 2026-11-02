@@ -1,5 +1,5 @@
 from src.infrastructure import database
-from src.infrastructure.database import UTC_SESSION_OPTIONS, connect_args_for, engine_kwargs_for
+from src.infrastructure.database import UTC_SESSION_OPTIONS, connect_args_for
 
 
 def test_postgres_sessions_are_pinned_to_utc() -> None:
@@ -27,8 +27,7 @@ def test_postgres_engine_gets_pool_hardening_and_sqlite_keeps_defaults(monkeypat
 
     pg_kwargs = captured["postgresql+psycopg://u@h/db"]
     assert pg_kwargs["connect_args"] == {
-        "options": f"{UTC_SESSION_OPTIONS} "
-        "-c idle_in_transaction_session_timeout=300000"
+        "options": f"{UTC_SESSION_OPTIONS} -c idle_in_transaction_session_timeout=300000"
     }
     # 断线自愈 + 池容量 + 长期空闲轮换，只作用于 PostgreSQL
     assert pg_kwargs["pool_pre_ping"] is True
