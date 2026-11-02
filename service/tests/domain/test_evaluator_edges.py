@@ -8,6 +8,7 @@ from src.domain.rules import evaluator
 from src.domain.rules.evaluator import (
     CompiledRule,
     CompiledRuleSet,
+    _mandatory_literal,
     _regex_flags,
     _threshold_matches,
     compile_ruleset,
@@ -106,3 +107,79 @@ def test_dotall_flag_lets_dot_cross_newlines() -> None:
     )
     compiled = compile_ruleset(_config(rule))
     assert evaluate_line(compiled, "START\nEND", 1) != []
+
+
+# ------------------------------------------------- 必选字面量提取（hint 预筛输入）
+
+
+def test_mandatory_run_treats_unterminated_quote_literal_as_text() -> None:
+    # `\Q` 之后找不到 `\E`：剩余模式按字面量并入段（regex 宽容语法）。
+    assert _mandatory_literal(r"\Qabc") == "abc"
+    assert _mandatory_literal(r"\Qab\ncd") == "ab\\ncd"
+
+
+def test_mandatory_run_skips_character_classes_and_keeps_both_sides() -> None:
+    # 字符类中断当前段：两侧各自成段，取最长；未闭合的类扫到结尾同样中断。
+    assert _mandatory_literal(r"x[0-9]yyy") == "yyy"
+    assert _mandatory_literal(r"x[^0-9]yyy") == "yyy"
+    assert _mandatory_literal(r"x[0-9") == "x"
+
+
+def test_mandatory_run_treats_unterminated_brace_as_literal() -> None:
+    # 无 closing `}` 的花括号不是量词（regex 宽容语法）：按字面量并入段。
+    assert _mandatory_literal(r"abc{") == "abc{"
+
+
+# ------------------------------------------------------- 空词表（绕过校验）路径
+
+
+def test_empty_vocabulary_keyword_keeps_compile_and_eval_legacy_paths() -> None:
+    """词表全空（any/all 都空，只能绕过 Pydantic 校验构造）的三处兼容路径。
+
+    compile_ruleset 不打预编译针（keyword_needles 为 None）；索引把它归入 always；
+    求值走手工路径，大小写不敏感时现算 line.lower()，最终保持既有的越界行为。
+    """
+    match = KeywordMatch.model_construct(type="keyword", any=[], all=[], case_sensitive=False)
+    rule = Rule.model_construct(
+        id="empty", name="", enabled=True, match=match, threshold=None, severity="info", tags=[]
+    )
+    compiled = compile_ruleset(_config(rule))
+
+    assert compiled.rules[0].keyword_needles is None
+    with pytest.raises(IndexError):
+        evaluate_line(compiled, "anything", 1)
+
+
+def test_empty_vocabulary_keyword_case_sensitive_skips_lowering() -> None:
+    match = KeywordMatch.model_construct(type="keyword", any=[], all=[], case_sensitive=True)
+    rule = Rule.model_construct(
+        id="empty", name="", enabled=True, match=match, threshold=None, severity="info", tags=[]
+    )
+    compiled = compile_ruleset(_config(rule))
+    with pytest.raises(IndexError):
+        evaluate_line(compiled, "anything", 1)
+
+
+def test_compile_ruleset_keeps_unknown_match_kind_uncompiled_and_always() -> None:
+    """未知匹配类型（绕过校验）在编译期不打针、索引归 always、求值恒不命中。"""
+    rule = Rule.model_construct(
+        id="u", name="", enabled=True, match=object(), threshold=None, severity="info", tags=[]
+    )
+    compiled = compile_ruleset(_config(rule))
+
+    assert compiled.rules[0].regex is None
+    assert compiled.rules[0].keyword_needles is None
+    assert evaluate_line(compiled, "text", 1) == []
+
+
+def test_match_rule_lowers_line_when_called_directly_without_cached_lower() -> None:
+    """_match_rule 的防御契约：line_lower=None 且规则不敏感时现算 line.lower()。
+
+    evaluate_line 的两条路径（索引/无索引）都会预先算好并传入 lower 行，
+    该分支只在直接调用 _match_rule 时可达——锁定其自包含语义。
+    """
+    rule = Rule(id="ci", match=KeywordMatch(type="keyword", any=["ERROR"]))
+    match = evaluator._match_rule(CompiledRule(rule=rule), "an ERROR", 1, None)
+
+    assert match is not None
+    assert match.matched_text == "ERROR"

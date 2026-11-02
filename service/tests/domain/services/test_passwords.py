@@ -26,3 +26,16 @@ def test_empty_password_rejected() -> None:
     except ValueError:
         return
     raise AssertionError("empty password must be rejected")
+
+
+def test_verify_password_rejects_empty_inputs() -> None:
+    hashed = hash_password("Correct-Horse-1")
+    # 任一侧为空都不该进 bcrypt（空口令在 hash 阶段已被拒，防御性兜底在 verify 侧）。
+    assert verify_password("", hashed) is False
+    assert verify_password("Correct-Horse-1", "") is False
+
+
+def test_verify_password_survives_malformed_hash() -> None:
+    # 畸形 hash（非 bcrypt 格式）会让 checkpw 抛 ValueError，必须按"不匹配"处理，
+    # 而不是把异常冒泡成 500——这正是 UNKNOWN_USER_HASH 时序防护的兜底语义。
+    assert verify_password("anything", "not-a-bcrypt-hash") is False

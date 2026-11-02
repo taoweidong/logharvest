@@ -15,3 +15,19 @@ def test_collect_survives_missing_work_dir(tmp_path: Path) -> None:
     stats = collect_worker_stats(tmp_path / "does-not-exist")
 
     assert stats.temp_disk_free_bytes is None
+
+
+def test_collect_degrades_to_none_when_process_sampling_fails(tmp_path: Path, monkeypatch) -> None:
+    # psutil 采集失败（权限/快照竞态）时 cpu/memory 降级为 None，绝不让 Worker 退出。
+    import src.worker.metrics as metrics_module
+
+    def broken_process():
+        raise RuntimeError("snapshot unavailable")
+
+    monkeypatch.setattr(metrics_module.psutil, "Process", broken_process)
+
+    stats = collect_worker_stats(tmp_path)
+
+    assert stats.cpu_percent is None
+    assert stats.memory_bytes is None
+    assert stats.temp_disk_free_bytes is not None
