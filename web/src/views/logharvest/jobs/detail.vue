@@ -556,7 +556,15 @@ onBeforeUnmount(stopAll);
       </div>
     </el-card>
 
-    <PureTableBar title="文件任务" :columns="columns" @refresh="loadFiles">
+    <!-- 上方信息卡片会吃掉大块视口高度，文件任务表格的剩余空间可能不足
+         一行（720p 实测表体只剩 5px，见 layout.scss 的 files-panel--stacked），
+         面板挂 stacked 类后由 min-height 兜底。 -->
+    <PureTableBar
+      title="文件任务"
+      class="files-panel--stacked"
+      :columns="columns"
+      @refresh="loadFiles"
+    >
       <template #buttons>
         <el-select
           v-model="statusFilter"

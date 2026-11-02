@@ -457,22 +457,27 @@ async function phase_jobs(ledger, st) {
   ledger.check('清空筛选后请求不再带 status', !/status=/.test(clearedReq.url), clearedReq.url);
 
   // UTC 日标签（统计页条形点击带来的 ?date=）：源码 index.vue:43 明说后端 /jobs 没有
-  // date 参数，它只在本页 displayRows 里过滤，界面文案也照此标注。
-  // 断言不写死 50 行：套件在 UTC 零点后跑时，第一页属于"今天"的行可能只有几条
-  // （库里的作业多建在前一天）。先取无过滤基线，再断言过滤后与基线一致。
-  const today = new Date().toISOString().slice(0, 10);
+  // date 参数，它只在本页 displayRows 里过滤（utcDay(created_at)），界面文案也照此标注。
+  // 断言的参照日取**接口回读最新作业的 UTC 日**，不能拿 `new Date()` 的 UTC「今天」：
+  // 显示列是本地时区格式化，跨时区/零点附近两个日期系统会错位，比较必然假失败。
+  const jobsForDay = await st.api.get('/jobs?limit=1');
+  const day = jobsForDay.length ? jobsForDay[0].created_at.slice(0, 10) : new Date().toISOString().slice(0, 10);
   await go(page, '/logharvest/jobs', { reload: true, waitText: '分析作业' });
-  const todayBase = await page.locator('.el-table__body .el-table__row', { hasText: today }).count();
-  await go(page, `/logharvest/jobs?date=${today}`, { reload: true, waitText: '分析作业' });
-  const tagText = `UTC 日：${today}`;
+  // waitText 只等标题渲染，行数据还在飞行中——先等首屏行出现再取基线，
+  // 否则基线恒为 0（实测在快速栈上稳定复现）。
+  await waitFor(async () => ((await page.locator('.el-table__body .el-table__row').count()) > 0 ? true : null), { label: '无过滤基线首屏行渲染', timeout: 15000 });
+  await page.waitForTimeout(400);
+  const baselineRows = await page.locator('.el-table__body .el-table__row').count();
+  await go(page, `/logharvest/jobs?date=${day}`, { reload: true, waitText: '分析作业' });
+  const tagText = `UTC 日：${day}`;
   ledger.check('URL 带 ?date= 时出现可关闭标签', (await page.getByText(tagText).count()) > 0, await page.locator('body').innerText().then((t) => t.replace(/\s+/g, ' ').slice(0, 200)));
   const dayReq = (await recentRequests(page, /\/api\/jobs\?/)).at(-1);
   ledger.check('?date= 不下推后端（只做本页提示）', !/[?&]date=/.test(dayReq.url), dayReq.url);
-  const rowsToday = await page.locator('.el-table__body .el-table__row').count();
+  const rowsOnDay = await page.locator('.el-table__body .el-table__row').count();
   await go(page, '/logharvest/jobs?date=2000-01-01', { reload: true, waitText: 'UTC 日：2000-01-01' });
   await page.waitForTimeout(600);
   const rowsOtherDay = await page.locator('.el-table__body .el-table__row').count();
-  ledger.check('日期提示在本页内过滤（无匹配则空态）', rowsToday === todayBase && rowsOtherDay === 0, JSON.stringify({ todayBase, rowsToday, rowsOtherDay }));
+  ledger.check('日期提示按 UTC 日在本页内过滤（有匹配行、无匹配为空态）', rowsOnDay > 0 && rowsOnDay <= baselineRows && rowsOtherDay === 0, JSON.stringify({ day, baselineRows, rowsOnDay, rowsOtherDay }));
   ledger.check('空态文案「暂无数据」随日期提示出现', (await page.locator('body').innerText()).includes('暂无数据'), 'no empty text');
 
   // 标签的关闭按钮：el-tag(closable) 渲染 .el-tag__close，点它 → clearDayHint() 同时 router.replace 抹掉 URL 里的 date
@@ -665,6 +670,20 @@ async function phase_detail(ledger, st) {
   ledger.check('历史行含次序/Worker/版本/状态', aRow.includes('0.1.0') && /lh-e2e-worker-\d/.test(aRow) && aRow.includes('succeeded'), aRow.slice(0, 180));
   await shot(page, ledger, 'detail_attempts_drawer');
   ledger.check('行内「历史」抽屉可关闭', await closeDrawer(page), 'drawer still visible');
+
+  // 矮视口回归（1366×768 常见笔记本分辨率）：详情页上方信息卡片会吃掉大块高度，
+  // 曾经把文件任务表体压到 5px——行被表头盖住、「历史」按钮命中检测落在表头上点不到。
+  // 修复后 .files-panel--stacked .page-body 有 340px 最小高度，表体稳定 ≥260px。
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.waitForTimeout(400);
+  const shortBw = await page.evaluate(() => {
+    const panel = document.querySelector('.files-panel--stacked');
+    const bw = panel?.querySelector('.el-table__body-wrapper');
+    return bw ? Math.round(bw.getBoundingClientRect().height) : null;
+  });
+  ledger.check('矮视口(1366×768)文件任务表体仍有可用高度（≥200px）', (shortBw ?? 0) >= 200, `body-wrapper=${shortBw}px`);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(400);
 
   // 命中结果页的「所属文件」反向链接：?file_task= 深链要在进页面时自动开抽屉
   await go(page, `/logharvest/jobs/${job.id}?file_task=${taskId}`, { reload: true, waitText: '尝试历史' });

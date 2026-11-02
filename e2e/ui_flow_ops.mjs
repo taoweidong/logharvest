@@ -302,9 +302,11 @@ async function phase_datasources(ledger, st, { PHASE_LABEL }) {
     ledger.check('不足 limit：上一页禁用、下一页也禁用', pager && nextDisabled, `上一页 disabled=${pager} 下一页 disabled=${nextDisabled}`);
 
     // ---- ⑦ 「用它建任务」带 data_source_id 直达作业页并弹出预填向导 ----
+    // id 不写死：此前钉死 =1，e2e-nas 之前若登记过任何数据源（其他套件先跑）就假失败，
+    // 以夹具回读的实际 id 为准。
     await dsCard(page, 'e2e-nas').getByRole('button', { name: '用它建任务' }).click();
     await page.waitForURL(/#\/logharvest\/jobs\?data_source_id=/, { timeout: 15000 }).catch(() => null);
-    ledger.check('跳转 URL 带上 data_source_id', /data_source_id=1\b/.test(page.url()), page.url());
+    ledger.check('跳转 URL 带上 data_source_id', new RegExp(`data_source_id=${st.nasSource.id}\\b`).test(page.url()), page.url());
     const wiz = await dialog(page, '新建分析任务');
     // 向导打开时数据源列表还在异步拉取，el-select 的选中项 label 要等列表回来才渲染；
     // 读一次就断言会偶发拿到空 label（condition 与 detail 是两次读取，差一帧就会自相矛盾）。
