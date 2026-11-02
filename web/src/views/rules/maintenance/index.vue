@@ -25,6 +25,9 @@ defineOptions({ name: "RuleMaintenance" });
 
 const route = useRoute();
 
+/** 下拉需要全部规则集（含各历史版本），超出此上限的名字会被静默截断。 */
+const ALL_RULE_SETS_LIMIT = 500;
+
 /** 无 rulesets:write 时整页只读：el-form :disabled + 隐藏保存/行操作，标题变「查看规则」 */
 const canWrite = computed(() => hasPerms("rulesets:write"));
 
@@ -64,7 +67,7 @@ const versionOptions = computed(() =>
 async function loadSets() {
   loadingSets.value = true;
   try {
-    sets.value = await listRuleSets({ limit: 500, offset: 0 });
+    sets.value = await listRuleSets({ limit: ALL_RULE_SETS_LIMIT, offset: 0 });
   } catch (error) {
     sets.value = [];
     message(apiErrorDetail(error, "规则集列表加载失败"), { type: "error" });

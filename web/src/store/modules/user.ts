@@ -14,16 +14,23 @@ import {
   refreshToken as refreshTokenApi
 } from "@/api/user";
 import type { Envelope, LoginData, RefreshData } from "@/api/types";
+import { apiErrorDetail } from "@/api/errors";
 import { useMultiTagsStoreHook } from "./multiTags";
 import { type DataInfo, getToken, setToken, removeToken, userKey } from "@/utils/auth";
 
 /**
  * 业务/认证接口的错误都可能是 `{"detail": "..."}`（FastAPI），
  * 登录失败要提示的是 `detail`，不是 `message`。
+ * detail 缺失（断网/超时）时退回 axios 的 `error.message`，再退回固定文案；
+ * detail 的解析口径与业务接口共用 `apiErrorDetail`（登录 422 校验错误同样
+ * 能显示成可读文案，而不是对象）。
  */
-function extractDetail(error: any): string {
-  const detail = error?.response?.data?.detail ?? error?.message;
-  return typeof detail === "string" && detail ? detail : "登录失败";
+function loginErrorText(error: unknown): string {
+  const message = (error as { message?: unknown })?.message;
+  return apiErrorDetail(
+    error,
+    typeof message === "string" && message ? message : "登录失败"
+  );
 }
 
 export const useUserStore = defineStore("pure-user", {
@@ -86,7 +93,7 @@ export const useUserStore = defineStore("pure-user", {
             }
           })
           .catch(error => {
-            reject(new Error(extractDetail(error)));
+            reject(new Error(loginErrorText(error)));
           });
       });
     },
@@ -121,7 +128,7 @@ export const useUserStore = defineStore("pure-user", {
             }
           })
           .catch(error => {
-            reject(new Error(extractDetail(error)));
+            reject(new Error(loginErrorText(error)));
           });
       });
     }

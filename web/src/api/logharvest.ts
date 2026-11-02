@@ -17,31 +17,9 @@ import type {
 export type ListParams = { limit?: number; offset?: number };
 export type FileTaskListParams = ListParams & { status?: string };
 
-/**
- * 取 FastAPI 的错误文案。
- * 业务接口的错误体是 `{"detail": "..."}`（`detail` 可能是字符串，
- * 也可能是 pydantic 的校验错误数组，这里统一压成一行可读的文本）。
- */
-export function apiErrorDetail(error: unknown, fallback = "请求失败"): string {
-  const detail = (error as any)?.response?.data?.detail;
-  if (typeof detail === "string" && detail) return detail;
-  if (Array.isArray(detail)) {
-    const first = detail[0];
-    const msg = first?.msg ?? first?.detail;
-    if (typeof msg === "string" && msg) return msg;
-  }
-  return fallback;
-}
-
-/**
- * 取 HTTP 状态码（无响应 = 断网/超时时为 `undefined`）。
- * 只读抽屉需要区分「404：后端还没有这个端点」与「500/断网」，文案不同，
- * 不能都压成一句「加载失败」。
- */
-export function apiErrorStatus(error: unknown): number | undefined {
-  const status = (error as any)?.response?.status;
-  return typeof status === "number" ? status : undefined;
-}
+// 错误文案/状态码提取的唯一实现在 ./errors（零依赖，store 也要用，避免 store↔api 成环）；
+// 这里 re-export 维持既有 import 路径不变。
+export { apiErrorDetail, apiErrorStatus } from "./errors";
 
 /**
  * 作业列表参数。

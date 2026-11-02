@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 import type { JobStatus, TaskStatus } from "@/api/logharvestTypes";
+import { responseDetail } from "@/api/errors";
 
 /**
  * 「没有数据」的显示值。
@@ -145,7 +146,7 @@ export function formatDuration(seconds: number | null | undefined): string {
  * 后端已完成规则编译/pathspec/codec 校验，前端只转述、不重复实现。
  */
 export function formatDetailError(error: unknown, fallback = "请求失败"): string {
-  const detail = (error as any)?.response?.data?.detail;
+  const detail = responseDetail(error);
   if (typeof detail === "string" && detail) return detail;
   if (Array.isArray(detail)) {
     const lines = detail.map(item => {
