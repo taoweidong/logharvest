@@ -441,9 +441,16 @@ class TaskProcessor:
 
     def _copy_to_local(self, task: ClaimedTask, task_dir: Path) -> Path:
         source = task.source_path
-        source_size = source.stat().st_size
+        try:
+            source_size = source.stat().st_size
+        except OSError as exc:
+            raise _source_unavailable_error(exc) from exc
         target = task_dir / source.name
-        with source.open("rb") as source_file, target.open("wb") as target_file:
+        try:
+            source_file = source.open("rb")
+        except OSError as exc:
+            raise _source_unavailable_error(exc) from exc
+        with source_file, target.open("wb") as target_file:
             self._copy_chunks(source_file, target_file, task)
         copied_size = target.stat().st_size
         if copied_size != source_size:
@@ -461,7 +468,16 @@ class TaskProcessor:
         flowing yet. A fence miss means recovery already reassigned the task.
         """
         last_touch = self._clock()
-        while chunk := source_file.read(COPY_CHUNK_SIZE):
+        while True:
+            try:
+                chunk = source_file.read(COPY_CHUNK_SIZE)
+            except OSError as exc:
+                # 与 _check_source 阶段同口径：源侧读失败按 errno 分类，
+                # ENOENT/EACCES 等"源已变化"不重试，瞬时错误交给退避重试。
+                # target 侧的写失败不在此列——本地临时盘问题走通用可重试路径。
+                raise _source_unavailable_error(exc) from exc
+            if not chunk:
+                break
             target_file.write(chunk)
             now = self._clock()
             if now - last_touch >= self._copy_heartbeat_seconds:

@@ -393,6 +393,73 @@ def test_transient_source_resolve_error_is_retried(tmp_path: Path, monkeypatch) 
     assert repo.touches == []
 
 
+def test_source_vanishing_after_check_fails_permanently(tmp_path: Path, monkeypatch) -> None:
+    """检查通过后、复制开始前源消失：与检查阶段同口径判永久失败。
+
+    `_check_source` 用 stat 判"源还在"，`_copy_to_local` 复制前再 stat 一次；
+    两次之间存在竞态窗口。ENOENT 是"源已变化"的确定性判断（见
+    processor._TRANSIENT_ERRNOS 的注释），复制阶段的重试只会同样失败，
+    所以也必须走 `_source_unavailable_error` 的 permanent 分类。
+    """
+    repo = FakeRepo()
+    processor = make_processor(repo, FakeWriter(), tmp_path / "work")
+    task = make_task(tmp_path)
+    real_stat = Path.stat
+    stat_calls = {"count": 0}
+
+    def stat_then_vanish(self, *args, **kwargs):
+        if self == task.source_path:
+            stat_calls["count"] += 1
+            # 第 1 次是 _check_source 的存在性检查（必须通过，否则进不了复制阶段），
+            # 第 2 次是 _copy_to_local 复制前的尺寸读取——此刻源已消失。
+            if stat_calls["count"] >= 2:
+                raise OSError(errno.ENOENT, "vanished after the planning check")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_then_vanish)
+
+    result = processor.process(task)
+
+    assert result.status == "failed"
+    assert "source unavailable" in (result.error or "")
+    assert repo.retryables == [(10, False)]
+
+
+def test_transient_read_error_during_copy_is_retried(tmp_path: Path, monkeypatch) -> None:
+    """复制阶段的瞬时 EIO 仍判可重试，锁定 errno 分类的读取侧口径。"""
+    repo = FakeRepo()
+    processor = make_processor(repo, FakeWriter(), tmp_path / "work")
+    task = make_task(tmp_path)
+    real_open = Path.open
+
+    class FlakyRead:
+        def __init__(self, file_handle) -> None:
+            self._file_handle = file_handle
+
+        def read(self, size: int = -1) -> bytes:
+            raise OSError(errno.EIO, "transient NAS hiccup")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info) -> None:
+            self._file_handle.close()
+
+    def flaky_open(self, *args, **kwargs):
+        file_handle = real_open(self, *args, **kwargs)
+        if self == task.source_path:
+            return FlakyRead(file_handle)
+        return file_handle
+
+    monkeypatch.setattr(Path, "open", flaky_open)
+
+    result = processor.process(task)
+
+    assert result.status == "failed"
+    assert "temporarily unavailable" in (result.error or "")
+    assert repo.retryables == [(10, True)]
+
+
 def test_tar_gz_copy_keeps_original_name_and_processes_members(tmp_path: Path, monkeypatch) -> None:
     archive = tmp_path / "a.tar.gz"
     payload = b"ERROR one\nelapsed=6000ms\n"
