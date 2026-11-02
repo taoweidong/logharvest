@@ -4,7 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 // user store / i18n / router；单测里用空实现切断依赖链。
 vi.mock("@/utils/http", () => ({ http: {} }));
 
-import { apiErrorDetail, apiErrorStatus } from "@/api/logharvest";
+import {
+  apiErrorDetail,
+  apiErrorStatus,
+  responseDetail
+} from "@/api/errors";
+// re-export 路径必须与直接导入行为一致：视图都从 @/api/logharvest 引入。
+import {
+  apiErrorDetail as reexportedDetail,
+  apiErrorStatus as reexportedStatus
+} from "@/api/logharvest";
 
 describe("apiErrorDetail", () => {
   it("字符串 detail 原样返回", () => {
@@ -54,5 +63,23 @@ describe("apiErrorStatus", () => {
   it("断网/超时（无 response）返回 undefined，供文案区分", () => {
     expect(apiErrorStatus(new Error("timeout"))).toBeUndefined();
     expect(apiErrorStatus({ response: {} })).toBeUndefined();
+  });
+});
+
+describe("re-export 一致性（@/api/logharvest 与 @/api/errors）", () => {
+  it("两个入口解析到同一实现", () => {
+    expect(reexportedDetail).toBe(apiErrorDetail);
+    expect(reexportedStatus).toBe(apiErrorStatus);
+  });
+});
+
+describe("responseDetail（契约读取点）", () => {
+  it("返回 detail 原始值：字符串、数组、缺失三种形态", () => {
+    expect(responseDetail({ response: { data: { detail: "boom" } } })).toBe("boom");
+    expect(responseDetail({ response: { data: { detail: [{ msg: "m" }] } } })).toEqual([
+      { msg: "m" }
+    ]);
+    expect(responseDetail({ response: { data: {} } })).toBeUndefined();
+    expect(responseDetail(undefined)).toBeUndefined();
   });
 });

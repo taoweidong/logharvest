@@ -151,4 +151,27 @@ describe("streamJobProgress", () => {
       streamJobProgress(1, () => {}, new AbortController().signal)
     ).rejects.toThrow("progress stream failed: 404");
   });
+
+  it("响应 200 但 body 为空时同样抛错（代理剥离流体的防御分支）", async () => {
+    stubFetch({ ok: true, status: 200, body: null });
+    await expect(
+      streamJobProgress(1, () => {}, new AbortController().signal)
+    ).rejects.toThrow("progress stream failed: 200");
+  });
+
+  it("请求带 Bearer 头且指向作业的 events 端点（token 不进 query）", async () => {
+    const fetchMock = vi.fn(async () => fakeResponse([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await streamJobProgress(42, () => {}, new AbortController().signal);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/jobs/42/events");
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer token-1"
+    );
+    expect((init.headers as Record<string, string>).Accept).toBe(
+      "text/event-stream"
+    );
+  });
 });
