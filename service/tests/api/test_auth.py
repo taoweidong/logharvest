@@ -356,3 +356,16 @@ def test_disabled_account_does_not_consume_the_login_budget(client, session, mon
     ]
 
     assert codes == [403, 403, 403]
+
+
+def test_refresh_rejects_oversized_token(client) -> None:
+    """refresh-token 匿名可达：schema 必须带长度上限，不给未认证请求内存放大器。"""
+    response = client.post("/api/refresh-token", json={"refreshToken": "a" * 4097})
+    assert response.status_code == 422
+
+
+def test_refresh_boundary_length_enters_signature_check(client, session) -> None:
+    """长度恰好在上限内的值不被 schema 拦截，而是进入签名校验（401）。"""
+    ensure_admin(session, "admin", "Sup3r-Secret")
+    response = client.post("/api/refresh-token", json={"refreshToken": "a" * 4096})
+    assert response.status_code == 401

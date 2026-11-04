@@ -35,7 +35,10 @@ services:
       LOGHARVEST_LOGIN_WINDOW_SECONDS: ${LOGHARVEST_LOGIN_WINDOW_SECONDS:-300}
       LOGHARVEST_TRUSTED_PROXY_CIDRS: ${LOGHARVEST_TRUSTED_PROXY_CIDRS:-}
     ports:
-      - "${SERVER_PORT:-8000}:8000"
+      # 只绑回环：/api 已由本栈 nginx 反代，8000 直连口不应对外发布，
+      # 否则攻击者可绕过 nginx 的安全头与访问控制直连 API。
+      # 需要本机调试时用 ssh 隧道；确有直连需求再改回 "8000:8000"。
+      - "127.0.0.1:${SERVER_PORT:-8000}:8000"
     restart: unless-stopped
     networks:
       - logharvest-net

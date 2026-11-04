@@ -62,20 +62,30 @@ export function setToken(data: DataInfo<number>) {
   expires = Number(data.expires) || 0;
   const cookieString = JSON.stringify({ accessToken, expires, refreshToken });
 
+  // 安全加固：SameSite=Strict 阻断跨站携带；Secure 只在 https 下开启
+  // （当前部署默认明文 http，无条件开启会让浏览器丢弃 cookie 导致无法登录）
+  const secureCookie = window.location.protocol === "https:";
+  const authCookieOptions = {
+    sameSite: "strict",
+    secure: secureCookie
+  } as const;
+
   expires > 0
     ? Cookies.set(TokenKey, cookieString, {
-        expires: (expires - Date.now()) / 86400000
+        expires: (expires - Date.now()) / 86400000,
+        ...authCookieOptions
       })
-    : Cookies.set(TokenKey, cookieString);
+    : Cookies.set(TokenKey, cookieString, authCookieOptions);
 
   Cookies.set(
     multipleTabsKey,
     "true",
     isRemembered
       ? {
-          expires: loginDay
+          expires: loginDay,
+          ...authCookieOptions
         }
-      : {}
+      : authCookieOptions
   );
 
   function setUserKey({ avatar, username, nickname, roles, permissions }) {

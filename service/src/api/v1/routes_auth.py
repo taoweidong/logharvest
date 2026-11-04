@@ -62,7 +62,11 @@ class LoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refreshToken: str = Field(min_length=1)  # camelCase matches the frontend login contract
+    # 上限 4096：本服务签发的 HS256 refresh token（sub/username/type/exp）实际
+    # 远小于此。Pydantic 校验在整包 JSON 读入内存之后才生效，匿名端点不设长度
+    # 上限等于开放一个无鉴权的内存放大器，所以显式给顶。
+    # camelCase matches the frontend login contract
+    refreshToken: str = Field(min_length=1, max_length=4096)
 
     @field_validator("refreshToken")
     @classmethod

