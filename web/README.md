@@ -189,7 +189,7 @@ Worker 都会显示 `—`。界面把 `NULL` 一律渲染成 `—`（未知）�
 - `src/views/logharvest/stats`：任务统计（`/api/stats/jobs`），**没有图表库**，用统计卡 + `el-progress` 自绘每日条形 + Top 规则表；
 - `src/views/rules/maintenance`：规则维护（整页编辑某版本的规则 + 跨版本检索），规则集页的"编辑规则"跳到这里；
 
-菜单结构由后端 `menus` 表下发为三个一级目录：**任务管理**（任务创建/任务统计/日志分析/数据源管理/Worker 管理）、**规则管理**（规则维护/规则集维护）、**系统管理**（用户/角色/菜单/操作日志）。新增页面时后端种子的 `component` 必须与 `src/views` 下的相对路径精确对应（`logharvest/stats/index` 等），菜单 `icon` 用的 `ep/*` 名称必须同时登记进 `src/components/ReIcon/src/offlineIconNames.ts` 与 `offlineIcon.ts`，否则会退化成运行时去 api.iconify.design 拉图标。
+菜单结构由后端 `menus` 表下发为三个一级目录：**任务管理**（任务创建/任务统计/日志分析/数据源管理/Worker 管理）、**规则管理**（规则维护/规则集维护）、**系统管理**（用户/角色/菜单/操作日志）。新增页面时后端种子的 `component` 必须与 `src/views` 下的相对路径精确对应（`logharvest/stats/index` 等），菜单 `icon` 用的 `ep/*` 名称必须同时登记进 `src/components/ReIcon/src/offlineIconNames.ts` 与 `offlineIcon.ts`，否则会退化成运行时去 api.iconify.design 拉图标。`icon` 也接受原始 `<svg>` 字符串，但渲染前必经 `src/components/ReIcon/src/hooks.ts` 的 `sanitizeSvg` 白名单清洗（DOMParser 解析后只保留矢量绘制元素，剥掉事件属性、`script`/`foreignObject`/SMIL 与指向外部的 `href`），清洗失败渲染为空白——icon 会随 `/api/auth/routes` 下发给所有可见该菜单的用户，这里堵住存储型 XSS 入口。
 - `src/api/rbac.ts` / `rbacTypes.ts`：上述页面的纯 REST API 与类型；
 - 登录返回的 `permissions`（admin 为 `*:*:*`）驱动 `v-perms`；动态路由的 `meta.auths`
   同时可用于 `v-auth`。既有业务页面的写/操作按钮已按 `jobs:write`、`jobs:operate`、
@@ -227,7 +227,7 @@ pnpm test:watch  # watch 模式
 pnpm typecheck   # vue-tsc 类型检查（CI 门禁）
 ```
 
-覆盖范围（2026-10-28）：`utils/sse.ts`（SSE 帧解析边界与流收尾）、`utils/auth.ts`（`hasPerms` 通配语义、`getToken` 损坏 cookie 自愈）、`utils/http/pendingRequests.ts`（token 刷新队列的重放/失败 reject 契约）、`views/logharvest/format.ts`（UTC 补 Z、未知占位、422 展开等全站显示契约）、`views/rules/maintenance/rule-form.ts`（判别联合往返转换与前端校验闸门）、`api/logharvest.ts`（错误详情/状态码提取）、`views/system/filters.ts`（角色/菜单树过滤）。
+覆盖范围（2026-11-07，14 个 spec / 140 条）：`utils/sse.ts`（SSE 帧解析边界与流收尾）、`utils/auth.ts`（`hasPerms` 通配语义、`getToken` 损坏 cookie 自愈）、`utils/http/pendingRequests.ts`（token 刷新队列的重放/失败 reject 契约）、`utils/tree.ts`（树构建与过滤边界）、`views/logharvest/format.ts`（UTC 补 Z、未知占位、422 展开等全站显示契约，含时间格式化与严重度标签）、`views/rules/maintenance/rule-form.ts`（判别联合往返转换与前端校验闸门）、`views/system/filters.ts`（角色/菜单树过滤）、`api/errors.ts`（错误详情/状态码提取的唯一实现，`api/logharvest.ts` 仅 re-export）；另有三套 API 请求契约 spec（`api/contract` 信封与裸数组、`api/params` 列表参数作用域与边界、`api/rbac-contract` RBAC/认证端点）和 `components/ReIcon/src/hooks.ts` 的 `sanitizeSvg` SVG 白名单清洗用例。
 
 纯逻辑请继续放在 `.ts` 模块（而非 `.vue` 内联），这是可测性的前提；组件级测试需要 Element Plus 全量挂载，暂不纳入门禁。
 

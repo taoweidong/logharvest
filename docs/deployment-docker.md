@@ -107,7 +107,7 @@ vi deploy/worker/.env                          # 填 NAS_LOGS_DIR 与数据库�
 docker compose -f deploy/worker/docker-compose.yml \
   --env-file deploy/worker/.env up -d --scale worker=4
 
-# 5) 冒烟
+# 5) 冒烟（在部署主机上执行；8000 仅绑 127.0.0.1，跨机访问只能走 nginx 的 80 口）
 curl -fsS http://localhost:8000/api/health     # {"status":"ok","service":"logharvest"}
 curl -fsS http://localhost/                    # 前端首页
 ```
@@ -137,7 +137,8 @@ docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env
 | server | `LOGHARVEST_JWT_SECRET_KEY` | ✅ | ≥32 字符；`python -c "import secrets; print(secrets.token_urlsafe(48))"` |
 | server | `LOGHARVEST_ADMIN_PASSWORD` | ✅ | 管理员初始口令（≥8 位），仅首次建号使用 |
 | server | `POSTGRES_PASSWORD` | ✅ | 与 postgres 栈一致（拼进连接串） |
-| server | `LOGHARVEST_TRUSTED_PROXY_CIDRS` | nginx 部署必填 | 可信反向代理 CIDR（逗号分隔）。默认空 = 不信任任何转发头；经本栈 nginx 访问时必须填 nginx 容器地址或 `logharvest-net` 网段，否则**所有登录共享代理 IP 的限流桶**（一个客户端可锁死全部用户），也不要把 8000 端口直接暴露公网 |
+| server | `LOGHARVEST_TRUSTED_PROXY_CIDRS` | nginx 部署必填 | 可信反向代理 CIDR（逗号分隔）。默认空 = 不信任任何转发头；经本栈 nginx 访问时必须填 nginx 容器地址或 `logharvest-net` 网段，否则**所有登录共享代理 IP 的限流桶**（一个客户端可锁死全部用户） |
+| server | `SERVER_PORT` / `WEB_PORT` | 可选 | 宿主机映射端口（默认 8000 / 80）。`SERVER_PORT` 在 compose 里**固定绑 `127.0.0.1`**（仅部署主机本机可达；外部访问一律走 `WEB_PORT` 的 nginx 反代）——需要本机调试用 ssh 隧道，确有跨机直连需求再显式改回 `"8000:8000"` 并自行评估暴露面 |
 | server | `IMAGE_TAG` / `REGISTRY` | 可选 | Jenkins 推送后拉取指定版本 |
 | server / worker | `PIP_INDEX_URL` | 可选 | 本机 `build` 时的 pip/uv 包源，默认对齐 `uv.lock` 锁定的 mirrors.aliyun.com；换源时构建期同步改写锁内源（已推送镜像则不生效） |
 | worker | `NAS_LOGS_DIR` | ✅ | 宿主机 NAS 目录，容器内**只读**挂载到 `/nas` |
@@ -204,6 +205,7 @@ IMAGE_TAG=v1.2.0 $WKC pull worker && IMAGE_TAG=v1.2.0 $WKC up -d --no-deps --sca
 - [ ] 三个 `.env` 不入 git（`deploy/**/.env` 已被根 `.gitignore` 的 `.env` 规则覆盖）
 - [ ] 密钥走 Jenkins 凭据或 secret 管理，不落聊天/工单
 - [ ] PG 仅绑定 `127.0.0.1`（compose 已固定），外部访问一律走容器网络
+- [ ] API 直连口仅绑 `127.0.0.1`（server 栈 compose 已固定），浏览器与脚本一律走 nginx 反代；Jenkins 冒烟的 `/api/health` 因此在部署主机本机执行
 - [ ] 前端加 HTTPS（在 nginx 外层做 TLS 终止或改写 `web/nginx.conf` 挂证书）
 - [ ] 修改默认管理员口令；`LOGHARVEST_ENVIRONMENT=production`（强制校验密钥与口令）
 - [ ] `/usr1` 数据盘纳入系统备份计划（其中 `postgres/backup` 已有按天归档）

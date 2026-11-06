@@ -117,7 +117,7 @@ M2a 起改为 JWT 登录。静态 `LOGHARVEST_ADMIN_TOKEN` 已从认证路径与
 
 1. `POST /api/login`（`{"username": "...", "password": "..."}`）取 `accessToken`/`refreshToken`。登录**只校验、不创建用户**：库里没有任何用户时返回 `401`（不是 `500`），管理员由 `scripts/seed_admin` 建立。
 2. 受保护接口带 `Authorization: Bearer <accessToken>`；只有 `GET /api/health`、`GET /api/health/ready`、`POST /api/login` 与 `POST /api/refresh-token` 不需要凭证（`/api/auth/routes` 与 `/api/logout` 需要）。
-3. `POST /api/refresh-token`（`{"refreshToken": "..."}`，字段名是 camelCase 以对齐前端基座）换一对新的 access/refresh。两类令牌带不同的 `type` 声明，不能互换使用。
+3. `POST /api/refresh-token`（`{"refreshToken": "..."}`，字段名是 camelCase 以对齐前端基座；长度上限 4096 字符——匿名可达端点不收无界请求体，超限 `422`）换一对新的 access/refresh。两类令牌带不同的 `type` 声明，不能互换使用。
 4. `POST /api/logout` 只回一个空数据信封：服务端没有会话、没有 token 黑名单，令牌靠 `exp` 自然过期（access 默认 30 分钟）。
 
 令牌与口令：

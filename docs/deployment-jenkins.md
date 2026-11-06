@@ -8,13 +8,14 @@
 
 ```mermaid
 flowchart TD
-    S(["start"]) --> CO["Checkout（checkout scm）"]
+    S(["start"]) --> PV["参数校验<br/>IMAGE_TAG / WORKER_SCALE 白名单<br/>（违例直接 error 终止）"]
+    PV --> CO["Checkout（checkout scm）"]
 
     subgraph GATE["质量门禁（agent.md 等价物）"]
         LINT["后端静态检查<br/>uv run ruff check / ruff format --check / mypy"]
-        BT["后端单元测试<br/>uv run pytest tests -q<br/>（686 条收集，其中 20 条集成用例<br/>无 PG 自动跳过，由下一阶段覆盖）"]
+        BT["后端单元测试<br/>uv run pytest tests -q<br/>（704 条收集，其中 20 条无 PG 自动跳过<br/>——19 条 PG 集成 + 1 条平台相关，由下一阶段覆盖）"]
         PGI["PostgreSQL 集成测试<br/>bash scripts/run_pg_integration.sh<br/>（一次性 PG 容器：空库迁移 +<br/>索引断言 + tests/integration）"]
-        FT["前端测试<br/>pnpm install --frozen-lockfile<br/>pnpm test（102 条）+ pnpm typecheck"]
+        FT["前端测试<br/>pnpm install --frozen-lockfile<br/>pnpm test（140 条）+ pnpm typecheck"]
         GQ{"全部通过?"}
         LINT --> BT --> PGI --> FT --> GQ
     end
@@ -34,7 +35,7 @@ flowchart TD
         P2["发布 2：数据库栈 up -d --wait<br/>（等待 logharvest-postgres healthy）"]
         P3["发布 3：控制面栈 pull + up -d --wait<br/>（server 启动即迁移 + 种子）"]
         P4["发布 4：Worker 栈 pull + up -d --scale worker=N<br/>（滚动换新，drain/租约栅栏兜底）"]
-        SMOKE["冒烟：GET /api/health + GET /"]
+        SMOKE["冒烟：ssh 到部署主机 curl 127.0.0.1:8000/api/health<br/>+ 远程 GET /"]
     end
 
     CO --> LINT
@@ -45,8 +46,10 @@ flowchart TD
     P0 --> P1Q
     P1Q -->|"是"| P1 --> P2
     P1Q -->|"否"| P2
-    P2 --> P3 --> P4 --> SMOKE --> DONE(["发布完成（通知）"])
+        P2 --> P3 --> P4 --> SMOKE --> DONE(["发布完成（通知）"])
 ```
+
+> 阶段说明补充：**参数校验**是流水线首道闸——`IMAGE_TAG` / `WORKER_SCALE` 是自由字符串参数，会插值进发布 3/4 的远端 shell，白名单校验不过直接 error（防参数注入）；**冒烟**的 `/api/health` 检查经 ssh 在部署主机本机 curl `127.0.0.1:$SERVER_PORT`（server 栈 8000 直连口只绑回环，见 [deployment-docker.md](deployment-docker.md) §5），`GET /` 仍从 Jenkins 主机探测。
 
 三个栈的发布语义各不相同，这正是"独立部署"的价值：
 
@@ -113,8 +116,8 @@ docker exec logharvest-postgres pg_dump -U logharvest -d logharvest \
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `IMAGE_TAG` | `build-<BUILD_NUMBER>` | 三镜像统一标签；发布后建议在三个栈 `.env` 固化为该值 |
-| `WORKER_SCALE` | `4` | Worker 副本数（设计口径 4–6，内存压力时降） |
+| `IMAGE_TAG` | `build-<BUILD_NUMBER>` | 三镜像统一标签；**白名单 `[A-Za-z0-9_][A-Za-z0-9._-]*`**（首道闸强制，违例直接终止）——它只作镜像 tag，不含冒号/斜杠/shell 元字符；发布后建议在三个栈 `.env` 固化为该值 |
+| `WORKER_SCALE` | `4` | Worker 副本数（设计口径 4–6，内存压力时降）；**白名单 `1-999` 整数**（首道闸强制） |
 | `BACKUP_BEFORE_DEPLOY` | `true` | 发布前 pg_dump 归档到 /usr1 |
 | `DEPLOY` | `false` | 默认只做"门禁 + 构建镜像"的验证构建；置 true 才推送与发布 |
 

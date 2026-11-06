@@ -139,7 +139,7 @@ flowchart TD
     CANCELQ -->|"是"| CC["JobCancelled——file_task 置 cancelled"]
     CANCELQ -->|"否"| EVAL["evaluate_line 求值"]
     EVAL --> HITQ{"有命中?"}
-    HITQ -->|"是"| RAW["raw_line 截断（64KiB + truncated 标记）→ 入批量缓冲"]
+    HITQ -->|"是"| RAW["raw_line 截断（4KiB + truncated 标记）→ 入批量缓冲"]
     RAW --> FULL{"缓冲满（batch_size=1000）?"}
     FULL -->|"是"| FLUSH["touch 栅栏 → 批量 INSERT matches"]
     FULL -->|"否"| HB
